@@ -119,7 +119,7 @@ export function AppShell({
 
   useEffect(() => {
     const d = getDeviceInfo();
-    const parts = [d.os, d.browser].filter(Boolean);
+    const parts = [d.platform, d.userAgent.split(" ")[0]].filter(Boolean);
     setDeviceLabel(parts.join(" · ") || "Dispositivo desconocido");
   }, []);
 
