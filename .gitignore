@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Next.js
+apps/web/.next/
+apps/web/out/
+
+# CDK
+infra/cdk/cdk.out/
+infra/cdk/dist/
+
+# Build
+dist/
+*.tsbuildinfo
+
+# Environment — NEVER commit real credentials
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# AWS
+.aws/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Tests
+coverage/
+*.lcov
+
+# PWA (generated at build time)
+apps/web/public/sw.js
+apps/web/public/workbox-*.js
+apps/web/public/worker-*.js

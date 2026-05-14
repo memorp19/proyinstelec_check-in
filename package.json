@@ -1,0 +1,26 @@
+{
+  "name": "proyinstelec-app",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev": "pnpm --filter web dev",
+    "build": "pnpm --filter web build",
+    "test": "pnpm --filter web test",
+    "test:ci": "pnpm --filter web test:ci",
+    "lint": "pnpm --filter web lint",
+    "cdk": "pnpm --filter proyinstelec-cdk cdk",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:create": "DYNAMODB_ENDPOINT=http://localhost:8000 ./node_modules/.bin/tsx scripts/create-tables.ts",
+    "db:seed": "DYNAMODB_ENDPOINT=http://localhost:8000 ./node_modules/.bin/tsx scripts/seed.ts",
+    "db:reset": "pnpm db:down && docker volume rm proyinstelecCheckinout_dynamodb_data 2>/dev/null; pnpm db:up && sleep 3 && pnpm db:create && pnpm db:seed",
+    "setup:local": "pnpm install && pnpm db:up && sleep 3 && pnpm db:create && pnpm db:seed"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-dynamodb": "^3.600.0",
+    "@aws-sdk/lib-dynamodb": "^3.600.0",
+    "tsx": "^4.19.2",
+    "typescript": "~5.6.0"
+  }
+}

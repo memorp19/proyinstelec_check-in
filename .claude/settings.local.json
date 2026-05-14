@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p \\\\ *)",
+      "Bash(mkdir -p \"/Users/grp/Development/PROYINSTELEC/Proyinstelec checkin:out/apps/web/app/api/upload\" \"/Users/grp/Development/PROYINSTELEC/Proyinstelec checkin:out/apps/web/app/api/jornada\" && mkdir -p \"/Users/grp/Development/PROYINSTELEC/Proyinstelec checkin:out/apps/web/app/api/jornada/[jornadaId]\" && mkdir -p \"/Users/grp/Development/PROYINSTELEC/Proyinstelec checkin:out/apps/web/src/__tests__/api\")",
+      "Bash(pnpm vitest *)",
+      "Bash(node_modules/.bin/vitest run *)",
+      "Bash(pnpm --version)",
+      "Bash(npm install *)",
+      "Bash(npx vitest *)",
+      "Bash(\"/Users/grp/Development/PROYINSTELEC/Proyinstelec checkin:out/apps/web/node_modules/.bin/vitest\" run \"src/__tests__/api/perfil-completar.test.ts\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d['version']\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d['version'], d.get\\('type',''\\)\\)\")",
+      "Bash(\"/Users/grp/Development/PROYINSTELEC/Proyinstelec checkin:out/apps/web/node_modules/.bin/vitest\" run)",
+      "Bash(npm view *)",
+      "Bash(python3 -c \"import sys,json; vs=[v for v in json.load\\(sys.stdin\\) if v.startswith\\('2.'\\)]; print\\(vs[-5:]\\)\")",
+      "Bash(python3 -c \"import sys,json; vs=[v for v in json.load\\(sys.stdin\\) if v.startswith\\('2.'\\)]; print\\([v for v in vs if int\\(v.split\\('.'\\)[1]\\) >= 195 and int\\(v.split\\('.'\\)[1]\\) <= 205]\\)\")",
+      "Bash(pnpm install *)",
+      "Bash(grep -E \"^\\(next|vitest|eslint\\)$\")"
+    ],
+    "additionalDirectories": [
+      "/Users/grp/Development/PROYINSTELEC/Proyinstelec checkin:out/apps/web/app/api/auth",
+      "/Users/grp/Development/PROYINSTELEC/Proyinstelec checkin:out/apps/web/app/api/jornada"
+    ]
+  }
+}
