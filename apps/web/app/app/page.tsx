@@ -1,6 +1,7 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/src/auth";
 import { getOpenJornada } from "@/src/lib/jornadas";
+import { DEMO_MODE, DEMO_PROJECTS } from "@/src/demo";
 import { AppShell } from "./components/AppShell";
 
 // Server component — loads initial state; interactive parts are client components
@@ -8,7 +9,9 @@ export default async function AppHome() {
   const session = await getServerSession(authOptions);
   if (!session) return null; // layout already handles redirect
 
-  const openJornada = await getOpenJornada(session.user.id).catch(() => null);
+  const openJornada = DEMO_MODE
+    ? null
+    : await getOpenJornada(session.user.id).catch(() => null);
 
   const now = new Date();
   const dateLabel = now.toLocaleDateString("es-MX", {
@@ -23,7 +26,7 @@ export default async function AppHome() {
       userName={session.user.name ?? session.user.email ?? "Trabajador"}
       userTipo={session.user.tipo}
       proyectosAsignados={session.user.proyectos_asignados}
-      proyectosNombres={{}}
+      proyectosNombres={DEMO_MODE ? DEMO_PROJECTS : {}}
       dateLabel={dateLabel}
       openJornadaId={openJornada?.id ?? null}
       openJornadaCheckInTs={openJornada?.checkIn.timestamp ?? null}

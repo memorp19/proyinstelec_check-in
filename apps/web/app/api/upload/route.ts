@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/src/auth";
 import { uploadPhoto } from "@/src/lib/drive";
+import { DEMO_MODE } from "@/src/demo";
 
 const MAX_SIZE_BYTES = 8 * 1024 * 1024; // 8 MB after client-side compression
 
@@ -10,6 +11,14 @@ export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session) {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  }
+
+  // In demo mode skip Google Drive and return a fake file reference
+  if (DEMO_MODE) {
+    return NextResponse.json(
+      { driveFileId: "demo-file-id", webViewLink: "#", hash: "demo" },
+      { status: 200 },
+    );
   }
 
   let body: {
