@@ -4,11 +4,20 @@ import { authOptions } from "@/src/auth";
 import { createJornada, getOpenJornada } from "@/src/lib/jornadas";
 import { syncToOdooAsync } from "@/src/lib/odoo";
 import type { DeviceInfo } from "@/src/lib/device-info";
+import { DEMO_MODE } from "@/src/demo";
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session) {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  }
+
+  // In demo mode skip all external services and return a fake jornada ID
+  if (DEMO_MODE) {
+    return NextResponse.json(
+      { jornadaId: `demo-jornada-${Date.now()}` },
+      { status: 201 },
+    );
   }
 
   const usuarioId = session.user.id;

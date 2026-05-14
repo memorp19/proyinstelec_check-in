@@ -2,7 +2,9 @@ import { redirect } from "next/navigation";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/src/auth";
 import { validateToken } from "@/src/lib/invitaciones";
+import { DEMO_MODE } from "@/src/demo";
 import { GoogleSignInButton } from "./_components/GoogleSignInButton";
+import { DemoSignInButton } from "./_components/DemoSignInButton";
 
 interface Props {
   searchParams: { token?: string; callbackUrl?: string };
@@ -104,7 +106,11 @@ export default async function UnirsePage({ searchParams }: Props) {
                   )}
                 </div>
 
-                <GoogleSignInButton callbackUrl={callbackUrl} pendingToken={searchParams.token} />
+                {DEMO_MODE ? (
+                  <DemoSignInButton />
+                ) : (
+                  <GoogleSignInButton callbackUrl={callbackUrl} pendingToken={searchParams.token} />
+                )}
 
                 <p className="text-center font-mono text-[10px] text-white/20 leading-relaxed">
                   Al continuar aceptas el uso interno de este sistema

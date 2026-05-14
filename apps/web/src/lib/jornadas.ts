@@ -16,7 +16,7 @@ export interface CheckPoint {
   driveWebViewLink?: string;
   fotoHash?: string;
   uploadStatus?: "ok" | "pendiente";
-  deviceInfo: DeviceInfo;
+  deviceInfo?: DeviceInfo;
 }
 
 export interface Jornada {

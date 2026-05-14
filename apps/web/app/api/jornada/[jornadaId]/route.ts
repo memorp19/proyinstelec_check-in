@@ -4,6 +4,7 @@ import { authOptions } from "@/src/auth";
 import { getJornada, closeJornada } from "@/src/lib/jornadas";
 import { syncToOdooAsync } from "@/src/lib/odoo";
 import type { DeviceInfo } from "@/src/lib/device-info";
+import { DEMO_MODE } from "@/src/demo";
 
 export async function PATCH(
   req: NextRequest,
@@ -15,6 +16,11 @@ export async function PATCH(
   }
 
   const { jornadaId } = params;
+
+  // In demo mode skip DynamoDB and return mock checkout data
+  if (DEMO_MODE) {
+    return NextResponse.json({ jornadaId, duracionMinutos: 480 }, { status: 200 });
+  }
   const jornada = await getJornada(jornadaId);
 
   if (!jornada) {
