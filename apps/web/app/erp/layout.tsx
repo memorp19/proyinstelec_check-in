@@ -1,12 +1,11 @@
-import { getServerSession } from "next-auth";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { authOptions } from "@/src/auth";
+import { auth } from "@/src/auth";
 import { permisosEfectivos, tienePermiso } from "@/src/lib/permisos";
 import { MODULOS_ERP } from "./modulos";
 
 export default async function ErpLayout({ children }: { children: React.ReactNode }) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   if (!session) redirect("/unirse?callbackUrl=/erp");
 
   const permisos = permisosEfectivos(session.user);

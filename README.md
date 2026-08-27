@@ -1,6 +1,6 @@
 # Proyinstelec Field App
 
-PWA offline-first de registro de asistencia para trabajadores de campo de Proyinstelec. Los trabajadores hacen check-in y check-out con foto + geolocalización. Los datos se almacenan en DynamoDB y las fotos en Google Drive.
+PWA offline-first de registro de asistencia para trabajadores de campo de Proyinstelec. Los trabajadores hacen check-in y check-out con foto + geolocalización. Los datos viven en Neon (PostgreSQL) y las fotos en Google Drive. Incorpora además el ERP interno (cotizaciones, órdenes de trabajo y seguimiento semanal), migrado por fases desde Google Apps Script.
 
 ---
 
@@ -9,10 +9,11 @@ PWA offline-first de registro de asistencia para trabajadores de campo de Proyin
 | Capa | Tecnología |
 |---|---|
 | Frontend | Next.js 14 (App Router) · TypeScript · Tailwind CSS |
-| Auth | NextAuth v4 · Google OAuth |
-| Base de datos | AWS DynamoDB (single-table + tablas auxiliares) |
+| Auth | Auth.js v5 (NextAuth) · Google OAuth · adaptador Drizzle |
+| Base de datos | Neon (PostgreSQL serverless) · Drizzle ORM |
 | Almacenamiento | Google Drive (service account) |
-| Infraestructura | AWS CDK v2 (TypeScript) |
+| Correo | Gmail API (delegación de dominio) |
+| Hosting | Vercel |
 | Offline | IndexedDB (idb) · Background Sync |
 | CI / Testing | Vitest · fake-indexeddb |
 | Monorepo | pnpm workspaces |
@@ -24,24 +25,24 @@ PWA offline-first de registro de asistencia para trabajadores de campo de Proyin
 ```
 .
 ├── apps/
-│   └── web/                  # Next.js app
-│       ├── app/              # App Router (páginas y API routes)
+│   └── web/                  # Next.js app (raíz del deploy en Vercel)
+│       ├── app/              # App Router: páginas y API routes
+│       ├── drizzle/          # Migraciones SQL generadas
 │       ├── src/
-│       │   ├── lib/          # Lógica de negocio (DynamoDB, Drive, IDB, Odoo)
+│       │   ├── db/           # Esquema Drizzle y cliente de Neon
+│       │   ├── lib/          # Lógica de negocio (campo y ERP)
 │       │   ├── __tests__/    # Tests unitarios (vitest)
-│       │   ├── auth.ts       # authOptions de NextAuth
-│       │   ├── auth-callbacks.ts
-│       │   ├── middleware.ts
-│       │   └── types/
+│       │   ├── auth.ts       # Auth.js v5 (instancia completa)
+│       │   └── auth.config.ts# Configuración sin base (middleware/edge)
 │       └── public/           # PWA manifest, iconos
-├── infra/
-│   └── cdk/                  # Stack CDK: DynamoDB, SSM, Lambda, CloudFront
 ├── scripts/
-│   ├── create-tables.ts      # Crea tablas DynamoDB Local
-│   └── seed.ts               # Datos de prueba locales
+│   ├── seed.ts               # Datos de desarrollo
+│   └── importar-erp.ts       # Importación desde los Sheets del sistema anterior
 ├── docs/
-│   └── setup-google-drive.md
-└── docker-compose.yml        # DynamoDB Local + Admin UI
+│   ├── despliegue-vercel-neon.md
+│   ├── plan-migracion-erp.md
+│   └── erp-legacy/           # Análisis del ERP en Apps Script
+└── vercel.json
 ```
 
 ---
@@ -52,57 +53,31 @@ PWA offline-first de registro de asistencia para trabajadores de campo de Proyin
 
 - Node.js ≥ 20
 - pnpm 9+
-- Docker Desktop
+- Una base en [Neon](https://console.neon.tech) (plan gratuito basta para desarrollo)
 
-### 1. Clonar e instalar
+### 1. Instalar
 
 ```bash
-git clone <repo-url>
-cd "Proyinstelec checkin:out"
 pnpm install
+cp apps/web/.env.example apps/web/.env.local
 ```
 
 ### 2. Variables de entorno
 
-```bash
-cp apps/web/.env.example apps/web/.env.local
-```
+Llenar `apps/web/.env.local` con la cadena de conexión de Neon, el secreto de
+Auth.js (`openssl rand -base64 32`) y las credenciales de Google.
+Ver [`docs/despliegue-vercel-neon.md`](docs/despliegue-vercel-neon.md) para el detalle.
 
-Edita `apps/web/.env.local` con tus credenciales de Google OAuth y NextAuth secret:
-
-```bash
-# Generar NEXTAUTH_SECRET:
-openssl rand -base64 32
-```
-
-Para Google OAuth: crea un proyecto en [console.cloud.google.com](https://console.cloud.google.com), habilita la Google OAuth API y agrega `http://localhost:3000/api/auth/callback/google` como URI de redirección autorizada.
-
-Para Google Drive (fotos): ver [docs/setup-google-drive.md](docs/setup-google-drive.md).
-
-### 3. Base de datos local
+### 3. Preparar la base y arrancar
 
 ```bash
-pnpm db:up        # Levanta DynamoDB Local en :8000 y Admin UI en :8001
-pnpm db:create    # Crea las 4 tablas con sus GSIs
-pnpm db:seed      # Siembra usuarios, proyectos y token de invitación de prueba
-```
-
-Admin UI disponible en [http://localhost:8001](http://localhost:8001).
-
-### 4. Correr la app
-
-```bash
+pnpm db:migrate   # aplica el esquema
+pnpm db:seed      # usuarios y datos de prueba
 pnpm dev          # http://localhost:3000
 ```
 
-### Cuentas de prueba (login con Google)
+Sin Google ni base de datos: `pnpm dev:demo`.
 
-| Rol | Email | Notas |
-|---|---|---|
-| **Super Admin** | `memorp19@gmail.com` | google_sub migrado automáticamente al primer login |
-| Admin | `admin@proyinstelec.mx` | Cuenta corporativa de prueba |
-| Planta (campo) | `carlos@proyinstelec.mx` | Cuenta corporativa de prueba |
-| Temporal | cualquier Gmail | Usar con token `dev-token-valido-12345` en `/unirse?token=dev-token-valido-12345` |
 
 ---
 
@@ -110,25 +85,25 @@ pnpm dev          # http://localhost:3000
 
 ```bash
 # Desarrollo
-pnpm dev              # Next.js dev server
-pnpm build            # Build de producción
+pnpm dev              # servidor de desarrollo
+pnpm dev:demo         # sin Google ni base de datos
+pnpm build            # build de producción
 pnpm lint             # ESLint
 
 # Tests
-pnpm test             # Vitest watch
-pnpm test:ci          # Vitest con coverage (CI)
+pnpm test             # watch
+pnpm test:ci          # una pasada, con cobertura
 
-# Base de datos local
-pnpm db:up            # docker compose up -d
-pnpm db:down          # docker compose down
-pnpm db:create        # Crear tablas DynamoDB Local
-pnpm db:seed          # Sembrar datos de prueba
-pnpm db:reset         # Borrar volumen + recrear todo
+# Base de datos (Neon)
+pnpm db:generate      # generar migración tras cambiar el esquema
+pnpm db:migrate       # aplicar migraciones
+pnpm db:push          # aplicar el esquema sin migración (solo desarrollo)
+pnpm db:studio        # explorador visual
+pnpm db:seed          # datos de desarrollo
 
-# CDK
-pnpm cdk synth        # Sintetizar CloudFormation
-pnpm cdk diff         # Diferencia con el stack desplegado
-pnpm cdk deploy       # Desplegar (requiere credenciales AWS)
+# Importación desde el sistema anterior
+pnpm import:erp                 # Sheets -> Neon
+DRY_RUN=true pnpm import:erp    # solo reporta, no escribe
 ```
 
 ---
@@ -139,101 +114,72 @@ pnpm cdk deploy       # Desplegar (requiere credenciales AWS)
 
 ```
 Trabajador abre /app
-       │
-       ▼
-[Foto obligatoria]  ──online──►  POST /api/upload  →  Google Drive
-       │                                                     │ driveFileId
-       ▼                                                     ▼
-[Geolocalización]           POST /api/jornada  →  DynamoDB (estado: abierta)
-       │                         │
-       │                    syncToOdooAsync (fire-and-forget, solo planta)
-       ▼
-[Check-out]  ──online──►  PATCH /api/jornada/:id  →  DynamoDB (estado: cerrada)
-       │
-  offline  →  IndexedDB (sync-queue)  →  flush cuando vuelve conexión
+       |
+       v
+[Foto obligatoria]  --online-->  POST /api/upload  ->  Google Drive
+       |                                                    | driveFileId
+       v                                                    v
+[Geolocalización]           POST /api/jornada  ->  Neon (jornada abierta)
+       |                         |
+       |                    syncToOdooAsync (fire-and-forget, sólo planta)
+       v
+[Check-out]  --online-->  PATCH /api/jornada/:id  ->  Neon (jornada cerrada)
+       |
+  offline  ->  IndexedDB (sync-queue)  ->  se envía al recuperar conexión
 ```
 
-### Tablas DynamoDB
+### Modelo de datos
 
-| Tabla | PK | Propósito |
-|---|---|---|
-| `proyinstelec-users` | `google_sub` | Perfiles de usuario (GSI por email y tipo) |
-| `proyinstelec-invitaciones` | `token` | Tokens de invitación para temporales (TTL automático) |
-| `proyinstelec-main` | `pk / sk` | Single-table: Proyectos, Jornadas, Evidencias |
-| `proyinstelec-odoo-queue` | `id` | Cola de reintentos Odoo (TTL 7 días) |
+Esquema relacional en `apps/web/src/db/schema.ts` (19 tablas):
 
-### Roles
+| Grupo | Tablas |
+|---|---|
+| Auth.js | `users`, `accounts`, `sessions`, `verification_tokens` |
+| Campo | `empresas`, `proyectos`, `proyecto_usuarios`, `invitaciones`, `jornadas`, `odoo_queue` |
+| ERP | `clientes`, `contactos`, `cotizaciones`, `aprobaciones`, `ordenes_trabajo`, `ot_responsables` |
+| Comunes | `bitacora`, `contadores`, `config_erp` |
+
+La versión vigente de una cotización es la de mayor `version` por `(numero, anio)`
+— un `DISTINCT ON` en SQL, sin las filas ocultas ni los índices espejo que
+necesitaba el sistema anterior.
+
+### Roles y permisos
 
 | `tipo` | `rol` | Descripción |
 |---|---|---|
-| `admin` | `admin` | Gestión de proyectos e invitaciones |
-| `planta` | `campo` | Trabajador @proyinstelec.mx — sync Odoo activo |
-| `temporal` | `campo` | Trabajador externo — requiere token de invitación |
-| `cliente` | `cliente` | Portal de consulta solo-lectura |
+| `admin` | `admin` | Gestión completa; tiene todos los permisos del ERP |
+| `planta` | `campo` | Trabajador @proyinstelec.mx — sync con Odoo activo |
+| `temporal` | `campo` | Trabajador externo — entra por token de invitación |
+| `cliente` | `cliente` | Portal de consulta de solo lectura |
 
-### Migración de super admin pre-seeded
+Sobre el rol, cada usuario puede tener permisos finos del ERP
+(`permisos` en su perfil, catálogo en `src/lib/permisos.ts`). Se editan en
+Admin → Usuarios → ERP y se validan en el servidor con `exigirPermiso()`.
 
-Al hacer login por primera vez con Google, si el email coincide con un registro en DynamoDB (creado por seed o por un admin), el sistema migra automáticamente el `google_sub` placeholder al ID real de Google. El rol y tipo se preservan.
+### Identidad
+
+Auth.js administra la identidad: el `sub` de Google vive en `accounts` y el
+identificador de dominio es `users.id`. Un usuario dado de alta por adelantado
+(siembra, importación) queda enlazado por correo la primera vez que entra con
+Google, conservando su rol y permisos.
 
 ---
 
-## Despliegue en producción
+## Despliegue
 
-### 1. CDK Bootstrap (primera vez)
-
-```bash
-aws configure  # credenciales con permisos CDK
-cd infra/cdk
-pnpm cdk bootstrap aws://ACCOUNT_ID/us-east-1
-```
-
-### 2. Parámetros SSM
-
-Los secretos **no** son gestionados por CDK — deben cargarse manualmente antes del primer deploy:
-
-```bash
-# Google Drive
-aws ssm put-parameter --name /proyinstelec/drive/service-account-email \
-  --value "campo@tu-proyecto.iam.gserviceaccount.com" --type String
-
-aws ssm put-parameter --name /proyinstelec/drive/service-account-key \
-  --value "$(cat service-account-key.json)" --type SecureString
-
-aws ssm put-parameter --name /proyinstelec/drive/root-folder-id \
-  --value "1BxiMYour_Folder_ID_Here" --type String
-
-# Odoo (opcional — dejar vacío si ODOO_SYNC_ENABLED=false)
-aws ssm put-parameter --name /proyinstelec/odoo/url --value "https://odoo.tuempresa.com" --type String
-aws ssm put-parameter --name /proyinstelec/odoo/db  --value "proyinstelec" --type String
-aws ssm put-parameter --name /proyinstelec/odoo/api-key --value "TU_API_KEY" --type SecureString
-```
-
-### 3. Deploy
-
-```bash
-# Variables requeridas por el stack de producción
-export ACM_CERTIFICATE_ARN=arn:aws:acm:us-east-1:ACCOUNT:certificate/...
-export DOMAIN_APEX=proyinstelec.mx
-export NEXTJS_ORIGIN_DOMAIN=tu-amplify-domain.amplifyapp.com
-
-pnpm cdk deploy ProyinstelecProd
-```
-
-### Hosting del frontend
-
-El frontend Next.js se aloja en **AWS Amplify Gen 2**. CloudFront actúa como CDN y proxy hacia Amplify y API Gateway.
+Vercel (hosting) + Neon (base de datos). Guía completa en
+[`docs/despliegue-vercel-neon.md`](docs/despliegue-vercel-neon.md).
 
 ---
 
 ## Tests
 
 ```bash
-cd apps/web
-node_modules/.bin/vitest run          # todos los tests
-node_modules/.bin/vitest run --coverage  # con reporte de cobertura
+pnpm test        # modo watch
+pnpm test:ci     # una pasada, con cobertura
 ```
 
-Cobertura actual: **208 tests** en 21 archivos (libs, API routes, auth callbacks, middleware, IDB/sync-queue, ERP Fases 0-1).
+Cobertura actual: **187 tests** en 20 archivos (libs, API routes, middleware, IDB/sync-queue, ERP Fases 0-1).
 
 ---
 
@@ -259,6 +205,9 @@ análisis del sistema anterior: [`docs/erp-legacy/`](docs/erp-legacy/).
 - GSIs nuevos en `proyinstelec-main`: `gsi4-coleccion` (colecciones por año/semana/estado) y `gsi5-fecha` (servicios por fecha).
   En local: `pnpm db:reset` para recrear tablas con los índices nuevos.
 
+**Migración de arquitectura (rama `feat/vercel-neon`):** de AWS (DynamoDB + CDK + Amplify) a
+Vercel + Neon, con Drizzle ORM y Auth.js v5. Las reglas de negocio del ERP se conservaron intactas.
+
 **Fase 1 (lista) — Clientes y Cotizaciones:**
 
 - `/erp/clientes`: empresas y contactos con verificación anti-duplicados por razón social normalizada.
@@ -273,10 +222,11 @@ análisis del sistema anterior: [`docs/erp-legacy/`](docs/erp-legacy/).
 - Importador idempotente desde los Sheets legacy: `pnpm import:erp` (variables `IMPORT_*` en `.env.example`;
   `DRY_RUN=true` para solo reportar). Al terminar reporta los elaboradores cuyas iniciales hay que cruzar con los perfiles.
 
-**Configuración Drive del ERP:** crear los parámetros SSM `/proyinstelec/erp/*` (o las variables `ERP_*`
-en local) con la carpeta raíz de cotizaciones, la de OT y las dos plantillas.
+**Configuración Drive del ERP:** definir las variables `ERP_COTIZACIONES_FOLDER_ID`,
+`ERP_OT_FOLDER_ID`, `ERP_PLANTILLA_DOC_ID` y `ERP_PLANTILLA_SHEET_ID` con la carpeta raíz de
+cotizaciones, la de OT y las dos plantillas.
 
-**Configuración del correo (producción):** crear el parámetro SSM `/proyinstelec/correo/service-account-key`
-(llave JSON del service account) y `/proyinstelec/correo/remitente` (cuenta del dominio), y habilitar la
-delegación de dominio del service account en la consola de administrador de Google Workspace con el scope
-`https://www.googleapis.com/auth/gmail.send`.
+**Configuración del correo (producción):** definir `CORREO_REMITENTE` (cuenta del dominio desde la
+que salen los correos) y, si se usa una llave distinta a la de Drive, `GMAIL_SERVICE_ACCOUNT_KEY`.
+Además hay que habilitar la delegación de dominio del service account en la consola de administrador
+de Google Workspace con el scope `https://www.googleapis.com/auth/gmail.send`.

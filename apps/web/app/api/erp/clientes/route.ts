@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/src/auth";
+import { auth } from "@/src/auth";
 import { exigirPermiso } from "@/src/lib/permisos";
 import {
   buscarEmpresasParecidas,
@@ -12,7 +11,7 @@ import {
 import { registrarBitacora } from "@/src/lib/bitacora";
 
 export async function GET(req: NextRequest) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   const rechazo = exigirPermiso(session?.user, "modulo.clientes");
   if (rechazo) return NextResponse.json({ error: rechazo.error }, { status: rechazo.status });
 
@@ -37,7 +36,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   const rechazo = exigirPermiso(session?.user, "modulo.clientes");
   if (rechazo) return NextResponse.json({ error: rechazo.error }, { status: rechazo.status });
 

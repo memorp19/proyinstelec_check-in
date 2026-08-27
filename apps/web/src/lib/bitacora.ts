@@ -1,8 +1,6 @@
-import { PutCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
-import { randomUUID } from "crypto";
-import { getDocClient } from "./dynamo-client";
-
-const TABLE = () => process.env.MAIN_TABLE ?? "proyinstelec-main";
+import { and, desc, eq, gte, lt, type SQL } from "drizzle-orm";
+import { getDb } from "../db";
+import { bitacora } from "../db/schema";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -10,21 +8,41 @@ const TABLE = () => process.env.MAIN_TABLE ?? "proyinstelec-main";
  * Bitácora del ERP (heredada del legacy): auditoría de acciones, registro de
  * correos enviados/omitidos y memoria de avisos de vencimiento.
  *
- * Ítems: pk = BITACORA#YYYY-MM · sk = <timestamp ISO>#<uuid corto>
- * Consulta natural: por mes, orden cronológico.
- * `referencia` permite filtrar por entidad (p. ej. "COT#001-2026", "ACT-0007|-3").
+ * `referencia` identifica la entidad afectada (p. ej. "COT#001-2026",
+ * "ACT-0007|-3") y es la llave con la que `existeEvento` recuerda qué avisos
+ * ya salieron.
  */
 export interface EventoBitacora {
-  pk: string;
-  sk: string;
+  id: string;
   accion: string;      // p. ej. COTIZACION_CREADA, CORREO_ENVIADO, AVISO_VENCIMIENTO
   usuario: string;     // correo o "sistema"
   detalle?: string;
-  referencia?: string; // llave de la entidad afectada
-  timestamp: string;
+  referencia?: string;
+  created_at: string;  // ISO
 }
 
-// ── Write ─────────────────────────────────────────────────────────────────────
+type Fila = typeof bitacora.$inferSelect;
+
+function aEvento(fila: Fila): EventoBitacora {
+  return {
+    id: fila.id,
+    accion: fila.accion,
+    usuario: fila.usuario,
+    detalle: fila.detalle ?? undefined,
+    referencia: fila.referencia ?? undefined,
+    created_at: fila.createdAt.toISOString(),
+  };
+}
+
+/** "2026-08" → [inicio, finExclusivo) en UTC. */
+function rangoDelMes(mes: string): { inicio: Date; fin: Date } {
+  const [anio, m] = mes.split("-").map((v) => parseInt(v, 10));
+  const inicio = new Date(Date.UTC(anio, m - 1, 1));
+  const fin = new Date(Date.UTC(anio, m, 1));
+  return { inicio, fin };
+}
+
+// ── Escritura ─────────────────────────────────────────────────────────────────
 
 /**
  * Registra un evento. Nunca lanza: la bitácora jamás interrumpe la operación
@@ -36,50 +54,42 @@ export async function registrarBitacora(evento: {
   detalle?: string;
   referencia?: string;
 }): Promise<void> {
-  const timestamp = new Date().toISOString();
-  const item: EventoBitacora = {
-    pk: `BITACORA#${timestamp.slice(0, 7)}`,
-    sk: `${timestamp}#${randomUUID().slice(0, 8)}`,
-    accion: evento.accion,
-    usuario: evento.usuario,
-    detalle: evento.detalle,
-    referencia: evento.referencia,
-    timestamp,
-  };
   try {
-    await getDocClient().send(new PutCommand({ TableName: TABLE(), Item: item }));
+    await getDb().insert(bitacora).values({
+      accion: evento.accion,
+      usuario: evento.usuario,
+      detalle: evento.detalle ?? null,
+      referencia: evento.referencia ?? null,
+    });
   } catch (err) {
     console.error("[bitacora]", (err as Error).message);
   }
 }
 
-// ── Read ──────────────────────────────────────────────────────────────────────
+// ── Lectura ───────────────────────────────────────────────────────────────────
 
-/**
- * Eventos de un mes (YYYY-MM), más recientes primero.
- */
+/** Eventos de un mes ("AAAA-MM"), más recientes primero. */
 export async function listarBitacora(
   mes: string,
   opts?: { accion?: string; referencia?: string; limit?: number },
 ): Promise<EventoBitacora[]> {
-  const result = await getDocClient().send(
-    new QueryCommand({
-      TableName: TABLE(),
-      KeyConditionExpression: "pk = :pk",
-      ExpressionAttributeValues: { ":pk": `BITACORA#${mes}` },
-      ScanIndexForward: false,
-      Limit: opts?.limit ?? 500,
-    }),
-  );
-  let items = (result.Items ?? []) as EventoBitacora[];
-  if (opts?.accion) items = items.filter((e) => e.accion === opts.accion);
-  if (opts?.referencia) items = items.filter((e) => e.referencia === opts.referencia);
-  return items;
+  const { inicio, fin } = rangoDelMes(mes);
+  const condiciones: SQL[] = [gte(bitacora.createdAt, inicio), lt(bitacora.createdAt, fin)];
+  if (opts?.accion) condiciones.push(eq(bitacora.accion, opts.accion));
+  if (opts?.referencia) condiciones.push(eq(bitacora.referencia, opts.referencia));
+
+  const filas = await getDb()
+    .select()
+    .from(bitacora)
+    .where(and(...condiciones))
+    .orderBy(desc(bitacora.createdAt))
+    .limit(opts?.limit ?? 500);
+  return filas.map(aEvento);
 }
 
 /**
  * ¿Existe ya un evento con esta acción y referencia en los últimos `meses`?
- * Usado como memoria de avisos ("ACT-0007|-3 ya se mandó, no repetir").
+ * Memoria de avisos ("ACT-0007|-3 ya se mandó, no repetir").
  */
 export async function existeEvento(
   accion: string,
@@ -87,11 +97,19 @@ export async function existeEvento(
   meses = 2,
 ): Promise<boolean> {
   const ahora = new Date();
-  for (let i = 0; i < meses; i++) {
-    const d = new Date(Date.UTC(ahora.getUTCFullYear(), ahora.getUTCMonth() - i, 1));
-    const mes = d.toISOString().slice(0, 7);
-    const eventos = await listarBitacora(mes, { accion, referencia, limit: 1000 });
-    if (eventos.length > 0) return true;
-  }
-  return false;
+  const desdeFecha = new Date(
+    Date.UTC(ahora.getUTCFullYear(), ahora.getUTCMonth() - (meses - 1), 1),
+  );
+  const filas = await getDb()
+    .select({ id: bitacora.id })
+    .from(bitacora)
+    .where(
+      and(
+        eq(bitacora.accion, accion),
+        eq(bitacora.referencia, referencia),
+        gte(bitacora.createdAt, desdeFecha),
+      ),
+    )
+    .limit(1);
+  return filas.length > 0;
 }

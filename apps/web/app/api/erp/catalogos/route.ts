@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/src/auth";
+import { auth } from "@/src/auth";
 import { exigirPermiso } from "@/src/lib/permisos";
 import { getConfigErp } from "@/src/lib/config-erp";
 import { listUsers } from "@/src/lib/users";
@@ -12,7 +11,7 @@ import { ESTATUS_COTIZACION, PRIORIDADES } from "@/src/lib/cotizaciones";
  * elaboradores, estatus y prioridades.
  */
 export async function GET() {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   const rechazo = exigirPermiso(session?.user, "modulo.cotizaciones");
   if (rechazo) return NextResponse.json({ error: rechazo.error }, { status: rechazo.status });
 

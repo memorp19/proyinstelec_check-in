@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/src/auth";
+import { auth } from "@/src/auth";
 import { exigirPermiso } from "@/src/lib/permisos";
 import { parseCotKey } from "@/src/lib/cotizaciones";
 import { solicitarCorreccion } from "@/src/lib/cotizaciones-flujos";
 
 export async function POST(req: NextRequest, { params }: { params: { key: string } }) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   const rechazo = exigirPermiso(session?.user, "cotizaciones.aprobar");
   if (rechazo) return NextResponse.json({ error: rechazo.error }, { status: rechazo.status });
 

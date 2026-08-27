@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/src/auth";
+import { auth } from "@/src/auth";
 import { exigirPermiso } from "@/src/lib/permisos";
 import {
   cambiarEstatus,
+  cotPk,
   getVersiones,
   parseCotKey,
   tieneAprobacion,
@@ -15,7 +15,7 @@ import { crearNuevaVersionCompleta } from "@/src/lib/cotizaciones-flujos";
 import { registrarBitacora } from "@/src/lib/bitacora";
 
 export async function GET(_req: NextRequest, { params }: { params: { key: string } }) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   const rechazo = exigirPermiso(session?.user, "modulo.cotizaciones");
   if (rechazo) return NextResponse.json({ error: rechazo.error }, { status: rechazo.status });
 
@@ -38,7 +38,7 @@ export async function GET(_req: NextRequest, { params }: { params: { key: string
 
 export async function POST(req: NextRequest, { params }: { params: { key: string } }) {
   // POST /api/erp/cotizaciones/[key] con {accion: "nueva_version"}
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   const rechazo = exigirPermiso(session?.user, "modulo.cotizaciones");
   if (rechazo) return NextResponse.json({ error: rechazo.error }, { status: rechazo.status });
 
@@ -78,7 +78,7 @@ const ESTATUS_MANUALES: EstatusCotizacion[] = [
 ];
 
 export async function PATCH(req: NextRequest, { params }: { params: { key: string } }) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   const rechazo = exigirPermiso(session?.user, "modulo.cotizaciones");
   if (rechazo) return NextResponse.json({ error: rechazo.error }, { status: rechazo.status });
 
@@ -112,7 +112,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { key: strin
       await registrarBitacora({
         accion: "COTIZACION_ESTATUS",
         usuario: session!.user.email ?? "",
-        referencia: `COT#${params.key}`,
+        referencia: cotPk(key.numero, key.anio),
         detalle: body.estatus,
       });
     }

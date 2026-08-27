@@ -1,77 +1,87 @@
 /**
- * Seeds local DynamoDB with test data for development.
- * Run after create-tables:
- *   pnpm run db:seed
+ * Siembra la base de Neon con datos de desarrollo.
+ *   pnpm db:seed
+ *
+ * Idempotente: se puede correr varias veces. Los usuarios se crean "sembrados"
+ * (sin cuenta de Google todavía); al entrar con Google, Auth.js los enlaza por
+ * correo y conserva su rol y permisos.
  */
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, PutCommand } from "@aws-sdk/lib-dynamodb";
+import { config } from "dotenv";
+import { neon } from "@neondatabase/serverless";
+import { drizzle } from "drizzle-orm/neon-http";
+import { eq } from "drizzle-orm";
+import * as schema from "../apps/web/src/db/schema";
 
-const client = DynamoDBDocumentClient.from(
-  new DynamoDBClient({
-    endpoint: process.env.DYNAMODB_ENDPOINT ?? "http://localhost:8000",
-    region: "us-east-1",
-    credentials: { accessKeyId: "local", secretAccessKey: "local" },
-  }),
-  { marshallOptions: { removeUndefinedValues: true } },
-);
+config({ path: "apps/web/.env.local" });
 
-const now = new Date().toISOString();
-const WEEK_SECS = 7 * 24 * 60 * 60;
-const futureTs = Math.floor(Date.now() / 1000) + WEEK_SECS;
+if (!process.env.DATABASE_URL) {
+  console.error("❌  Falta DATABASE_URL (apps/web/.env.local)");
+  process.exit(1);
+}
 
-async function put(TableName: string, Item: Record<string, unknown>) {
-  await client.send(new PutCommand({ TableName, Item }));
+const db = drizzle(neon(process.env.DATABASE_URL), { schema });
+const { users, empresas, proyectos, proyectoUsuarios, invitaciones, configErp } = schema;
+
+async function sembrarUsuario(u: {
+  email: string;
+  nombre: string;
+  tipo: "planta" | "temporal" | "admin" | "cliente";
+  rol: "campo" | "admin" | "cliente";
+  iniciales?: string;
+  gerencia?: string;
+  permisos?: string[];
+  perfilCompleto?: boolean;
+}): Promise<string> {
+  const [row] = await db
+    .insert(users)
+    .values({
+      email: u.email.toLowerCase(),
+      name: u.nombre,
+      tipo: u.tipo,
+      rol: u.rol,
+      iniciales: u.iniciales,
+      gerencia: u.gerencia,
+      permisos: u.permisos ?? [],
+      perfilCompleto: u.perfilCompleto ?? true,
+      odooSync: u.tipo === "planta",
+    })
+    .onConflictDoUpdate({
+      target: users.email,
+      set: { name: u.nombre, rol: u.rol, tipo: u.tipo, updatedAt: new Date() },
+    })
+    .returning({ id: users.id });
+  console.log(`  👤  ${u.rol.padEnd(7)} ${u.email}`);
+  return row.id;
 }
 
 async function main() {
-  console.log("🌱  Sembrando datos de prueba...\n");
+  console.log("🌱  Sembrando datos de desarrollo...\n");
 
-  // ── Usuarios ─────────────────────────────────────────────────────────────────
-
-  // Super admin — placeholder google_sub se reemplaza automáticamente al primer login con Google
-  await put("proyinstelec-users", {
-    google_sub: "superadmin-placeholder-memorp19",
+  // ── Usuarios ────────────────────────────────────────────────────────────────
+  const adminId = await sembrarUsuario({
     email: "memorp19@gmail.com",
     nombre: "Super Admin",
-    foto_url: null,
     tipo: "admin",
     rol: "admin",
-    odoo_sync: false,
-    perfil_completo: true,
-    proyectos_asignados: [],
-    created_at: now,
-    updated_at: now,
+    iniciales: "GRP",
+    gerencia: "Dirección",
   });
-  console.log("  👑  Super Admin: memorp19@gmail.com");
 
-  await put("proyinstelec-users", {
-    google_sub: "admin-local-001",
+  await sembrarUsuario({
     email: "admin@proyinstelec.mx",
     nombre: "Mario Rodríguez",
-    foto_url: null,
     tipo: "admin",
     rol: "admin",
-    odoo_sync: false,
-    perfil_completo: true,
-    proyectos_asignados: [],
     iniciales: "MARO",
     gerencia: "Administración",
-    created_at: now,
-    updated_at: now,
   });
-  console.log("  👤  Admin: admin@proyinstelec.mx");
 
-  // Usuaria del ERP sin rol admin: permisos explícitos (equipo comercial)
-  await put("proyinstelec-users", {
-    google_sub: "comercial-local-001",
+  // Colaboradora del área comercial: sin rol admin, con permisos explícitos
+  await sembrarUsuario({
     email: "maria@proyinstelec.mx",
     nombre: "María Álvarez",
-    foto_url: null,
     tipo: "planta",
     rol: "campo",
-    odoo_sync: false,
-    perfil_completo: true,
-    proyectos_asignados: [],
     iniciales: "MNAA",
     gerencia: "Administración",
     permisos: [
@@ -81,110 +91,101 @@ async function main() {
       "cotizaciones.enviar",
       "modulo.weekly",
     ],
-    created_at: now,
-    updated_at: now,
   });
-  console.log("  👤  Comercial (permisos ERP): maria@proyinstelec.mx");
 
-  await put("proyinstelec-users", {
-    google_sub: "planta-local-001",
-    email: "carlos@proyinstelec.mx",
-    nombre: "Carlos Reyes",
-    foto_url: null,
+  const revisorId = await sembrarUsuario({
+    email: "eduardo@proyinstelec.mx",
+    nombre: "Eduardo Ocampo",
     tipo: "planta",
     rol: "campo",
-    odoo_sync: true,
-    perfil_completo: true,
-    proyectos_asignados: ["proyecto-polanco-001"],
-    created_at: now,
-    updated_at: now,
-  });
-  console.log("  👤  Planta: carlos@proyinstelec.mx");
-
-  await put("proyinstelec-users", {
-    google_sub: "temporal-local-001",
-    email: "temporal@gmail.com",
-    nombre: "Juan Hernández",
-    foto_url: null,
-    tipo: "temporal",
-    rol: "campo",
-    odoo_sync: false,
-    perfil_completo: false,
-    proyectos_asignados: [],
-    created_at: now,
-    updated_at: now,
-  });
-  console.log("  👤  Temporal (sin completar): temporal@gmail.com");
-
-  // ── Proyectos (main table) ────────────────────────────────────────────────────
-
-  await put("proyinstelec-main", {
-    pk: "PROYECTO#proyecto-polanco-001",
-    sk: "#METADATA",
-    id: "proyecto-polanco-001",
-    nombre: "Subestación Polanco",
-    clienteId: "cliente-bbva-001",
-    estado: "activo",
-    fechaInicio: "2026-03-01",
-    fechaFin: "2026-06-15",
-    trabajadores: ["planta-local-001"],
-    gsi3pk: "cliente-bbva-001",
-    gsi3sk: "PROYECTO#proyecto-polanco-001",
-    created_at: now,
-  });
-  console.log("  🏗️   Proyecto: Subestación Polanco");
-
-  await put("proyinstelec-main", {
-    pk: "PROYECTO#proyecto-toluca-001",
-    sk: "#METADATA",
-    id: "proyecto-toluca-001",
-    nombre: "Planta Toluca",
-    clienteId: "cliente-toluca-001",
-    estado: "activo",
-    fechaInicio: "2026-04-01",
-    fechaFin: "2026-07-30",
-    trabajadores: [],
-    gsi3pk: "cliente-toluca-001",
-    gsi3sk: "PROYECTO#proyecto-toluca-001",
-    created_at: now,
-  });
-  console.log("  🏗️   Proyecto: Planta Toluca");
-
-  // ── Invitación activa ─────────────────────────────────────────────────────────
-
-  await put("proyinstelec-invitaciones", {
-    token: "dev-token-valido-12345",
-    proyectoId: "proyecto-toluca-001",
-    creadoPor: "admin-local-001",
-    nombreSugerido: "Trabajador de Prueba",
-    estado: "pendiente",
-    expiresAt: futureTs,
-  });
-  console.log("  🔗  Token de invitación: dev-token-valido-12345");
-
-  // ── Configuración del ERP (áreas para avisos de OT) ──────────────────────────
-
-  await put("proyinstelec-main", {
-    pk: "CONFIG#erp",
-    sk: "#METADATA",
-    areas_ot: [
-      { clave: "ESTUDIOS_ELECTRICOS", nombre: "Estudios Eléctricos", correo: "" },
-      { clave: "PROTECCIONES", nombre: "Protecciones", correo: "" },
-      { clave: "MANTENIMIENTOS", nombre: "Mantenimientos", correo: "" },
-      { clave: "ADMINISTRACION", nombre: "Administración", correo: "" },
+    iniciales: "EAOL",
+    gerencia: "Dirección",
+    permisos: [
+      "modulo.cotizaciones",
+      "modulo.clientes",
+      "dashboard.cotizaciones",
+      "cotizaciones.enviar",
+      "cotizaciones.aprobar",
+      "ot.crear",
+      "modulo.ot",
     ],
-    cc_aviso_ot: [],
-    updated_at: now,
   });
-  console.log("  ⚙️   Config ERP: áreas de OT (captura los correos en el ítem CONFIG#erp)");
-  console.log(`      URL: http://localhost:3000/unirse?token=dev-token-valido-12345`);
 
-  console.log("\n✅  Datos de prueba listos.\n");
-  console.log("Cuentas disponibles (inicia sesión con Google):");
-  console.log("  Super Admin → memorp19@gmail.com  (migración automática al primer login)");
-  console.log("  Admin       → admin@proyinstelec.mx");
-  console.log("  Planta      → carlos@proyinstelec.mx");
-  console.log("  Temporal    → cualquier cuenta Google + token arriba\n");
+  const trabajadorId = await sembrarUsuario({
+    email: "carlos@proyinstelec.mx",
+    nombre: "Carlos Reyes",
+    tipo: "planta",
+    rol: "campo",
+    iniciales: "CARE",
+    gerencia: "Operación",
+  });
+
+  // ── Empresas y proyectos ────────────────────────────────────────────────────
+  const [empresa] = await db
+    .insert(empresas)
+    .values({ nombre: "Grupo Industrial Norte" })
+    .returning();
+  console.log(`  🏢  Empresa: ${empresa.nombre}`);
+
+  const [proyecto] = await db
+    .insert(proyectos)
+    .values({
+      empresaId: empresa.id,
+      nombre: "Subestación Polanco",
+      descripcion: "Mantenimiento mayor de subestación",
+      estado: "activo",
+    })
+    .returning();
+  console.log(`  🏗️   Proyecto: ${proyecto.nombre}`);
+
+  await db
+    .insert(proyectoUsuarios)
+    .values([
+      { proyectoId: proyecto.id, usuarioId: trabajadorId },
+      { proyectoId: proyecto.id, usuarioId: revisorId },
+    ])
+    .onConflictDoNothing();
+
+  // ── Invitación de prueba ────────────────────────────────────────────────────
+  const token = "dev-token-valido-12345";
+  const expira = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  await db
+    .insert(invitaciones)
+    .values({
+      token,
+      proyectoId: proyecto.id,
+      creadoPor: adminId,
+      nombreSugerido: "Trabajador de Prueba",
+      estado: "pendiente",
+      expiresAt: expira,
+    })
+    .onConflictDoUpdate({
+      target: invitaciones.token,
+      set: { estado: "pendiente", expiresAt: expira, usadaPor: null },
+    });
+  console.log(`  🔗  Invitación: /unirse?token=${token}`);
+
+  // ── Configuración del ERP ───────────────────────────────────────────────────
+  await db
+    .insert(configErp)
+    .values({
+      clave: "erp",
+      valor: {
+        areas_ot: [
+          { clave: "ESTUDIOS_ELECTRICOS", nombre: "Estudios Eléctricos", correo: "" },
+          { clave: "PROTECCIONES", nombre: "Protecciones", correo: "" },
+          { clave: "MANTENIMIENTOS", nombre: "Mantenimientos", correo: "" },
+          { clave: "ADMINISTRACION", nombre: "Administración", correo: "" },
+        ],
+        cc_aviso_ot: [],
+      },
+    })
+    .onConflictDoUpdate({ target: configErp.clave, set: { updatedAt: new Date() } });
+  console.log("  ⚙️   Config ERP: áreas de OT (captura los correos cuando las tengas)");
+
+  const total = await db.select().from(users);
+  console.log(`\n✅  Listo: ${total.length} usuarios en la base.`);
+  console.log("    Entra con Google usando cualquiera de esos correos.\n");
 }
 
 main().catch((err) => {

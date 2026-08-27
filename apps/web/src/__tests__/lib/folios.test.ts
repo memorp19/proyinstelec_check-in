@@ -1,10 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("@/src/lib/dynamo-client", () => ({
-  getDocClient: vi.fn(),
-}));
+vi.mock("@/src/db", () => ({ getDb: vi.fn() }));
 
-import { getDocClient } from "@/src/lib/dynamo-client";
+import { getDb } from "@/src/db";
+import { dbFalso } from "../helpers/db-falso";
 import {
   siguienteNumero,
   asegurarContadorMinimo,
@@ -17,37 +16,43 @@ import {
   parseFolioOT,
 } from "@/src/lib/folios";
 
+function usarDb(resultados: unknown[] = []) {
+  const falso = dbFalso(resultados);
+  vi.mocked(getDb).mockImplementation(falso.getDb as never);
+  return falso;
+}
+
 describe("siguienteNumero", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("incrementa atómicamente y devuelve el nuevo valor", async () => {
-    const mockSend = vi.fn().mockResolvedValue({ Attributes: { n: 42 } });
-    vi.mocked(getDocClient).mockReturnValue({ send: mockSend } as any);
+  it("incrementa atómicamente en una sola sentencia y devuelve el nuevo valor", async () => {
+    const db = usarDb([[{ n: 42 }]]);
 
-    const n = await siguienteNumero("cotizacion-2026");
-    expect(n).toBe(42);
+    expect(await siguienteNumero("cotizacion-2026")).toBe(42);
 
-    const command = mockSend.mock.calls[0][0];
-    expect(command.input.Key).toEqual({ pk: "COUNTER#cotizacion-2026", sk: "#N" });
-    expect(command.input.UpdateExpression).toContain("ADD n");
+    // INSERT ... ON CONFLICT DO UPDATE ... RETURNING n
+    expect(db.metodos()).toEqual(["insert", "values", "onConflictDoUpdate", "returning"]);
+    const valores = db.llamadas[1].args[0] as { tipo: string; n: number };
+    expect(valores).toEqual({ tipo: "cotizacion-2026", n: 1 });
   });
 });
 
 describe("asegurarContadorMinimo", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("no falla cuando el contador ya va más adelante", async () => {
-    const err = Object.assign(new Error("cond"), { name: "ConditionalCheckFailedException" });
-    const mockSend = vi.fn().mockRejectedValue(err);
-    vi.mocked(getDocClient).mockReturnValue({ send: mockSend } as any);
+  it("solo sube: el ON CONFLICT lleva condición sobre el valor actual", async () => {
+    const db = usarDb([[]]);
 
     await expect(asegurarContadorMinimo("actividad", 10)).resolves.toBeUndefined();
+
+    const conflicto = db.llamadas.find((l) => l.metodo === "onConflictDoUpdate")!
+      .args[0] as { set: { n: number }; setWhere?: unknown };
+    expect(conflicto.set.n).toBe(10);
+    expect(conflicto.setWhere).toBeDefined();
   });
 
-  it("propaga otros errores", async () => {
-    const mockSend = vi.fn().mockRejectedValue(new Error("boom"));
-    vi.mocked(getDocClient).mockReturnValue({ send: mockSend } as any);
-
+  it("propaga errores de la base", async () => {
+    usarDb([{ error: new Error("boom") }]);
     await expect(asegurarContadorMinimo("actividad", 10)).rejects.toThrow("boom");
   });
 });

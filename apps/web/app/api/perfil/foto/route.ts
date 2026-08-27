@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
 import type { Session } from "next-auth";
-import { authOptions } from "@/src/auth";
+import { auth } from "@/src/auth";
 import { updatePerfil } from "@/src/lib/users";
 import { uploadPhoto } from "@/src/lib/drive";
 import { DEMO_MODE } from "@/src/demo";
@@ -9,7 +8,7 @@ import { DEMO_MODE } from "@/src/demo";
 const MAX_SIZE_BYTES = 4 * 1024 * 1024;
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   if (DEMO_MODE) {
@@ -58,7 +57,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE() {
-  const session = (await getServerSession(authOptions)) as Session | null;
+  const session = (await auth()) as Session | null;
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   await updatePerfil(session.user.id!, { foto_url: null });

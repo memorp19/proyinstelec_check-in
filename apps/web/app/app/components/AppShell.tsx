@@ -104,7 +104,7 @@ export function AppShell({
   const [deviceLabel, setDeviceLabel] = useState("Detectando dispositivo…");
 
   // Restore from localStorage when server didn't return an open jornada
-  // (covers browser refresh when DynamoDB query fails or offline start)
+  // (covers browser refresh when the server query fails or offline start)
   useEffect(() => {
     if (openJornadaId) return; // server data is authoritative
     const cached = loadJornada();

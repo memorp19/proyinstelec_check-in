@@ -1,21 +1,14 @@
-import { DeleteCommand, PutCommand, QueryCommand, ScanCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
-import { randomUUID } from "crypto";
-import { getDocClient } from "./dynamo-client";
-
-const TABLE = () => process.env.MAIN_TABLE ?? "proyinstelec-main";
+import { and, asc, eq, ilike, or, sql } from "drizzle-orm";
+import { getDb } from "../db";
+import { clientes, contactos } from "../db/schema";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 /**
  * Clientes del ERP (empresas a las que se cotiza) y sus contactos.
  * Distintos de las "empresas" del módulo de campo (proyectos.ts).
- *
- * Ítems: CLIENTE#<id> / #METADATA  (empresa)
- *        CLIENTE#<id> / CONTACTO#<id>
  */
 export interface ClienteEmpresa {
-  pk: string;
-  sk: "#METADATA";
   cliente_id: string;
   razon_social: string;
   /** Razón social normalizada (sin sufijos legales) para anti-duplicados y match */
@@ -27,8 +20,6 @@ export interface ClienteEmpresa {
 }
 
 export interface Contacto {
-  pk: string;
-  sk: string;
   contacto_id: string;
   cliente_id: string;
   nombre: string;
@@ -37,6 +28,34 @@ export interface Contacto {
   correo?: string;
   created_at: string;
   updated_at: string;
+}
+
+type FilaCliente = typeof clientes.$inferSelect;
+type FilaContacto = typeof contactos.$inferSelect;
+
+function aEmpresa(f: FilaCliente): ClienteEmpresa {
+  return {
+    cliente_id: f.id,
+    razon_social: f.razonSocial,
+    razon_normalizada: f.razonNormalizada,
+    direccion: f.direccion ?? undefined,
+    created_at: f.createdAt.toISOString(),
+    created_by: f.createdBy,
+    updated_at: f.updatedAt.toISOString(),
+  };
+}
+
+function aContacto(f: FilaContacto): Contacto {
+  return {
+    contacto_id: f.id,
+    cliente_id: f.clienteId,
+    nombre: f.nombre,
+    puesto: f.puesto ?? undefined,
+    telefono: f.telefono ?? undefined,
+    correo: f.correo ?? undefined,
+    created_at: f.createdAt.toISOString(),
+    updated_at: f.updatedAt.toISOString(),
+  };
 }
 
 // ── Normalización (reglas del ERP legacy) ─────────────────────────────────────
@@ -89,30 +108,44 @@ export function compararRazones(a: string, b: string): "exacta" | "parcial" | "n
 // ── Empresas ──────────────────────────────────────────────────────────────────
 
 export async function listClientes(): Promise<ClienteEmpresa[]> {
-  const result = await getDocClient().send(
-    new ScanCommand({
-      TableName: TABLE(),
-      FilterExpression: "begins_with(pk, :p) AND sk = :meta",
-      ExpressionAttributeValues: { ":p": "CLIENTE#", ":meta": "#METADATA" },
-    }),
-  );
-  return ((result.Items ?? []) as ClienteEmpresa[]).sort((a, b) =>
-    a.razon_social.localeCompare(b.razon_social, "es"),
-  );
+  const filas = await getDb().select().from(clientes).orderBy(asc(clientes.razonSocial));
+  return filas.map(aEmpresa);
+}
+
+/** `%` y `_` romperían el patrón; la normalización ya dejó solo letras y espacios. */
+function patronLike(texto: string): string {
+  return texto.replace(/[%_\\]/g, "");
 }
 
 /**
  * Busca empresas cuyo nombre coincide exacta o parcialmente con `razon`.
  * Para el flujo de alta con verificación de duplicados.
+ *
+ * El "contains bidireccional" del legacy se resuelve en SQL (la normalizada
+ * contiene a la buscada, o al revés) y solo los candidatos se afinan en
+ * memoria con compararRazones, que es la regla autoritativa.
  */
 export async function buscarEmpresasParecidas(
   razon: string,
 ): Promise<Array<{ empresa: ClienteEmpresa; match: "exacta" | "parcial" }>> {
-  const todas = await listClientes();
+  const norm = patronLike(normalizarRazonSocial(razon));
+  if (!norm) return [];
+
+  const candidatas = await getDb()
+    .select()
+    .from(clientes)
+    .where(
+      or(
+        ilike(clientes.razonNormalizada, `%${norm}%`),
+        sql`${norm} ILIKE '%' || ${clientes.razonNormalizada} || '%'`,
+      ),
+    )
+    .orderBy(asc(clientes.razonSocial));
+
   const resultados: Array<{ empresa: ClienteEmpresa; match: "exacta" | "parcial" }> = [];
-  for (const e of todas) {
-    const match = compararRazones(razon, e.razon_social);
-    if (match !== "ninguna") resultados.push({ empresa: e, match });
+  for (const f of candidatas) {
+    const match = compararRazones(razon, f.razonSocial);
+    if (match !== "ninguna") resultados.push({ empresa: aEmpresa(f), match });
   }
   return resultados.sort((a) => (a.match === "exacta" ? -1 : 1));
 }
@@ -122,46 +155,45 @@ export async function createClienteEmpresa(params: {
   direccion?: string;
   createdBy: string;
 }): Promise<ClienteEmpresa> {
-  const id = randomUUID();
-  const now = new Date().toISOString();
-  const item: ClienteEmpresa = {
-    pk: `CLIENTE#${id}`,
-    sk: "#METADATA",
-    cliente_id: id,
-    razon_social: params.razonSocial.trim(),
-    razon_normalizada: normalizarRazonSocial(params.razonSocial),
-    direccion: params.direccion?.trim() || undefined,
-    created_at: now,
-    created_by: params.createdBy,
-    updated_at: now,
-  };
-  await getDocClient().send(new PutCommand({ TableName: TABLE(), Item: item }));
-  return item;
+  const [fila] = await getDb()
+    .insert(clientes)
+    .values({
+      razonSocial: params.razonSocial.trim(),
+      razonNormalizada: normalizarRazonSocial(params.razonSocial),
+      direccion: params.direccion?.trim() || null,
+      createdBy: params.createdBy,
+    })
+    .returning();
+  return aEmpresa(fila);
 }
 
 export async function getClienteEmpresa(clienteId: string): Promise<ClienteEmpresa | null> {
-  const result = await getDocClient().send(
-    new QueryCommand({
-      TableName: TABLE(),
-      KeyConditionExpression: "pk = :pk AND sk = :sk",
-      ExpressionAttributeValues: { ":pk": `CLIENTE#${clienteId}`, ":sk": "#METADATA" },
-    }),
-  );
-  return ((result.Items?.[0] as ClienteEmpresa) ?? null);
+  const [fila] = await getDb()
+    .select()
+    .from(clientes)
+    .where(eq(clientes.id, clienteId))
+    .limit(1);
+  return fila ? aEmpresa(fila) : null;
 }
 
 // ── Contactos ─────────────────────────────────────────────────────────────────
 
 export async function listContactos(clienteId: string): Promise<Contacto[]> {
-  const result = await getDocClient().send(
-    new QueryCommand({
-      TableName: TABLE(),
-      KeyConditionExpression: "pk = :pk AND begins_with(sk, :c)",
-      ExpressionAttributeValues: { ":pk": `CLIENTE#${clienteId}`, ":c": "CONTACTO#" },
-    }),
-  );
-  return ((result.Items ?? []) as Contacto[]).sort((a, b) =>
-    a.nombre.localeCompare(b.nombre, "es"),
+  const filas = await getDb()
+    .select()
+    .from(contactos)
+    .where(eq(contactos.clienteId, clienteId))
+    .orderBy(asc(contactos.nombre));
+  return filas.map(aContacto);
+}
+
+/** Violación del índice único (cliente_id, nombre_normalizado). */
+function esConflictoDeUnicidad(err: unknown): boolean {
+  const e = err as { code?: string; message?: string; cause?: { code?: string } };
+  return (
+    e?.code === "23505" ||
+    e?.cause?.code === "23505" ||
+    /duplicate key|unique constraint/i.test(e?.message ?? "")
   );
 }
 
@@ -172,29 +204,26 @@ export async function createContacto(params: {
   telefono?: string;
   correo?: string;
 }): Promise<Contacto> {
-  // Anti-duplicado empresa+contacto (regla del legacy)
-  const existentes = await listContactos(params.clienteId);
-  const nombreNorm = normalizarNombreContacto(params.nombre);
-  if (existentes.some((c) => normalizarNombreContacto(c.nombre) === nombreNorm)) {
-    throw new Error(`El contacto "${params.nombre}" ya existe en esta empresa`);
+  try {
+    const [fila] = await getDb()
+      .insert(contactos)
+      .values({
+        clienteId: params.clienteId,
+        nombre: params.nombre.trim(),
+        // El anti-duplicado empresa+contacto del legacy lo garantiza el índice único
+        nombreNormalizado: normalizarNombreContacto(params.nombre),
+        puesto: params.puesto?.trim() || null,
+        telefono: params.telefono?.trim() || null,
+        correo: params.correo?.trim().toLowerCase() || null,
+      })
+      .returning();
+    return aContacto(fila);
+  } catch (err) {
+    if (esConflictoDeUnicidad(err)) {
+      throw new Error(`El contacto "${params.nombre}" ya existe en esta empresa`);
+    }
+    throw err;
   }
-
-  const id = randomUUID();
-  const now = new Date().toISOString();
-  const item: Contacto = {
-    pk: `CLIENTE#${params.clienteId}`,
-    sk: `CONTACTO#${id}`,
-    contacto_id: id,
-    cliente_id: params.clienteId,
-    nombre: params.nombre.trim(),
-    puesto: params.puesto?.trim() || undefined,
-    telefono: params.telefono?.trim() || undefined,
-    correo: params.correo?.trim().toLowerCase() || undefined,
-    created_at: now,
-    updated_at: now,
-  };
-  await getDocClient().send(new PutCommand({ TableName: TABLE(), Item: item }));
-  return item;
 }
 
 /** Solo puesto/teléfono/correo son editables (regla del legacy). */
@@ -203,47 +232,21 @@ export async function updateContacto(
   contactoId: string,
   data: { puesto?: string | null; telefono?: string | null; correo?: string | null },
 ): Promise<void> {
-  const sets: string[] = ["updated_at = :ua"];
-  const values: Record<string, unknown> = { ":ua": new Date().toISOString() };
-  const removes: string[] = [];
+  const cambios: Partial<typeof contactos.$inferInsert> = { updatedAt: new Date() };
+  if (data.puesto !== undefined) cambios.puesto = data.puesto?.trim() || null;
+  if (data.telefono !== undefined) cambios.telefono = data.telefono?.trim() || null;
+  if (data.correo !== undefined) cambios.correo = data.correo?.trim().toLowerCase() || null;
 
-  const campos: Array<[keyof typeof data, string]> = [
-    ["puesto", "puesto"],
-    ["telefono", "telefono"],
-    ["correo", "correo"],
-  ];
-  for (const [key, attr] of campos) {
-    if (data[key] !== undefined) {
-      if (data[key]) {
-        sets.push(`${attr} = :${attr}`);
-        values[`:${attr}`] =
-          key === "correo" ? String(data[key]).trim().toLowerCase() : String(data[key]).trim();
-      } else {
-        removes.push(attr);
-      }
-    }
-  }
-
-  let expr = `SET ${sets.join(", ")}`;
-  if (removes.length > 0) expr += ` REMOVE ${removes.join(", ")}`;
-
-  await getDocClient().send(
-    new UpdateCommand({
-      TableName: TABLE(),
-      Key: { pk: `CLIENTE#${clienteId}`, sk: `CONTACTO#${contactoId}` },
-      UpdateExpression: expr,
-      ExpressionAttributeValues: values,
-    }),
-  );
+  await getDb()
+    .update(contactos)
+    .set(cambios)
+    .where(and(eq(contactos.id, contactoId), eq(contactos.clienteId, clienteId)));
 }
 
 export async function deleteContacto(clienteId: string, contactoId: string): Promise<void> {
-  await getDocClient().send(
-    new DeleteCommand({
-      TableName: TABLE(),
-      Key: { pk: `CLIENTE#${clienteId}`, sk: `CONTACTO#${contactoId}` },
-    }),
-  );
+  await getDb()
+    .delete(contactos)
+    .where(and(eq(contactos.id, contactoId), eq(contactos.clienteId, clienteId)));
 }
 
 // ── Match para el envío de cotizaciones ───────────────────────────────────────
@@ -264,27 +267,27 @@ export async function contactosParaEnvio(params: {
   const empresa = parecidas[0]?.empresa ?? null;
   if (!empresa) return { empresa: null, contactos: [], sugeridoId: null };
 
-  const contactos = (await listContactos(empresa.cliente_id)).filter((c) => c.correo);
+  const lista = (await listContactos(empresa.cliente_id)).filter((c) => c.correo);
 
   let sugeridoId: string | null = null;
   if (params.dirigidaA) {
     const objetivo = normalizarNombreContacto(params.dirigidaA);
     // exacto → parcial → por palabra (>2 letras), como el legacy
-    const exacto = contactos.find((c) => normalizarNombreContacto(c.nombre) === objetivo);
+    const exacto = lista.find((c) => normalizarNombreContacto(c.nombre) === objetivo);
     const parcial =
       exacto ??
-      contactos.find((c) => {
+      lista.find((c) => {
         const n = normalizarNombreContacto(c.nombre);
         return n.includes(objetivo) || objetivo.includes(n);
       });
     const porPalabra =
       parcial ??
-      contactos.find((c) => {
+      lista.find((c) => {
         const palabras = normalizarNombreContacto(c.nombre).split(" ");
         return objetivo.split(" ").some((p) => p.length > 2 && palabras.includes(p));
       });
     sugeridoId = porPalabra?.contacto_id ?? null;
   }
 
-  return { empresa, contactos, sugeridoId };
+  return { empresa, contactos: lista, sugeridoId };
 }

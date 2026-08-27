@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/src/auth";
+import { auth } from "@/src/auth";
 import { getJornadasByUsuarioProyecto } from "@/src/lib/jornadas";
 import { DEMO_MODE } from "@/src/demo";
 
@@ -26,7 +25,7 @@ const DEMO_JORNADAS_BY_PROJECT: Record<string, {
 };
 
 export async function GET(req: NextRequest) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   if (!session) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   const proyectoId = new URL(req.url).searchParams.get("proyectoId");

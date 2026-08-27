@@ -1,21 +1,15 @@
-import { PutCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
-import { getDocClient } from "./dynamo-client";
+import { and, desc, eq } from "drizzle-orm";
+import { getDb } from "../db";
+import { ordenesTrabajo, otResponsables } from "../db/schema";
 import { folioOT } from "./folios";
-
-const TABLE = () => process.env.MAIN_TABLE ?? "proyinstelec-main";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 /**
  * Orden de Trabajo (Fase 1: alta desde el ingreso de OC; la ficha completa,
  * control operativo y servicios llegan en la Fase 2).
- *
- * Ítems: OT#<folio> / #METADATA  ·  OT#<folio> / RESP#<ts>
- * GSI4:  gsi4pk = OT#<anio> · gsi4sk = <folio>
  */
 export interface OrdenTrabajo {
-  pk: string;
-  sk: "#METADATA";
   folio: string; // OT001260
   numero_cotizacion: number;
   anio: number;
@@ -33,13 +27,10 @@ export interface OrdenTrabajo {
   created_by: string;
   created_at: string;
   updated_at: string;
-  gsi4pk: string;
-  gsi4sk: string;
 }
 
 export interface ResponsableOT {
-  pk: string;
-  sk: string; // RESP#<ts>
+  id: string;
   folio_ot: string;
   correo: string;
   rol: string; // "Responsable de la actividad"
@@ -49,42 +40,72 @@ export interface ResponsableOT {
   activo: boolean;
 }
 
+type FilaOT = typeof ordenesTrabajo.$inferSelect;
+type FilaResponsable = typeof otResponsables.$inferSelect;
+
+function aOT(f: FilaOT): OrdenTrabajo {
+  return {
+    folio: f.folio,
+    numero_cotizacion: f.numeroCotizacion,
+    anio: f.anio,
+    version: f.version,
+    orden_compra: f.ordenCompra,
+    fecha_oc: f.fechaOc?.toISOString(),
+    cliente: f.cliente,
+    titulo: f.titulo,
+    dirigida_a: f.dirigidaA ?? undefined,
+    estatus: f.estatus,
+    areas: f.areas ?? [],
+    drive_folder_id: f.driveFolderId ?? undefined,
+    drive_folder_url: f.driveFolderUrl ?? undefined,
+    tiene_control_operativo: f.tieneControlOperativo,
+    created_by: f.createdBy,
+    created_at: f.createdAt.toISOString(),
+    updated_at: f.updatedAt.toISOString(),
+  };
+}
+
+function aResponsable(f: FilaResponsable): ResponsableOT {
+  return {
+    id: f.id,
+    folio_ot: f.folioOt,
+    correo: f.correo,
+    rol: f.rol,
+    area: f.area ?? undefined,
+    asignado_por: f.asignadoPor,
+    fecha: f.fecha.toISOString(),
+    activo: f.activo,
+  };
+}
+
 // ── Lecturas ──────────────────────────────────────────────────────────────────
 
 export async function getOT(folio: string): Promise<OrdenTrabajo | null> {
-  const result = await getDocClient().send(
-    new QueryCommand({
-      TableName: TABLE(),
-      KeyConditionExpression: "pk = :pk AND sk = :sk",
-      ExpressionAttributeValues: { ":pk": `OT#${folio}`, ":sk": "#METADATA" },
-    }),
-  );
-  return ((result.Items?.[0] as OrdenTrabajo) ?? null);
+  const [fila] = await getDb()
+    .select()
+    .from(ordenesTrabajo)
+    .where(eq(ordenesTrabajo.folio, folio))
+    .limit(1);
+  return fila ? aOT(fila) : null;
 }
 
 export async function listOTDeAnio(anio: number): Promise<OrdenTrabajo[]> {
-  const result = await getDocClient().send(
-    new QueryCommand({
-      TableName: TABLE(),
-      IndexName: "gsi4-coleccion",
-      KeyConditionExpression: "gsi4pk = :pk",
-      ExpressionAttributeValues: { ":pk": `OT#${anio}` },
-      ScanIndexForward: false,
-    }),
-  );
-  return (result.Items ?? []) as OrdenTrabajo[];
+  const filas = await getDb()
+    .select()
+    .from(ordenesTrabajo)
+    .where(eq(ordenesTrabajo.anio, anio))
+    .orderBy(desc(ordenesTrabajo.folio));
+  return filas.map(aOT);
 }
 
+/** Responsables de una OT, el más reciente primero (incluye el historial). */
 export async function listResponsables(folio: string): Promise<ResponsableOT[]> {
-  const result = await getDocClient().send(
-    new QueryCommand({
-      TableName: TABLE(),
-      KeyConditionExpression: "pk = :pk AND begins_with(sk, :r)",
-      ExpressionAttributeValues: { ":pk": `OT#${folio}`, ":r": "RESP#" },
-      ScanIndexForward: false,
-    }),
-  );
-  return (result.Items ?? []) as ResponsableOT[];
+  const filas = await getDb()
+    .select()
+    .from(otResponsables)
+    .where(eq(otResponsables.folioOt, folio))
+    .orderBy(desc(otResponsables.fecha));
+  return filas.map(aResponsable);
 }
 
 // ── Alta (desde el ingreso de OC) ─────────────────────────────────────────────
@@ -101,40 +122,56 @@ export async function createOT(params: {
   createdBy: string;
 }): Promise<OrdenTrabajo> {
   const folio = folioOT(params.numeroCotizacion, params.anio, params.version);
-  const now = new Date().toISOString();
-  const item: OrdenTrabajo = {
-    pk: `OT#${folio}`,
-    sk: "#METADATA",
-    folio,
-    numero_cotizacion: params.numeroCotizacion,
-    anio: params.anio,
-    version: params.version,
-    orden_compra: params.ordenCompra.trim(),
-    cliente: params.cliente,
-    titulo: params.titulo,
-    dirigida_a: params.dirigidaA,
-    estatus: "PROCESO",
-    areas: params.areas,
-    tiene_control_operativo: false,
-    created_by: params.createdBy,
-    created_at: now,
-    updated_at: now,
-    gsi4pk: `OT#${params.anio}`,
-    gsi4sk: folio,
-  };
-  await getDocClient().send(
-    new PutCommand({
-      TableName: TABLE(),
-      Item: item,
-      ConditionExpression: "attribute_not_exists(pk)",
-    }),
-  );
-  return item;
+  try {
+    const [fila] = await getDb()
+      .insert(ordenesTrabajo)
+      .values({
+        folio,
+        numeroCotizacion: params.numeroCotizacion,
+        anio: params.anio,
+        version: params.version,
+        ordenCompra: params.ordenCompra.trim(),
+        cliente: params.cliente,
+        titulo: params.titulo,
+        dirigidaA: params.dirigidaA ?? null,
+        estatus: "PROCESO",
+        areas: params.areas,
+        createdBy: params.createdBy,
+      })
+      .returning();
+    return aOT(fila);
+  } catch (err) {
+    const e = err as { code?: string; message?: string; cause?: { code?: string } };
+    if (
+      e?.code === "23505" ||
+      e?.cause?.code === "23505" ||
+      /duplicate key|unique constraint/i.test(e?.message ?? "")
+    ) {
+      throw new Error(`La OT ${folio} ya existe`);
+    }
+    throw err;
+  }
+}
+
+/** Carpeta de Drive de la OT (se conoce después de crearla). */
+export async function setCarpetaDriveOT(
+  folio: string,
+  carpeta: { folderId: string; folderUrl: string },
+): Promise<void> {
+  await getDb()
+    .update(ordenesTrabajo)
+    .set({
+      driveFolderId: carpeta.folderId,
+      driveFolderUrl: carpeta.folderUrl,
+      updatedAt: new Date(),
+    })
+    .where(eq(ordenesTrabajo.folio, folio));
 }
 
 /**
  * Registra al responsable de la actividad. El anterior (si existe) pasa a
- * inactivo pero se conserva como historial (regla del legacy).
+ * inactivo pero se conserva como historial (regla del legacy): un solo UPDATE
+ * sobre los activos, sin leerlos antes.
  */
 export async function registrarResponsable(params: {
   folioOt: string;
@@ -142,27 +179,20 @@ export async function registrarResponsable(params: {
   area?: string;
   asignadoPor: string;
 }): Promise<ResponsableOT> {
-  const previos = await listResponsables(params.folioOt);
-  const now = new Date().toISOString();
+  await getDb()
+    .update(otResponsables)
+    .set({ activo: false })
+    .where(and(eq(otResponsables.folioOt, params.folioOt), eq(otResponsables.activo, true)));
 
-  // Desactivar responsables activos previos (historial)
-  for (const prev of previos.filter((r) => r.activo)) {
-    await getDocClient().send(
-      new PutCommand({ TableName: TABLE(), Item: { ...prev, activo: false } }),
-    );
-  }
-
-  const item: ResponsableOT = {
-    pk: `OT#${params.folioOt}`,
-    sk: `RESP#${now}`,
-    folio_ot: params.folioOt,
-    correo: params.correo.toLowerCase(),
-    rol: "Responsable de la actividad",
-    area: params.area,
-    asignado_por: params.asignadoPor,
-    fecha: now,
-    activo: true,
-  };
-  await getDocClient().send(new PutCommand({ TableName: TABLE(), Item: item }));
-  return item;
+  const [fila] = await getDb()
+    .insert(otResponsables)
+    .values({
+      folioOt: params.folioOt,
+      correo: params.correo.toLowerCase(),
+      rol: "Responsable de la actividad",
+      area: params.area ?? null,
+      asignadoPor: params.asignadoPor,
+    })
+    .returning();
+  return aResponsable(fila);
 }

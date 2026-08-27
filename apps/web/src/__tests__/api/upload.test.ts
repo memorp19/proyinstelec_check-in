@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
 
-vi.mock("next-auth", () => ({ getServerSession: vi.fn() }));
-vi.mock("@/src/auth", () => ({ authOptions: {} }));
+vi.mock("@/src/auth", () => ({ auth: vi.fn() }));
 vi.mock("@/src/lib/drive", () => ({ uploadPhoto: vi.fn() }));
 
-import { getServerSession } from "next-auth";
+import { auth } from "@/src/auth";
+
+/** `auth()` está sobrecargada en Auth.js v5; el cast deja usarla como mock simple. */
+const mockAuth = auth as unknown as ReturnType<typeof vi.fn>;
 import { uploadPhoto } from "@/src/lib/drive";
 import { POST } from "@/app/api/upload/route";
 
@@ -34,13 +36,13 @@ const UPLOAD_RESULT = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(getServerSession).mockResolvedValue({ user: { id: "u1" } } as any);
+  mockAuth.mockResolvedValue({ user: { id: "u1" } } as any);
   vi.mocked(uploadPhoto).mockResolvedValue(UPLOAD_RESULT);
 });
 
 describe("POST /api/upload", () => {
   it("returns 401 when not authenticated", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(null);
+    mockAuth.mockResolvedValue(null);
     const res = await POST(makeRequest(VALID_BODY));
     expect(res.status).toBe(401);
   });

@@ -1,10 +1,19 @@
-import { DeleteCommand, GetCommand, PutCommand, QueryCommand, ScanCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
-import { getDocClient } from "./dynamo-client";
+import { eq, inArray, sql } from "drizzle-orm";
+import { getDb } from "../db";
+import { proyectoUsuarios, users } from "../db/schema";
 
-const TABLE = () => process.env.USERS_TABLE ?? "proyinstelec-users";
+/**
+ * Perfiles de usuario.
+ *
+ * La identidad la administra Auth.js: el id es `users.id` y el `sub` de Google
+ * vive en la tabla `accounts`. Este módulo expone el perfil de dominio en
+ * snake_case, que es como lo consumen las pantallas.
+ */
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface UserProfile {
-  google_sub: string;
+  id: string;
   email: string;
   nombre: string;
   nickname?: string;
@@ -13,66 +22,132 @@ export interface UserProfile {
   rol: "campo" | "admin" | "cliente";
   odoo_sync: boolean;
   perfil_completo: boolean;
+  activo: boolean;
   proyectos_asignados: string[];
+  permisos: string[];
+  iniciales?: string;
+  gerencia?: string;
   telefono?: string;
   id_oficial?: string;
   contacto_emergencia?: { nombre: string; telefono: string };
   terminos_aceptados_at?: string;
-  // ── Campos ERP (Fase 0) ──
-  /** Permisos del ERP; rol admin los tiene todos implícitamente (ver lib/permisos.ts) */
-  permisos?: string[];
-  /** Iniciales únicas (2-5 mayúsculas) — llave de cruce con datos del ERP legacy */
-  iniciales?: string;
-  /** Gerencia/área a la que pertenece (Administración, Operación, etc.) */
-  gerencia?: string;
   created_at: string;
   updated_at: string;
 }
 
+type Row = typeof users.$inferSelect;
+
+function aPerfil(row: Row, proyectos: string[] = []): UserProfile {
+  return {
+    id: row.id,
+    email: row.email,
+    nombre: row.name ?? row.email.split("@")[0],
+    nickname: row.nickname ?? undefined,
+    foto_url: row.fotoUrl ?? row.image ?? undefined,
+    tipo: row.tipo,
+    rol: row.rol,
+    odoo_sync: row.odooSync,
+    perfil_completo: row.perfilCompleto,
+    activo: row.activo,
+    proyectos_asignados: proyectos,
+    permisos: row.permisos ?? [],
+    iniciales: row.iniciales ?? undefined,
+    gerencia: row.gerencia ?? undefined,
+    telefono: row.telefono ?? undefined,
+    id_oficial: row.idOficial ?? undefined,
+    contacto_emergencia: row.contactoEmergencia ?? undefined,
+    terminos_aceptados_at: row.terminosAceptadosAt?.toISOString(),
+    created_at: row.createdAt.toISOString(),
+    updated_at: row.updatedAt.toISOString(),
+  };
+}
+
+/** Proyectos asignados de varios usuarios en una sola consulta. */
+async function proyectosDe(usuarioIds: string[]): Promise<Map<string, string[]>> {
+  const mapa = new Map<string, string[]>();
+  if (usuarioIds.length === 0) return mapa;
+  const filas = await getDb()
+    .select()
+    .from(proyectoUsuarios)
+    .where(inArray(proyectoUsuarios.usuarioId, usuarioIds));
+  for (const f of filas) {
+    mapa.set(f.usuarioId, [...(mapa.get(f.usuarioId) ?? []), f.proyectoId]);
+  }
+  return mapa;
+}
+
+// ── Lecturas ──────────────────────────────────────────────────────────────────
+
+export async function getUserById(id: string): Promise<UserProfile | null> {
+  const [row] = await getDb().select().from(users).where(eq(users.id, id)).limit(1);
+  if (!row) return null;
+  return aPerfil(row, (await proyectosDe([id])).get(id) ?? []);
+}
+
 export async function getUserByEmail(email: string): Promise<UserProfile | null> {
-  const result = await getDocClient().send(
-    new QueryCommand({
-      TableName: TABLE(),
-      IndexName: "email-index",
-      KeyConditionExpression: "email = :email",
-      ExpressionAttributeValues: { ":email": email },
-      Limit: 1,
-    }),
-  );
-  const items = result.Items as UserProfile[] | undefined;
-  return items?.[0] ?? null;
+  const [row] = await getDb()
+    .select()
+    .from(users)
+    .where(eq(users.email, email.toLowerCase()))
+    .limit(1);
+  if (!row) return null;
+  return aPerfil(row, (await proyectosDe([row.id])).get(row.id) ?? []);
 }
 
-export async function deleteUser(googleSub: string): Promise<void> {
-  await getDocClient().send(
-    new DeleteCommand({ TableName: TABLE(), Key: { google_sub: googleSub } }),
-  );
+export async function listUsers(): Promise<UserProfile[]> {
+  const filas = await getDb().select().from(users).orderBy(users.email);
+  const proyectos = await proyectosDe(filas.map((f) => f.id));
+  return filas.map((f) => aPerfil(f, proyectos.get(f.id) ?? []));
 }
 
-export async function getUserByGoogleSub(
-  googleSub: string,
-): Promise<UserProfile | null> {
-  const result = await getDocClient().send(
-    new GetCommand({ TableName: TABLE(), Key: { google_sub: googleSub } }),
-  );
-  return (result.Item as UserProfile) ?? null;
+/** Busca por iniciales — la llave con la que el ERP identifica personas. */
+export async function getUserByIniciales(iniciales: string): Promise<UserProfile | null> {
+  const [row] = await getDb()
+    .select()
+    .from(users)
+    .where(eq(users.iniciales, iniciales.toUpperCase()))
+    .limit(1);
+  return row ? aPerfil(row) : null;
 }
 
-/**
- * Creates or fully replaces a user record.
- * Used on first login of a planta worker.
- */
-export async function upsertUser(profile: UserProfile): Promise<void> {
-  await getDocClient().send(
-    new PutCommand({ TableName: TABLE(), Item: profile }),
-  );
+// ── Escrituras ────────────────────────────────────────────────────────────────
+
+export async function updateUserRol(
+  id: string,
+  rol: "campo" | "admin" | "cliente",
+  tipo: "planta" | "temporal" | "admin" | "cliente",
+): Promise<void> {
+  await getDb().update(users).set({ rol, tipo, updatedAt: new Date() }).where(eq(users.id, id));
 }
 
 /**
- * Marks a temporal worker's profile as complete after onboarding form submission.
+ * Campos del ERP. `undefined` deja el campo intacto; `null` o cadena vacía lo
+ * limpian. Las iniciales duplicadas las rechaza el índice único de la tabla.
  */
+export async function updateUserErp(
+  id: string,
+  data: { permisos?: string[]; iniciales?: string | null; gerencia?: string | null },
+): Promise<void> {
+  const cambios: Partial<typeof users.$inferInsert> = { updatedAt: new Date() };
+  if (data.permisos !== undefined) cambios.permisos = data.permisos;
+  if (data.iniciales !== undefined) cambios.iniciales = data.iniciales || null;
+  if (data.gerencia !== undefined) cambios.gerencia = data.gerencia || null;
+  await getDb().update(users).set(cambios).where(eq(users.id, id));
+}
+
+export async function updatePerfil(
+  id: string,
+  data: { nickname?: string | null; foto_url?: string | null },
+): Promise<void> {
+  const cambios: Partial<typeof users.$inferInsert> = { updatedAt: new Date() };
+  if (data.nickname !== undefined) cambios.nickname = data.nickname || null;
+  if (data.foto_url !== undefined) cambios.fotoUrl = data.foto_url || null;
+  await getDb().update(users).set(cambios).where(eq(users.id, id));
+}
+
+/** Cierra el alta de un trabajador temporal. */
 export async function markProfileComplete(
-  googleSub: string,
+  id: string,
   data: {
     nombre: string;
     telefono: string;
@@ -81,179 +156,78 @@ export async function markProfileComplete(
     terminos_aceptados_at: string;
   },
 ): Promise<void> {
-  await getDocClient().send(
-    new UpdateCommand({
-      TableName: TABLE(),
-      Key: { google_sub: googleSub },
-      UpdateExpression:
-        "SET perfil_completo = :t, nombre = :n, telefono = :tel, " +
-        "id_oficial = :id, contacto_emergencia = :ce, " +
-        "terminos_aceptados_at = :ts, updated_at = :ua",
-      ExpressionAttributeValues: {
-        ":t": true,
-        ":n": data.nombre,
-        ":tel": data.telefono,
-        ":id": data.id_oficial,
-        ":ce": data.contacto_emergencia,
-        ":ts": data.terminos_aceptados_at,
-        ":ua": new Date().toISOString(),
-      },
-    }),
-  );
+  await getDb()
+    .update(users)
+    .set({
+      perfilCompleto: true,
+      name: data.nombre,
+      telefono: data.telefono,
+      idOficial: data.id_oficial,
+      contactoEmergencia: data.contacto_emergencia,
+      terminosAceptadosAt: new Date(data.terminos_aceptados_at),
+      updatedAt: new Date(),
+    })
+    .where(eq(users.id, id));
+}
+
+export async function setUsuarioActivo(id: string, activo: boolean): Promise<void> {
+  await getDb().update(users).set({ activo, updatedAt: new Date() }).where(eq(users.id, id));
 }
 
 /**
- * Derives the initial user profile from a Google OAuth payload.
- * planta workers (@proyinstelec.mx) get odoo_sync: true and perfil_completo: true.
- * temporal workers need to complete the onboarding form first.
+ * Alta previa de un usuario que todavía no inicia sesión (siembra, importación).
+ * Al entrar con Google, Auth.js enlaza por correo con este perfil.
  */
-export function buildInitialProfile(params: {
-  googleSub: string;
+export async function upsertUserSembrado(data: {
   email: string;
   nombre: string;
-  fotoUrl?: string;
-  tipo: "planta" | "temporal";
-}): UserProfile {
-  const isPlanta = params.tipo === "planta";
-  const now = new Date().toISOString();
-  return {
-    google_sub: params.googleSub,
-    email: params.email,
-    nombre: params.nombre,
-    foto_url: params.fotoUrl,
-    tipo: params.tipo,
-    rol: "campo",
-    odoo_sync: isPlanta,
-    perfil_completo: isPlanta, // temporales must fill the onboarding form
-    proyectos_asignados: [],
-    created_at: now,
-    updated_at: now,
-  };
-}
-
-export async function listUsers(): Promise<UserProfile[]> {
-  const result = await getDocClient().send(
-    new ScanCommand({ TableName: TABLE() }),
-  );
-  return ((result.Items ?? []) as UserProfile[]).sort((a, b) =>
-    a.email.localeCompare(b.email),
-  );
-}
-
-export async function updateUserRol(
-  googleSub: string,
-  newRol: "campo" | "admin" | "cliente",
-  newTipo: "planta" | "temporal" | "admin" | "cliente",
-): Promise<void> {
-  await getDocClient().send(
-    new UpdateCommand({
-      TableName: TABLE(),
-      Key: { google_sub: googleSub },
-      UpdateExpression: "SET rol = :r, tipo = :t, updated_at = :ua",
-      ExpressionAttributeValues: {
-        ":r": newRol,
-        ":t": newTipo,
-        ":ua": new Date().toISOString(),
+  tipo?: UserProfile["tipo"];
+  rol?: UserProfile["rol"];
+  permisos?: string[];
+  iniciales?: string;
+  gerencia?: string;
+  perfil_completo?: boolean;
+}): Promise<string> {
+  const tipo = data.tipo ?? classifyEmail(data.email);
+  const [row] = await getDb()
+    .insert(users)
+    .values({
+      email: data.email.toLowerCase(),
+      name: data.nombre,
+      tipo,
+      rol: data.rol ?? "campo",
+      permisos: data.permisos ?? [],
+      iniciales: data.iniciales,
+      gerencia: data.gerencia,
+      perfilCompleto: data.perfil_completo ?? tipo !== "temporal",
+      odooSync: tipo === "planta",
+    })
+    .onConflictDoUpdate({
+      target: users.email,
+      set: {
+        name: data.nombre,
+        tipo,
+        rol: data.rol ?? "campo",
+        ...(data.permisos ? { permisos: data.permisos } : {}),
+        ...(data.iniciales ? { iniciales: data.iniciales } : {}),
+        ...(data.gerencia ? { gerencia: data.gerencia } : {}),
+        updatedAt: new Date(),
       },
-    }),
-  );
+    })
+    .returning({ id: users.id });
+  return row.id;
 }
 
-export async function updatePerfil(
-  googleSub: string,
-  data: { nickname?: string | null; foto_url?: string | null },
-): Promise<void> {
-  const sets: string[] = ["updated_at = :ua"];
-  const values: Record<string, unknown> = { ":ua": new Date().toISOString() };
-  const removes: string[] = [];
+// ── Utilidades ────────────────────────────────────────────────────────────────
 
-  if ("nickname" in data) {
-    if (data.nickname) {
-      sets.push("nickname = :nick");
-      values[":nick"] = data.nickname;
-    } else {
-      removes.push("nickname");
-    }
-  }
-  if ("foto_url" in data) {
-    if (data.foto_url) {
-      sets.push("foto_url = :foto");
-      values[":foto"] = data.foto_url;
-    } else {
-      removes.push("foto_url");
-    }
-  }
-
-  let expr = `SET ${sets.join(", ")}`;
-  if (removes.length > 0) expr += ` REMOVE ${removes.join(", ")}`;
-
-  await getDocClient().send(
-    new UpdateCommand({
-      TableName: TABLE(),
-      Key: { google_sub: googleSub },
-      UpdateExpression: expr,
-      ExpressionAttributeValues: values,
-    }),
-  );
-}
-
-/**
- * Updates the ERP-related fields of a profile (Fase 0).
- * Semantics per field: undefined = untouched; null or "" = cleared; value = set.
- */
-export async function updateUserErp(
-  googleSub: string,
-  data: { permisos?: string[]; iniciales?: string | null; gerencia?: string | null },
-): Promise<void> {
-  const sets: string[] = ["updated_at = :ua"];
-  const values: Record<string, unknown> = { ":ua": new Date().toISOString() };
-  const removes: string[] = [];
-
-  if (data.permisos !== undefined) {
-    sets.push("permisos = :p");
-    values[":p"] = data.permisos;
-  }
-  if (data.iniciales !== undefined) {
-    if (data.iniciales) {
-      sets.push("iniciales = :i");
-      values[":i"] = data.iniciales;
-    } else {
-      removes.push("iniciales");
-    }
-  }
-  if (data.gerencia !== undefined) {
-    if (data.gerencia) {
-      sets.push("gerencia = :g");
-      values[":g"] = data.gerencia;
-    } else {
-      removes.push("gerencia");
-    }
-  }
-
-  let expr = `SET ${sets.join(", ")}`;
-  if (removes.length > 0) expr += ` REMOVE ${removes.join(", ")}`;
-
-  await getDocClient().send(
-    new UpdateCommand({
-      TableName: TABLE(),
-      Key: { google_sub: googleSub },
-      UpdateExpression: expr,
-      ExpressionAttributeValues: values,
-    }),
-  );
-}
-
-/**
- * Finds an active user by their iniciales (llave de cruce con el ERP legacy).
- */
-export async function getUserByIniciales(iniciales: string): Promise<UserProfile | null> {
-  const all = await listUsers();
-  return all.find((u) => u.iniciales === iniciales.toUpperCase()) ?? null;
-}
-
-/**
- * Classifies an email as planta or temporal based on domain.
- */
+/** Clasifica un correo como personal de planta o trabajador temporal. */
 export function classifyEmail(email: string): "planta" | "temporal" {
-  return email.toLowerCase().endsWith("@proyinstelec.mx") ? "planta" : "temporal";
+  const dominio = process.env.GOOGLE_WORKSPACE_DOMAIN ?? "proyinstelec.mx";
+  return email.toLowerCase().endsWith(`@${dominio}`) ? "planta" : "temporal";
+}
+
+/** Total de usuarios — usado por diagnósticos y por la siembra. */
+export async function contarUsuarios(): Promise<number> {
+  const [row] = await getDb().select({ n: sql<number>`count(*)::int` }).from(users);
+  return row?.n ?? 0;
 }

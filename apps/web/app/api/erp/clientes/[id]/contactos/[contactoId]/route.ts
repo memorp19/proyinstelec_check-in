@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/src/auth";
+import { auth } from "@/src/auth";
 import { exigirPermiso } from "@/src/lib/permisos";
 import { deleteContacto, updateContacto } from "@/src/lib/clientes";
 import { registrarBitacora } from "@/src/lib/bitacora";
@@ -9,7 +8,7 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: { id: string; contactoId: string } },
 ) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   const rechazo = exigirPermiso(session?.user, "modulo.clientes");
   if (rechazo) return NextResponse.json({ error: rechazo.error }, { status: rechazo.status });
 
@@ -33,7 +32,7 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: { id: string; contactoId: string } },
 ) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   const rechazo = exigirPermiso(session?.user, "modulo.clientes");
   if (rechazo) return NextResponse.json({ error: rechazo.error }, { status: rechazo.status });
 

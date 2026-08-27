@@ -9,20 +9,23 @@
     "start": "./node_modules/.bin/next start",
     "lint": "./node_modules/.bin/next lint",
     "test": "./node_modules/.bin/vitest",
-    "test:ci": "./node_modules/.bin/vitest run --coverage"
+    "test:ci": "./node_modules/.bin/vitest run --coverage",
+    "db:generate": "./node_modules/.bin/drizzle-kit generate",
+    "db:migrate": "./node_modules/.bin/drizzle-kit migrate",
+    "db:push": "./node_modules/.bin/drizzle-kit push",
+    "db:studio": "./node_modules/.bin/drizzle-kit studio"
   },
   "dependencies": {
-    "@aws-sdk/client-dynamodb": "^3.600.0",
-    "@aws-sdk/lib-dynamodb": "^3.600.0",
-    "@aws-sdk/client-ssm": "^3.600.0",
+    "@auth/drizzle-adapter": "^1.7.4",
+    "@neondatabase/serverless": "^0.10.4",
+    "drizzle-orm": "^0.38.3",
     "googleapis": "^144.0.0",
     "idb": "^8.0.0",
     "next": "14.2.29",
-    "next-auth": "^4.24.11",
+    "next-auth": "5.0.0-beta.25",
     "next-pwa": "^5.6.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "uuid": "^10.0.0"
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.6.3",
@@ -31,10 +34,11 @@
     "@types/node": "^22.0.0",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
-    "@types/uuid": "^10.0.0",
     "@vitejs/plugin-react": "^4.3.1",
     "@vitest/coverage-v8": "^2.1.9",
     "autoprefixer": "^10.4.20",
+    "dotenv": "^16.4.7",
+    "drizzle-kit": "^0.30.1",
     "fake-indexeddb": "^6.0.0",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.14",

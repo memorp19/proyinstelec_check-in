@@ -1,12 +1,14 @@
-import { GetCommand, PutCommand } from "@aws-sdk/lib-dynamodb";
-import { getDocClient } from "./dynamo-client";
+import { eq } from "drizzle-orm";
+import { getDb } from "../db";
+import { configErp } from "../db/schema";
 
-const TABLE = () => process.env.MAIN_TABLE ?? "proyinstelec-main";
+/** Única fila de configuración del ERP. */
+const CLAVE = "erp";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 /**
- * Configuración operativa del ERP (ítem CONFIG#erp / #METADATA).
+ * Configuración operativa del ERP (fila `config_erp` con clave "erp").
  * Sustituye las listas hardcodeadas del legacy (DIRECTORIO_AREAS_OT,
  * CC_AVISO_OT). Se siembra con seed y se edita directamente en la tabla
  * (o con una pantalla de administración futura).
@@ -36,22 +38,25 @@ export const CONFIG_ERP_DEFAULT: ConfigErp = {
 // ── Read / write ──────────────────────────────────────────────────────────────
 
 export async function getConfigErp(): Promise<ConfigErp> {
-  const result = await getDocClient().send(
-    new GetCommand({ TableName: TABLE(), Key: { pk: "CONFIG#erp", sk: "#METADATA" } }),
-  );
-  if (!result.Item) return CONFIG_ERP_DEFAULT;
-  const item = result.Item as Partial<ConfigErp>;
+  const [fila] = await getDb()
+    .select()
+    .from(configErp)
+    .where(eq(configErp.clave, CLAVE))
+    .limit(1);
+  if (!fila) return CONFIG_ERP_DEFAULT;
+  const valor = (fila.valor ?? {}) as Partial<ConfigErp>;
   return {
-    areas_ot: item.areas_ot ?? CONFIG_ERP_DEFAULT.areas_ot,
-    cc_aviso_ot: item.cc_aviso_ot ?? CONFIG_ERP_DEFAULT.cc_aviso_ot,
+    areas_ot: valor.areas_ot ?? CONFIG_ERP_DEFAULT.areas_ot,
+    cc_aviso_ot: valor.cc_aviso_ot ?? CONFIG_ERP_DEFAULT.cc_aviso_ot,
   };
 }
 
 export async function saveConfigErp(config: ConfigErp): Promise<void> {
-  await getDocClient().send(
-    new PutCommand({
-      TableName: TABLE(),
-      Item: { pk: "CONFIG#erp", sk: "#METADATA", ...config, updated_at: new Date().toISOString() },
-    }),
-  );
+  await getDb()
+    .insert(configErp)
+    .values({ clave: CLAVE, valor: config, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: configErp.clave,
+      set: { valor: config, updatedAt: new Date() },
+    });
 }

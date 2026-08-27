@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/src/auth";
-import { updateUserRol, updateUserErp, getUserByGoogleSub, listUsers, classifyEmail } from "@/src/lib/users";
-import { isSuperAdmin } from "@/src/auth-callbacks";
+import { auth, isSuperAdmin } from "@/src/auth";
+import { updateUserRol, updateUserErp, getUserById, listUsers, classifyEmail } from "@/src/lib/users";
 import { esPermisoValido, esInicialesValidas } from "@/src/lib/permisos";
 import { DEMO_MODE } from "@/src/demo";
 
@@ -10,19 +8,19 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: { id: string } },
 ) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   if (!session?.user?.es_super_admin) {
     return NextResponse.json({ error: "No autorizado" }, { status: 403 });
   }
 
-  const googleSub = params.id;
+  const usuarioId = params.id;
 
   // Cannot modify the superAdmin account
   if (DEMO_MODE) {
     return NextResponse.json({ ok: true }); // optimistic in demo
   }
 
-  const target = await getUserByGoogleSub(googleSub);
+  const target = await getUserById(usuarioId);
   if (!target) return NextResponse.json({ error: "Usuario no encontrado" }, { status: 404 });
 
   // Protect the superAdmin email from being demoted
@@ -61,7 +59,7 @@ export async function PATCH(
       }
       const existentes = await listUsers();
       const choque = existentes.find(
-        (u) => u.iniciales === iniciales && u.google_sub !== googleSub,
+        (u) => u.iniciales === iniciales && u.id !== usuarioId,
       );
       if (choque) {
         return NextResponse.json(
@@ -70,7 +68,7 @@ export async function PATCH(
         );
       }
     }
-    await updateUserErp(googleSub, {
+    await updateUserErp(usuarioId, {
       permisos: body.permisos,
       iniciales: "iniciales" in body ? (iniciales as string | null) : undefined,
       gerencia: "gerencia" in body ? body.gerencia : undefined,
@@ -79,10 +77,10 @@ export async function PATCH(
   }
 
   if (body.accion === "promover") {
-    await updateUserRol(googleSub, "admin", "admin");
+    await updateUserRol(usuarioId, "admin", "admin");
   } else if (body.accion === "revocar") {
     const tipo = classifyEmail(target.email) === "planta" ? "planta" : "temporal";
-    await updateUserRol(googleSub, "campo", tipo);
+    await updateUserRol(usuarioId, "campo", tipo);
   } else {
     return NextResponse.json({ error: "accion inválida" }, { status: 422 });
   }

@@ -1,13 +1,10 @@
-import { GetCommand, PutCommand } from "@aws-sdk/lib-dynamodb";
-import { SSMClient, GetParameterCommand } from "@aws-sdk/client-ssm";
-import { v4 as uuidv4 } from "uuid";
-import { getDocClient } from "./dynamo-client";
+import { getDb } from "../db";
+import { odooQueue } from "../db/schema";
 
-const ODOO_QUEUE_TABLE = () => process.env.ODOO_QUEUE_TABLE ?? "proyinstelec-odoo-queue";
 const MAX_RETRIES = 3;
 const BACKOFF_MS = [1_000, 3_000, 9_000]; // exponential
 
-// ── SSM config ────────────────────────────────────────────────────────────────
+// ── Configuración ─────────────────────────────────────────────────────────────
 
 interface OdooConfig {
   url: string;
@@ -17,25 +14,23 @@ interface OdooConfig {
 
 let _cachedConfig: OdooConfig | null = null;
 
-async function getOdooConfig(): Promise<OdooConfig> {
+/** Credenciales de Odoo desde el entorno (antes vivían en SSM Parameter Store). */
+function getOdooConfig(): OdooConfig {
   if (_cachedConfig) return _cachedConfig;
 
   if (process.env.ODOO_SYNC_ENABLED !== "true") {
     throw new Error("ODOO_SYNC_ENABLED is not true");
   }
 
-  const ssm = new SSMClient({ region: process.env.AWS_REGION ?? "us-east-1" });
-  const get = async (name: string) => {
-    const r = await ssm.send(new GetParameterCommand({ Name: name, WithDecryption: true }));
-    return r.Parameter?.Value ?? "";
-  };
+  const url = process.env.ODOO_URL;
+  const db = process.env.ODOO_DB;
+  const apiKey = process.env.ODOO_API_KEY;
 
-  _cachedConfig = {
-    url: await get(process.env.ODOO_URL_PARAM ?? "/proyinstelec/odoo/url"),
-    db: await get(process.env.ODOO_DB_PARAM ?? "/proyinstelec/odoo/db"),
-    apiKey: await get(process.env.ODOO_API_KEY_PARAM ?? "/proyinstelec/odoo/api-key"),
-  };
+  if (!url || !db || !apiKey) {
+    throw new Error("Faltan ODOO_URL, ODOO_DB u ODOO_API_KEY");
+  }
 
+  _cachedConfig = { url, db, apiKey };
   return _cachedConfig;
 }
 
@@ -109,6 +104,7 @@ async function updateAttendance(
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export interface SyncOdooParams {
+  usuarioId: string;
   email: string;
   jornadaId: string;
   checkIn: string; // ISO UTC
@@ -116,7 +112,7 @@ export interface SyncOdooParams {
 }
 
 async function syncWithRetry(params: SyncOdooParams): Promise<void> {
-  const config = await getOdooConfig();
+  const config = getOdooConfig();
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
@@ -144,29 +140,22 @@ async function syncWithRetry(params: SyncOdooParams): Promise<void> {
     }
   }
 
-  // All retries exhausted — persist to retry queue (TTL = 7 days)
-  const ttl = Math.floor(Date.now() / 1000) + 7 * 86_400;
-  await getDocClient().send(
-    new PutCommand({
-      TableName: ODOO_QUEUE_TABLE(),
-      Item: {
-        id: uuidv4(),
-        jornadaId: params.jornadaId,
-        google_sub: params.email, // used as lookup key in retry Lambda
-        intento: MAX_RETRIES,
-        estado: "error",
-        error: lastError?.message,
-        ttl,
-      },
-    }),
-  );
+  // Agotados los reintentos: queda en la cola para que la reprocese un job.
+  await getDb().insert(odooQueue).values({
+    jornadaId: params.jornadaId,
+    usuarioId: params.usuarioId,
+    estado: "error",
+    intento: MAX_RETRIES,
+    error: lastError?.message ?? null,
+    payload: params,
+  });
 
   throw lastError;
 }
 
 /**
  * Fire-and-forget Odoo sync.
- * DynamoDB is the source of truth — a failure here does NOT fail the check-in.
+ * Postgres es la fuente de verdad — un fallo aquí NO tumba el check-in.
  */
 export function syncToOdooAsync(params: SyncOdooParams): void {
   if (process.env.ODOO_SYNC_ENABLED !== "true") return;

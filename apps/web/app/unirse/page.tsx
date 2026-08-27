@@ -1,6 +1,5 @@
 import { redirect } from "next/navigation";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/src/auth";
+import { auth } from "@/src/auth";
 import { validateToken } from "@/src/lib/invitaciones";
 import { DEMO_MODE } from "@/src/demo";
 import { GoogleSignInButton } from "./_components/GoogleSignInButton";
@@ -11,7 +10,7 @@ interface Props {
 }
 
 export default async function UnirsePage({ searchParams }: Props) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
 
   if (session?.user.perfil_completo) {
     redirect(searchParams.callbackUrl ?? "/app");

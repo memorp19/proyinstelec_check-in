@@ -1,9 +1,15 @@
-import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
-import { v4 as uuidv4 } from "uuid";
-import { getDocClient } from "./dynamo-client";
+import { and, asc, between, desc, eq, gte } from "drizzle-orm";
+import { getDb } from "../db";
+import { jornadas } from "../db/schema";
 import type { DeviceInfo } from "./device-info";
 
-const TABLE = () => process.env.MAIN_TABLE ?? "proyinstelec-main";
+/**
+ * Jornadas de trabajo (check-in / check-out).
+ *
+ * En la base los dos puntos de control son columnas planas — así se pueden
+ * filtrar y ordenar en SQL — pero hacia afuera se siguen exponiendo anidados,
+ * que es como los arma y los lee la app.
+ */
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -28,16 +34,59 @@ export interface Jornada {
   checkOut?: CheckPoint & { observaciones?: string };
   duracionMinutos?: number;
   estado: "abierta" | "cerrada";
-  // Single-table keys
-  pk: string;
-  sk: string;
-  gsi1pk: string;
-  gsi1sk: string;
-  gsi2pk: string;
-  gsi2sk: string;
 }
 
-// ── Write operations ──────────────────────────────────────────────────────────
+type Row = typeof jornadas.$inferSelect;
+
+/** Tope de filas de los listados de historial (la app pagina en pantalla). */
+const LIMITE_HISTORIAL = 200;
+
+// ── Mapeo fila → Jornada ──────────────────────────────────────────────────────
+
+function aCheckIn(row: Row): CheckPoint {
+  return {
+    timestamp: row.checkinTs.toISOString(),
+    lat: row.checkinLat,
+    lng: row.checkinLng,
+    precision: row.checkinPrecision,
+    driveFileId: row.checkinDriveFileId ?? undefined,
+    driveWebViewLink: row.checkinDriveUrl ?? undefined,
+    fotoHash: row.checkinFotoHash ?? undefined,
+    uploadStatus: row.checkinUploadStatus ?? undefined,
+    deviceInfo: (row.checkinDevice as DeviceInfo | null) ?? undefined,
+  };
+}
+
+function aCheckOut(row: Row): (CheckPoint & { observaciones?: string }) | undefined {
+  if (!row.checkoutTs) return undefined;
+  return {
+    timestamp: row.checkoutTs.toISOString(),
+    lat: row.checkoutLat ?? 0,
+    lng: row.checkoutLng ?? 0,
+    precision: row.checkoutPrecision ?? 0,
+    driveFileId: row.checkoutDriveFileId ?? undefined,
+    driveWebViewLink: row.checkoutDriveUrl ?? undefined,
+    fotoHash: row.checkoutFotoHash ?? undefined,
+    uploadStatus: row.checkoutUploadStatus ?? undefined,
+    deviceInfo: (row.checkoutDevice as DeviceInfo | null) ?? undefined,
+    observaciones: row.observaciones ?? undefined,
+  };
+}
+
+export function aJornada(row: Row): Jornada {
+  return {
+    id: row.id,
+    usuarioId: row.usuarioId,
+    proyectoId: row.proyectoId,
+    tipo: row.tipo,
+    estado: row.estado,
+    checkIn: aCheckIn(row),
+    checkOut: aCheckOut(row),
+    duracionMinutos: row.duracionMinutos ?? undefined,
+  };
+}
+
+// ── Escrituras ────────────────────────────────────────────────────────────────
 
 export async function createJornada(params: {
   usuarioId: string;
@@ -45,92 +94,101 @@ export async function createJornada(params: {
   tipo: "planta" | "temporal";
   checkIn: CheckPoint;
 }): Promise<Jornada> {
-  const id = uuidv4();
-  const ts = params.checkIn.timestamp;
+  const { checkIn } = params;
 
-  const item: Jornada = {
-    id,
-    usuarioId: params.usuarioId,
-    proyectoId: params.proyectoId,
-    tipo: params.tipo,
-    checkIn: params.checkIn,
-    estado: "abierta",
-    pk: `JORNADA#${id}`,
-    sk: "#METADATA",
-    gsi1pk: params.proyectoId,
-    gsi1sk: ts,
-    gsi2pk: params.usuarioId,
-    gsi2sk: ts,
-  };
+  const [row] = await getDb()
+    .insert(jornadas)
+    .values({
+      usuarioId: params.usuarioId,
+      proyectoId: params.proyectoId,
+      tipo: params.tipo,
+      estado: "abierta",
+      checkinTs: new Date(checkIn.timestamp),
+      checkinLat: checkIn.lat,
+      checkinLng: checkIn.lng,
+      checkinPrecision: checkIn.precision,
+      checkinDriveFileId: checkIn.driveFileId ?? null,
+      checkinDriveUrl: checkIn.driveWebViewLink ?? null,
+      checkinFotoHash: checkIn.fotoHash ?? null,
+      checkinUploadStatus: checkIn.uploadStatus ?? null,
+      checkinDevice: checkIn.deviceInfo ?? null,
+    })
+    .returning();
 
-  await getDocClient().send(new PutCommand({ TableName: TABLE(), Item: item }));
-  return item;
+  return aJornada(row);
 }
 
+/**
+ * Cierra la jornada y devuelve su duración en minutos.
+ *
+ * El UPDATE exige `estado = 'abierta'`: si otra petición ya la cerró no
+ * devuelve fila y aquí se lanza, en vez de sobrescribir el check-out original.
+ */
 export async function closeJornada(
   jornadaId: string,
   checkOut: CheckPoint & { observaciones?: string },
   checkInTimestamp: string,
 ): Promise<number> {
-  const checkInDate = new Date(checkInTimestamp);
-  const checkOutDate = new Date(checkOut.timestamp);
   const duracionMinutos = Math.round(
-    (checkOutDate.getTime() - checkInDate.getTime()) / 60_000,
+    (new Date(checkOut.timestamp).getTime() - new Date(checkInTimestamp).getTime()) / 60_000,
   );
 
-  await getDocClient().send(
-    new UpdateCommand({
-      TableName: TABLE(),
-      Key: { pk: `JORNADA#${jornadaId}`, sk: "#METADATA" },
-      UpdateExpression:
-        "SET checkOut = :co, duracionMinutos = :dur, estado = :e",
-      ConditionExpression: "estado = :abierta",
-      ExpressionAttributeValues: {
-        ":co": checkOut,
-        ":dur": duracionMinutos,
-        ":e": "cerrada",
-        ":abierta": "abierta",
-      },
-    }),
-  );
+  const filas = await getDb()
+    .update(jornadas)
+    .set({
+      estado: "cerrada",
+      duracionMinutos,
+      checkoutTs: new Date(checkOut.timestamp),
+      checkoutLat: checkOut.lat,
+      checkoutLng: checkOut.lng,
+      checkoutPrecision: checkOut.precision,
+      checkoutDriveFileId: checkOut.driveFileId ?? null,
+      checkoutDriveUrl: checkOut.driveWebViewLink ?? null,
+      checkoutFotoHash: checkOut.fotoHash ?? null,
+      checkoutUploadStatus: checkOut.uploadStatus ?? null,
+      checkoutDevice: checkOut.deviceInfo ?? null,
+      observaciones: checkOut.observaciones ?? null,
+    })
+    .where(and(eq(jornadas.id, jornadaId), eq(jornadas.estado, "abierta")))
+    .returning({ id: jornadas.id });
+
+  if (filas.length === 0) {
+    throw new Error("La jornada ya fue cerrada o no existe");
+  }
 
   return duracionMinutos;
 }
 
-// ── Read operations ───────────────────────────────────────────────────────────
+// ── Lecturas ──────────────────────────────────────────────────────────────────
 
 export async function getJornada(jornadaId: string): Promise<Jornada | null> {
-  const result = await getDocClient().send(
-    new GetCommand({
-      TableName: TABLE(),
-      Key: { pk: `JORNADA#${jornadaId}`, sk: "#METADATA" },
-    }),
-  );
-  return (result.Item as Jornada) ?? null;
+  const [row] = await getDb()
+    .select()
+    .from(jornadas)
+    .where(eq(jornadas.id, jornadaId))
+    .limit(1);
+  return row ? aJornada(row) : null;
 }
 
-/** Returns the open jornada for a user today, or null if none. */
+/** Jornada abierta del usuario en el día de hoy, o null. */
 export async function getOpenJornada(usuarioId: string): Promise<Jornada | null> {
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
+  const inicioDelDia = new Date();
+  inicioDelDia.setHours(0, 0, 0, 0);
 
-  const result = await getDocClient().send(
-    new QueryCommand({
-      TableName: TABLE(),
-      IndexName: "gsi2-usuario-ts",
-      KeyConditionExpression:
-        "gsi2pk = :uid AND gsi2sk >= :today",
-      FilterExpression: "estado = :abierta",
-      ExpressionAttributeValues: {
-        ":uid": usuarioId,
-        ":today": todayStart.toISOString(),
-        ":abierta": "abierta",
-      },
-      Limit: 1,
-    }),
-  );
+  const [row] = await getDb()
+    .select()
+    .from(jornadas)
+    .where(
+      and(
+        eq(jornadas.usuarioId, usuarioId),
+        eq(jornadas.estado, "abierta"),
+        gte(jornadas.checkinTs, inicioDelDia),
+      ),
+    )
+    .orderBy(desc(jornadas.checkinTs))
+    .limit(1);
 
-  return (result.Items?.[0] as Jornada) ?? null;
+  return row ? aJornada(row) : null;
 }
 
 export async function getJornadasByUsuario(
@@ -138,61 +196,47 @@ export async function getJornadasByUsuario(
   fromDate: string,
   toDate: string,
 ): Promise<Jornada[]> {
-  const result = await getDocClient().send(
-    new QueryCommand({
-      TableName: TABLE(),
-      IndexName: "gsi2-usuario-ts",
-      KeyConditionExpression: "gsi2pk = :uid AND gsi2sk BETWEEN :from AND :to",
-      ExpressionAttributeValues: {
-        ":uid": usuarioId,
-        ":from": fromDate,
-        ":to": toDate,
-      },
-    }),
-  );
-  return (result.Items ?? []) as Jornada[];
+  const filas = await getDb()
+    .select()
+    .from(jornadas)
+    .where(
+      and(
+        eq(jornadas.usuarioId, usuarioId),
+        between(jornadas.checkinTs, new Date(fromDate), new Date(toDate)),
+      ),
+    )
+    .orderBy(asc(jornadas.checkinTs));
+
+  return filas.map(aJornada);
 }
 
 export async function getJornadasByUsuarioProyecto(
   usuarioId: string,
   proyectoId: string,
 ): Promise<Jornada[]> {
-  const result = await getDocClient().send(
-    new QueryCommand({
-      TableName: TABLE(),
-      IndexName: "gsi2-usuario-ts",
-      KeyConditionExpression: "gsi2pk = :uid AND gsi2sk >= :from",
-      FilterExpression: "proyectoId = :pid AND estado = :cerrada",
-      ExpressionAttributeValues: {
-        ":uid": usuarioId,
-        ":from": "2020-01-01T00:00:00.000Z",
-        ":pid": proyectoId,
-        ":cerrada": "cerrada",
-      },
-      Limit: 200,
-    }),
-  );
-  return ((result.Items ?? []) as Jornada[]).sort(
-    (a, b) => b.checkIn.timestamp.localeCompare(a.checkIn.timestamp),
-  );
+  const filas = await getDb()
+    .select()
+    .from(jornadas)
+    .where(
+      and(
+        eq(jornadas.usuarioId, usuarioId),
+        eq(jornadas.proyectoId, proyectoId),
+        eq(jornadas.estado, "cerrada"),
+      ),
+    )
+    .orderBy(desc(jornadas.checkinTs))
+    .limit(LIMITE_HISTORIAL);
+
+  return filas.map(aJornada);
 }
 
-export async function getJornadasHistorialByUsuario(
-  usuarioId: string,
-): Promise<Jornada[]> {
-  const result = await getDocClient().send(
-    new QueryCommand({
-      TableName: TABLE(),
-      IndexName: "gsi2-usuario-ts",
-      KeyConditionExpression: "gsi2pk = :uid AND gsi2sk >= :from",
-      FilterExpression: "estado = :cerrada",
-      ExpressionAttributeValues: {
-        ":uid": usuarioId,
-        ":from": "2020-01-01T00:00:00.000Z",
-        ":cerrada": "cerrada",
-      },
-      Limit: 200,
-    }),
-  );
-  return (result.Items ?? []) as Jornada[];
+export async function getJornadasHistorialByUsuario(usuarioId: string): Promise<Jornada[]> {
+  const filas = await getDb()
+    .select()
+    .from(jornadas)
+    .where(and(eq(jornadas.usuarioId, usuarioId), eq(jornadas.estado, "cerrada")))
+    .orderBy(desc(jornadas.checkinTs))
+    .limit(LIMITE_HISTORIAL);
+
+  return filas.map(aJornada);
 }

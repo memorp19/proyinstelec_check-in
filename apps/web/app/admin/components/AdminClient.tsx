@@ -6,7 +6,7 @@ import type { DemoUser } from "@/src/demo";
 import type { UserProfile } from "@/src/lib/users";
 import { GRUPOS_PERMISOS } from "@/src/lib/permisos";
 
-type UsuarioRow = (Pick<UserProfile, "google_sub" | "email" | "nombre" | "rol" | "tipo" | "proyectos_asignados" | "created_at"> | DemoUser) & {
+type UsuarioRow = (Pick<UserProfile, "id" | "email" | "nombre" | "rol" | "tipo" | "proyectos_asignados" | "created_at"> | DemoUser) & {
   permisos?: string[];
   iniciales?: string;
   gerencia?: string;
@@ -204,7 +204,7 @@ function ErpEditor({
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`/api/admin/usuarios/${usuario.google_sub}`, {
+      const res = await fetch(`/api/admin/usuarios/${usuario.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -322,10 +322,10 @@ function UsuariosTab({ usuariosIniciales }: { usuariosIniciales: UsuarioRow[] })
   const filtrados = filtroRol === "todos" ? usuarios : usuarios.filter((u) => u.rol === filtroRol);
 
   async function handleRolChange(u: UsuarioRow, accion: "promover" | "revocar") {
-    setLoadingId(u.google_sub);
+    setLoadingId(u.id);
     setError(null);
     try {
-      const res = await fetch(`/api/admin/usuarios/${u.google_sub}`, {
+      const res = await fetch(`/api/admin/usuarios/${u.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ accion }),
@@ -335,7 +335,7 @@ function UsuariosTab({ usuariosIniciales }: { usuariosIniciales: UsuarioRow[] })
 
       setUsuarios((prev) =>
         prev.map((usr) => {
-          if (usr.google_sub !== u.google_sub) return usr;
+          if (usr.id !== u.id) return usr;
           if (accion === "promover") return { ...usr, rol: "admin" as const, tipo: "admin" as const };
           const tipo = u.email.endsWith("@proyinstelec.mx") ? ("planta" as const) : ("temporal" as const);
           return { ...usr, rol: "campo" as const, tipo };
@@ -386,9 +386,9 @@ function UsuariosTab({ usuariosIniciales }: { usuariosIniciales: UsuarioRow[] })
         ) : (
           filtrados.map((u) => {
             const isSuper = u.email.toLowerCase() === SUPER_ADMIN_EMAIL;
-            const isLoading = loadingId === u.google_sub;
+            const isLoading = loadingId === u.id;
             return (
-              <div key={u.google_sub} className="bg-white/10 border border-white/10 rounded-xl px-4 py-3">
+              <div key={u.id} className="bg-white/10 border border-white/10 rounded-xl px-4 py-3">
                 <div className="flex items-center gap-3">
                 {/* Avatar */}
                 <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 font-mono text-xs font-bold ${
@@ -424,9 +424,9 @@ function UsuariosTab({ usuariosIniciales }: { usuariosIniciales: UsuarioRow[] })
                 {!isSuper && (
                   <div className="shrink-0 flex gap-1.5">
                     <button
-                      onClick={() => setErpEditId(erpEditId === u.google_sub ? null : u.google_sub)}
+                      onClick={() => setErpEditId(erpEditId === u.id ? null : u.id)}
                       className={`font-mono text-[10px] rounded-lg px-3 py-1.5 border transition-colors ${
-                        erpEditId === u.google_sub
+                        erpEditId === u.id
                           ? "text-white border-white/40"
                           : "text-white/50 hover:text-white border-white/10 hover:border-white/30"
                       }`}
@@ -454,14 +454,14 @@ function UsuariosTab({ usuariosIniciales }: { usuariosIniciales: UsuarioRow[] })
                 )}
                 </div>
 
-                {erpEditId === u.google_sub && !isSuper && (
+                {erpEditId === u.id && !isSuper && (
                   <ErpEditor
                     usuario={u}
                     onClose={() => setErpEditId(null)}
                     onSaved={(cambios) =>
                       setUsuarios((prev) =>
                         prev.map((usr) =>
-                          usr.google_sub === u.google_sub
+                          usr.id === u.id
                             ? {
                                 ...usr,
                                 permisos: cambios.permisos,

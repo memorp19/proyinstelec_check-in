@@ -1,5 +1,4 @@
 import { google } from "googleapis";
-import { SSMClient, GetParameterCommand } from "@aws-sdk/client-ssm";
 import { registrarBitacora } from "./bitacora";
 import { DEMO_MODE } from "../demo";
 
@@ -40,46 +39,33 @@ interface CorreoConfig {
 
 let _cachedConfig: CorreoConfig | null = null;
 
+/**
+ * Credenciales del envío de correo (Gmail API con delegación de dominio).
+ * Reutiliza la llave del service account de Drive salvo que se defina una
+ * propia en GMAIL_SERVICE_ACCOUNT_KEY.
+ */
 async function getCorreoConfig(): Promise<CorreoConfig> {
   if (_cachedConfig) return _cachedConfig;
 
-  // Local dev: GMAIL_SERVICE_ACCOUNT_KEY (o la misma llave de Drive) + CORREO_REMITENTE
   const keyEnv = process.env.GMAIL_SERVICE_ACCOUNT_KEY ?? process.env.DRIVE_SERVICE_ACCOUNT_KEY;
-  if (keyEnv && process.env.CORREO_REMITENTE) {
-    let parsed: { client_email: string; private_key: string };
-    try {
-      parsed = JSON.parse(keyEnv);
-    } catch {
-      throw new Error("GMAIL_SERVICE_ACCOUNT_KEY env var is not valid JSON");
-    }
-    _cachedConfig = {
-      serviceAccountEmail: parsed.client_email,
-      privateKey: parsed.private_key,
-      remitente: process.env.CORREO_REMITENTE,
-    };
-    return _cachedConfig;
+  const remitente = process.env.CORREO_REMITENTE;
+  if (!keyEnv || !remitente) {
+    throw new Error(
+      "Faltan GMAIL_SERVICE_ACCOUNT_KEY (o DRIVE_SERVICE_ACCOUNT_KEY) y CORREO_REMITENTE",
+    );
   }
 
-  const ssm = new SSMClient({ region: process.env.AWS_REGION ?? "us-east-1" });
-  const get = async (name: string) => {
-    const r = await ssm.send(new GetParameterCommand({ Name: name, WithDecryption: true }));
-    return r.Parameter?.Value ?? "";
-  };
-
-  const keyJson = await get(
-    process.env.GMAIL_SERVICE_ACCOUNT_KEY_PARAM ?? "/proyinstelec/correo/service-account-key",
-  );
   let parsed: { client_email: string; private_key: string };
   try {
-    parsed = JSON.parse(keyJson);
+    parsed = JSON.parse(keyEnv);
   } catch {
-    throw new Error("Gmail service account key is not valid JSON");
+    throw new Error("La llave del service account para correo no es un JSON válido");
   }
 
   _cachedConfig = {
     serviceAccountEmail: parsed.client_email,
-    privateKey: parsed.private_key,
-    remitente: await get(process.env.CORREO_REMITENTE_PARAM ?? "/proyinstelec/correo/remitente"),
+    privateKey: parsed.private_key.replace(/\\n/g, "\n"),
+    remitente,
   };
   return _cachedConfig;
 }

@@ -1,11 +1,10 @@
-import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
-import { authOptions } from "@/src/auth";
+import { auth } from "@/src/auth";
 import { tienePermiso } from "@/src/lib/permisos";
 import { CotizacionesClient } from "./CotizacionesClient";
 
 export default async function CotizacionesPage() {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   if (!session || !tienePermiso(session.user, "modulo.cotizaciones")) {
     redirect("/acceso-denegado");
   }

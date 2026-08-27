@@ -1,8 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
 
-vi.mock("next-auth", () => ({ getServerSession: vi.fn() }));
-vi.mock("@/src/auth", () => ({ authOptions: {} }));
+vi.mock("@/src/auth", () => ({ auth: vi.fn() }));
 vi.mock("@/src/lib/users", () => ({
   markProfileComplete: vi.fn(),
 }));
@@ -11,7 +10,10 @@ vi.mock("@/src/lib/invitaciones", () => ({
   consumeToken: vi.fn(),
 }));
 
-import { getServerSession } from "next-auth";
+import { auth } from "@/src/auth";
+
+/** `auth()` está sobrecargada en Auth.js v5; el cast deja usarla como mock simple. */
+const mockAuth = auth as unknown as ReturnType<typeof vi.fn>;
 import { markProfileComplete } from "@/src/lib/users";
 import { validateToken, consumeToken } from "@/src/lib/invitaciones";
 import { POST } from "@/app/api/perfil/completar/route";
@@ -53,19 +55,19 @@ beforeEach(() => {
 
 describe("POST /api/perfil/completar", () => {
   it("returns 401 when not authenticated", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(null);
+    mockAuth.mockResolvedValue(null);
     const res = await POST(makeRequest(VALID_BODY));
     expect(res.status).toBe(401);
   });
 
   it("returns 409 when profile already complete", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(COMPLETE_SESSION);
+    mockAuth.mockResolvedValue(COMPLETE_SESSION);
     const res = await POST(makeRequest(VALID_BODY));
     expect(res.status).toBe(409);
   });
 
   it("returns 400 when required fields are missing", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(INCOMPLETE_SESSION);
+    mockAuth.mockResolvedValue(INCOMPLETE_SESSION);
     const res = await POST(makeRequest({ nombre: "Juan" }));
     expect(res.status).toBe(400);
     const body = await res.json();
@@ -73,7 +75,7 @@ describe("POST /api/perfil/completar", () => {
   });
 
   it("returns 400 when contacto_emergencia is missing telefono", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(INCOMPLETE_SESSION);
+    mockAuth.mockResolvedValue(INCOMPLETE_SESSION);
     const body = {
       ...VALID_BODY,
       contacto_emergencia: { nombre: "María" },
@@ -83,7 +85,7 @@ describe("POST /api/perfil/completar", () => {
   });
 
   it("calls markProfileComplete with correct data and returns 200", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(INCOMPLETE_SESSION);
+    mockAuth.mockResolvedValue(INCOMPLETE_SESSION);
     vi.mocked(markProfileComplete).mockResolvedValue(undefined);
 
     const res = await POST(makeRequest(VALID_BODY));
@@ -104,7 +106,7 @@ describe("POST /api/perfil/completar", () => {
   });
 
   it("validates and consumes token when pending_token is provided", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(INCOMPLETE_SESSION);
+    mockAuth.mockResolvedValue(INCOMPLETE_SESSION);
     vi.mocked(markProfileComplete).mockResolvedValue(undefined);
     vi.mocked(validateToken).mockResolvedValue({
       valid: true,
@@ -114,7 +116,8 @@ describe("POST /api/perfil/completar", () => {
         creadoPor: "admin",
         nombreSugerido: "Juan",
         estado: "pendiente",
-        expiresAt: Math.floor(Date.now() / 1000) + 3600,
+        expiresAt: new Date(Date.now() + 3_600_000),
+        createdAt: new Date(),
       },
     });
     vi.mocked(consumeToken).mockResolvedValue(undefined);
@@ -127,7 +130,7 @@ describe("POST /api/perfil/completar", () => {
   });
 
   it("returns 400 when pending_token is invalid", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(INCOMPLETE_SESSION);
+    mockAuth.mockResolvedValue(INCOMPLETE_SESSION);
     vi.mocked(validateToken).mockResolvedValue({ valid: false, reason: "expired" });
 
     const res = await POST(makeRequest({ ...VALID_BODY, pending_token: "bad-token" }));
@@ -137,7 +140,7 @@ describe("POST /api/perfil/completar", () => {
   });
 
   it("still returns 200 when consumeToken throws (race condition)", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(INCOMPLETE_SESSION);
+    mockAuth.mockResolvedValue(INCOMPLETE_SESSION);
     vi.mocked(markProfileComplete).mockResolvedValue(undefined);
     vi.mocked(validateToken).mockResolvedValue({
       valid: true,
@@ -147,11 +150,12 @@ describe("POST /api/perfil/completar", () => {
         creadoPor: "admin",
         nombreSugerido: "Juan",
         estado: "pendiente",
-        expiresAt: Math.floor(Date.now() / 1000) + 3600,
+        expiresAt: new Date(Date.now() + 3_600_000),
+        createdAt: new Date(),
       },
     });
     vi.mocked(consumeToken).mockRejectedValue(
-      new Error("ConditionalCheckFailedException"),
+      new Error("La invitación ya fue utilizada o no está vigente"),
     );
 
     const res = await POST(makeRequest({ ...VALID_BODY, pending_token: "tok-abc" }));
@@ -162,7 +166,7 @@ describe("POST /api/perfil/completar", () => {
   });
 
   it("trims whitespace from all string fields", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(INCOMPLETE_SESSION);
+    mockAuth.mockResolvedValue(INCOMPLETE_SESSION);
     vi.mocked(markProfileComplete).mockResolvedValue(undefined);
 
     const res = await POST(

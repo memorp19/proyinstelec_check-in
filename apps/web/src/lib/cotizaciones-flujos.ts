@@ -2,6 +2,7 @@ import { registrarBitacora } from "./bitacora";
 import { getConfigErp } from "./config-erp";
 import {
   cambiarEstatus,
+  cotPk,
   getVigente,
   puedeEnviarseAlCliente,
   registrarAprobacion,
@@ -17,7 +18,7 @@ import {
   subirArchivoErp,
 } from "./drive-erp";
 import { folioOT } from "./folios";
-import { createOT, registrarResponsable } from "./ot";
+import { createOT, registrarResponsable, setCarpetaDriveOT } from "./ot";
 import { permisosEfectivos } from "./permisos";
 import { listUsers, type UserProfile } from "./users";
 
@@ -96,7 +97,7 @@ export async function crearCotizacionCompleta(params: {
   await registrarBitacora({
     accion: "COTIZACION_CREADA",
     usuario: params.createdBy,
-    referencia: cotizacion.pk,
+    referencia: cotPk(cotizacion.numero, cotizacion.anio),
     detalle: cotizacion.folio,
   });
   return { cotizacion, avisos };
@@ -131,7 +132,7 @@ export async function crearNuevaVersionCompleta(params: {
   await registrarBitacora({
     accion: "COTIZACION_NUEVA_VERSION",
     usuario: params.createdBy,
-    referencia: cotizacion.pk,
+    referencia: cotPk(cotizacion.numero, cotizacion.anio),
     detalle: cotizacion.folio,
   });
   return { cotizacion, avisos };
@@ -150,7 +151,7 @@ export async function enviarARevision(params: {
   await registrarBitacora({
     accion: "COTIZACION_A_REVISION",
     usuario: params.usuario,
-    referencia: cotizacion.pk,
+    referencia: cotPk(cotizacion.numero, cotizacion.anio),
     detalle: cotizacion.folio,
   });
 
@@ -188,7 +189,7 @@ export async function enviarARevision(params: {
       }),
       adjuntos,
       registradoPor: params.usuario,
-      referencia: cotizacion.pk,
+      referencia: cotPk(cotizacion.numero, cotizacion.anio),
     });
   }
 
@@ -203,7 +204,7 @@ export async function enviarARevision(params: {
         cuerpoHtml: `<p style="font-size:13px;color:#111827;">${cotizacion.folio} · ${cotizacion.cliente}. Te avisaremos cuando el revisor la apruebe o pida una corrección.</p>`,
       }),
       registradoPor: params.usuario,
-      referencia: cotizacion.pk,
+      referencia: cotPk(cotizacion.numero, cotizacion.anio),
     });
   }
 
@@ -232,7 +233,7 @@ export async function aprobarCotizacion(params: {
   await registrarBitacora({
     accion: "COTIZACION_APROBADA",
     usuario: params.aprobadoPor,
-    referencia: vigente.pk,
+    referencia: cotPk(vigente.numero, vigente.anio),
     detalle: `${vigente.folio} v${vigente.version}`,
   });
 
@@ -246,7 +247,7 @@ export async function aprobarCotizacion(params: {
         cuerpoHtml: `<p style="font-size:13px;color:#111827;">${vigente.folio} · ${vigente.cliente} fue aprobada. Ya puedes enviarla al cliente desde el sistema.</p>`,
       }),
       registradoPor: params.aprobadoPor,
-      referencia: vigente.pk,
+      referencia: cotPk(vigente.numero, vigente.anio),
     });
   }
 
@@ -272,7 +273,7 @@ export async function solicitarCorreccion(params: {
   await registrarBitacora({
     accion: "COTIZACION_CORRECCION",
     usuario: params.usuario,
-    referencia: cotizacion.pk,
+    referencia: cotPk(cotizacion.numero, cotizacion.anio),
     detalle: params.comentario.trim(),
   });
 
@@ -288,7 +289,7 @@ export async function solicitarCorreccion(params: {
           <blockquote style="border-left:3px solid #d1d5db;margin:8px 0;padding:4px 12px;color:#374151;font-size:13px;">${params.comentario.trim()}</blockquote>`,
       }),
       registradoPor: params.usuario,
-      referencia: cotizacion.pk,
+      referencia: cotPk(cotizacion.numero, cotizacion.anio),
     });
   }
 
@@ -407,7 +408,7 @@ export async function enviarAlCliente(params: {
     html: plantillaCorreo({ titulo: `Cotización ${cotizacion.folio}`, cuerpoHtml: cuerpo }),
     adjuntos: [{ filename: pdf.filename, mimeType: "application/pdf", contenido: pdf.contenido }],
     registradoPor: params.remitente.email,
-    referencia: cotizacion.pk,
+    referencia: cotPk(cotizacion.numero, cotizacion.anio),
   });
   if (!resultado.enviado && resultado.motivo === "error") {
     throw new Error("El correo al cliente no pudo enviarse; revisa la bitácora");
@@ -423,7 +424,7 @@ export async function enviarAlCliente(params: {
   await registrarBitacora({
     accion: "COTIZACION_ENVIADA",
     usuario: params.remitente.email,
-    referencia: cotizacion.pk,
+    referencia: cotPk(cotizacion.numero, cotizacion.anio),
     detalle: `${cotizacion.folio} → ${params.destinatarios.join(", ")}`,
   });
 
@@ -470,7 +471,7 @@ export async function ingresarOrdenCompra(params: {
 
   const folio = folioOT(params.numero, params.anio, vigente.version);
 
-  // 1) OT en DynamoDB
+  // 1) OT en la base
   const ot = await createOT({
     numeroCotizacion: params.numero,
     anio: params.anio,
@@ -503,16 +504,10 @@ export async function ingresarOrdenCompra(params: {
   try {
     const carpeta = await ensureCarpetaOT({ folioOt: folio, cliente: vigente.cliente, anio: params.anio });
     carpetaUrl = carpeta.folderUrl;
-    const { UpdateCommand } = await import("@aws-sdk/lib-dynamodb");
-    const { getDocClient } = await import("./dynamo-client");
-    await getDocClient().send(
-      new UpdateCommand({
-        TableName: process.env.MAIN_TABLE ?? "proyinstelec-main",
-        Key: { pk: ot.pk, sk: ot.sk },
-        UpdateExpression: "SET drive_folder_id = :id, drive_folder_url = :url",
-        ExpressionAttributeValues: { ":id": carpeta.folderId, ":url": carpeta.folderUrl },
-      }),
-    );
+    await setCarpetaDriveOT(ot.folio, {
+      folderId: carpeta.folderId,
+      folderUrl: carpeta.folderUrl,
+    });
 
     if (params.adjunto) {
       const contenido = Buffer.from(params.adjunto.base64, "base64");
@@ -563,14 +558,14 @@ export async function ingresarOrdenCompra(params: {
         ${carpetaUrl ? `<p style="margin-top:12px;font-size:13px;"><a href="${carpetaUrl}" style="color:#1d4ed8;">Carpeta de la OT en Drive</a></p>` : ""}`,
       }),
       registradoPor: params.usuario,
-      referencia: ot.pk,
+      referencia: `OT#${ot.folio}`,
     });
   }
 
   await registrarBitacora({
     accion: "OT_CREADA",
     usuario: params.usuario,
-    referencia: ot.pk,
+    referencia: `OT#${ot.folio}`,
     detalle: `${folio} desde ${vigente.folio} · OC ${params.ordenCompra}`,
   });
 

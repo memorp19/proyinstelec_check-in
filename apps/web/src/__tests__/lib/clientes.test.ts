@@ -1,10 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("@/src/lib/dynamo-client", () => ({
-  getDocClient: vi.fn(),
-}));
+vi.mock("@/src/db", () => ({ getDb: vi.fn() }));
 
-import { getDocClient } from "@/src/lib/dynamo-client";
+import { getDb } from "@/src/db";
+import { dbFalso, errorDuplicado } from "../helpers/db-falso";
 import {
   normalizarRazonSocial,
   normalizarNombreContacto,
@@ -12,6 +11,14 @@ import {
   createContacto,
   contactosParaEnvio,
 } from "@/src/lib/clientes";
+
+function usarDb(resultados: unknown[] = []) {
+  const falso = dbFalso(resultados);
+  vi.mocked(getDb).mockImplementation(falso.getDb as never);
+  return falso;
+}
+
+const fechas = { createdAt: new Date("2026-01-01T00:00:00Z"), updatedAt: new Date("2026-01-01T00:00:00Z") };
 
 describe("normalizarRazonSocial", () => {
   it("quita sufijos legales y puntuación", () => {
@@ -51,37 +58,58 @@ describe("compararRazones", () => {
 describe("createContacto — anti-duplicado", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("rechaza un contacto con el mismo nombre normalizado en la empresa", async () => {
-    const mockSend = vi.fn().mockResolvedValue({
-      Items: [{ contacto_id: "1", nombre: "ING. Juan Pérez" }],
-    });
-    vi.mocked(getDocClient).mockReturnValue({ send: mockSend } as any);
+  it("guarda el nombre normalizado (base del índice único por empresa)", async () => {
+    const db = usarDb([
+      [{ id: "c1", clienteId: "abc", nombre: "ING. Juan Pérez", nombreNormalizado: "juan perez", puesto: null, telefono: null, correo: null, ...fechas }],
+    ]);
+
+    await createContacto({ clienteId: "abc", nombre: "ING. Juan Pérez" });
+
+    const valores = db.llamadas.find((l) => l.metodo === "values")!.args[0] as Record<string, unknown>;
+    expect(valores.nombreNormalizado).toBe("juan perez");
+  });
+
+  it("traduce el conflicto del índice único al mensaje del legacy", async () => {
+    usarDb([{ error: errorDuplicado() }]);
 
     await expect(
       createContacto({ clienteId: "abc", nombre: "Juan Perez" }),
-    ).rejects.toThrow("ya existe");
+    ).rejects.toThrow('El contacto "Juan Perez" ya existe en esta empresa');
   });
 });
 
 describe("contactosParaEnvio — sugerencia de contacto", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  const empresa = {
+    id: "e1",
+    razonSocial: "Aceros del Norte S.A. de C.V.",
+    razonNormalizada: "aceros del norte",
+    direccion: null,
+    createdBy: "x@x.mx",
+    ...fechas,
+  };
+  const contacto = (id: string, nombre: string, correo: string | null) => ({
+    id,
+    clienteId: "e1",
+    nombre,
+    nombreNormalizado: normalizarNombreContacto(nombre),
+    puesto: null,
+    telefono: null,
+    correo,
+    ...fechas,
+  });
+
   function mockDatos() {
-    const empresa = {
-      pk: "CLIENTE#e1", sk: "#METADATA", cliente_id: "e1",
-      razon_social: "Aceros del Norte S.A. de C.V.", razon_normalizada: "aceros del norte",
-    };
-    const contactos = [
-      { pk: "CLIENTE#e1", sk: "CONTACTO#c1", contacto_id: "c1", cliente_id: "e1", nombre: "ING. Juan Pérez", correo: "juan@aceros.mx" },
-      { pk: "CLIENTE#e1", sk: "CONTACTO#c2", contacto_id: "c2", cliente_id: "e1", nombre: "María López", correo: "maria@aceros.mx" },
-      { pk: "CLIENTE#e1", sk: "CONTACTO#c3", contacto_id: "c3", cliente_id: "e1", nombre: "Sin Correo" },
-    ];
-    // 1ª llamada: Scan de empresas; 2ª: Query de contactos
-    const mockSend = vi
-      .fn()
-      .mockResolvedValueOnce({ Items: [empresa] })
-      .mockResolvedValueOnce({ Items: contactos });
-    vi.mocked(getDocClient).mockReturnValue({ send: mockSend } as any);
+    // 1ª consulta: candidatas por ILIKE; 2ª: contactos de la empresa
+    usarDb([
+      [empresa],
+      [
+        contacto("c1", "ING. Juan Pérez", "juan@aceros.mx"),
+        contacto("c2", "María López", "maria@aceros.mx"),
+        contacto("c3", "Sin Correo", null),
+      ],
+    ]);
   }
 
   it("sugiere el contacto que corresponde a 'Dirigida a' quitando títulos", async () => {
@@ -101,11 +129,11 @@ describe("contactosParaEnvio — sugerencia de contacto", () => {
     expect(r.sugeridoId).toBe("c2");
   });
 
-  it("sin empresa localizada devuelve vacío", async () => {
-    const mockSend = vi.fn().mockResolvedValue({ Items: [] });
-    vi.mocked(getDocClient).mockReturnValue({ send: mockSend } as any);
+  it("sin empresa localizada devuelve vacío y no consulta contactos", async () => {
+    const db = usarDb([[]]);
     const r = await contactosParaEnvio({ razonSocial: "Desconocida SA" });
     expect(r.empresa).toBeNull();
     expect(r.sugeridoId).toBeNull();
+    expect(db.metodos().filter((m) => m === "select")).toHaveLength(1);
   });
 });

@@ -8,6 +8,7 @@ vi.mock("@/src/lib/correo", () => ({
   plantillaCorreo: vi.fn((p: { cuerpoHtml: string }) => p.cuerpoHtml),
 }));
 vi.mock("@/src/lib/cotizaciones", () => ({
+  cotPk: (numero: number, anio: number) => `COT#${String(numero).padStart(3, "0")}-${anio}`,
   cambiarEstatus: vi.fn(),
   getVigente: vi.fn(),
   puedeEnviarseAlCliente: vi.fn(),
@@ -26,12 +27,12 @@ vi.mock("@/src/lib/drive-erp", () => ({
   copiarPlantillasCotizacion: vi.fn(),
 }));
 vi.mock("@/src/lib/ot", () => ({
-  createOT: vi.fn().mockResolvedValue({ pk: "OT#OT001260", sk: "#METADATA" }),
+  createOT: vi.fn().mockResolvedValue({ folio: "OT001260" }),
   registrarResponsable: vi.fn().mockResolvedValue({}),
+  setCarpetaDriveOT: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("@/src/lib/users", () => ({ listUsers: vi.fn() }));
 vi.mock("@/src/lib/config-erp", () => ({ getConfigErp: vi.fn() }));
-vi.mock("@/src/lib/dynamo-client", () => ({ getDocClient: vi.fn(() => ({ send: vi.fn() })) }));
 
 import { cambiarEstatus, getVigente, puedeEnviarseAlCliente, registrarAprobacion } from "@/src/lib/cotizaciones";
 import { buscarPdfCotizacion } from "@/src/lib/drive-erp";
@@ -47,7 +48,7 @@ import {
 } from "@/src/lib/cotizaciones-flujos";
 
 const vigente = {
-  pk: "COT#001-2026", sk: "V#00", numero: 1, anio: 2026, version: 0,
+  numero: 1, anio: 2026, version: 0,
   folio: "PCOTOP-001-2026", cliente: "Aceros del Norte", titulo: "Subestación",
   dirigida_a: "Juan", prioridad: "MEDIA", estatus: "REVISION", elaboro: "EAOL",
   drive_folder_id: "folder-1",

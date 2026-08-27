@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/src/auth";
+import { auth } from "@/src/auth";
 import { createJornada, getOpenJornada } from "@/src/lib/jornadas";
+import { getUserById } from "@/src/lib/users";
 import { syncToOdooAsync } from "@/src/lib/odoo";
 import type { DeviceInfo } from "@/src/lib/device-info";
 import { DEMO_MODE } from "@/src/demo";
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   if (!session) {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }
@@ -48,14 +48,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Faltan campos requeridos" }, { status: 400 });
   }
 
-  // Temporales can only check in to their assigned projects (skipped in local dev)
+  // Los temporales sólo pueden fichar en sus proyectos asignados. La asignación
+  // vive en la tabla puente, no en el token, así que se lee de la base.
   const isDev = process.env.NODE_ENV === "development";
-  if (
-    !isDev &&
-    session.user.tipo === "temporal" &&
-    !session.user.proyectos_asignados.includes(proyectoId)
-  ) {
-    return NextResponse.json({ error: "No tienes acceso a este proyecto" }, { status: 403 });
+  if (!isDev && session.user.tipo === "temporal") {
+    const perfil = await getUserById(usuarioId);
+    if (!perfil?.proyectos_asignados.includes(proyectoId)) {
+      return NextResponse.json({ error: "No tienes acceso a este proyecto" }, { status: 403 });
+    }
   }
 
   try {
@@ -81,6 +81,7 @@ export async function POST(req: NextRequest) {
     // Fire-and-forget Odoo sync for planta workers only
     if (session.user.odoo_sync && session.user.email) {
       syncToOdooAsync({
+        usuarioId,
         email: session.user.email,
         jornadaId: jornada.id,
         checkIn: checkIn.timestamp,
@@ -89,16 +90,8 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ jornadaId: jornada.id }, { status: 201 });
   } catch (err: unknown) {
-    const name = (err as { name?: string })?.name ?? "";
     const message = (err as { message?: string })?.message ?? "Error interno";
     console.error("[jornada POST]", err);
-
-    if (name === "ResourceNotFoundException") {
-      return NextResponse.json(
-        { error: "Tabla DynamoDB no encontrada. Ejecuta: pnpm run db:create" },
-        { status: 503 },
-      );
-    }
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

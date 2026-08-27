@@ -1,10 +1,9 @@
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/src/auth";
+import { auth } from "@/src/auth";
 import { tienePermiso } from "@/src/lib/permisos";
 import { MODULOS_ERP } from "./modulos";
 
 export default async function ErpHome() {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   const modulos = MODULOS_ERP.filter((m) => tienePermiso(session?.user, m.permiso));
 
   return (

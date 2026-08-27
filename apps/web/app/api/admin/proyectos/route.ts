@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/src/auth";
+import { auth } from "@/src/auth";
 import { createProyecto, listProyectos, getEmpresa } from "@/src/lib/proyectos";
 import { createEmpresaProyectoFolder } from "@/src/lib/drive";
 import { DEMO_MODE } from "@/src/demo";
@@ -10,7 +9,7 @@ function requireAdmin(rol: string) {
 }
 
 export async function GET(req: NextRequest) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   if (!session || !requireAdmin(session.user.rol)) {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }
@@ -21,7 +20,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   if (!session || !requireAdmin(session.user.rol)) {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }

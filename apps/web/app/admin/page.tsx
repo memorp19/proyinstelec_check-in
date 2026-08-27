@@ -1,12 +1,11 @@
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/src/auth";
+import { auth } from "@/src/auth";
 import { listEmpresas, listProyectos } from "@/src/lib/proyectos";
 import { listUsers } from "@/src/lib/users";
 import { DEMO_MODE, DEMO_USERS } from "@/src/demo";
 import { AdminClient } from "./components/AdminClient";
 
 export default async function AdminDashboard() {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   const esSuperAdmin = session?.user?.es_super_admin ?? false;
 
   const [empresas, proyectos, usuarios] = await Promise.all([

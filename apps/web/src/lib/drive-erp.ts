@@ -1,5 +1,4 @@
 import type { drive_v3 } from "googleapis";
-import { SSMClient, GetParameterCommand } from "@aws-sdk/client-ssm";
 import { getDriveClient, getOrCreateFolder } from "./drive";
 import { pad } from "./folios";
 
@@ -14,31 +13,20 @@ interface ErpDriveConfig {
 
 let _cachedConfig: ErpDriveConfig | null = null;
 
+/** Carpetas raíz y plantillas del ERP (variables de entorno del proyecto). */
 async function getErpDriveConfig(): Promise<ErpDriveConfig> {
   if (_cachedConfig) return _cachedConfig;
-
-  // Local dev: variables de entorno directas
-  if (process.env.ERP_COTIZACIONES_FOLDER_ID) {
-    _cachedConfig = {
-      cotizacionesRootId: process.env.ERP_COTIZACIONES_FOLDER_ID,
-      otRootId: process.env.ERP_OT_FOLDER_ID ?? "",
-      plantillaDocId: process.env.ERP_PLANTILLA_DOC_ID ?? "",
-      plantillaSheetId: process.env.ERP_PLANTILLA_SHEET_ID ?? "",
-    };
-    return _cachedConfig;
+  const cotizacionesRootId = process.env.ERP_COTIZACIONES_FOLDER_ID;
+  if (!cotizacionesRootId) {
+    throw new Error(
+      "Falta ERP_COTIZACIONES_FOLDER_ID — carpeta raíz de cotizaciones en Drive",
+    );
   }
-
-  const ssm = new SSMClient({ region: process.env.AWS_REGION ?? "us-east-1" });
-  const get = async (name: string) => {
-    const r = await ssm.send(new GetParameterCommand({ Name: name, WithDecryption: true }));
-    return r.Parameter?.Value ?? "";
-  };
-
   _cachedConfig = {
-    cotizacionesRootId: await get("/proyinstelec/erp/cotizaciones-folder-id"),
-    otRootId: await get("/proyinstelec/erp/ot-folder-id"),
-    plantillaDocId: await get("/proyinstelec/erp/plantilla-doc-id"),
-    plantillaSheetId: await get("/proyinstelec/erp/plantilla-sheet-id"),
+    cotizacionesRootId,
+    otRootId: process.env.ERP_OT_FOLDER_ID ?? "",
+    plantillaDocId: process.env.ERP_PLANTILLA_DOC_ID ?? "",
+    plantillaSheetId: process.env.ERP_PLANTILLA_SHEET_ID ?? "",
   };
   return _cachedConfig;
 }

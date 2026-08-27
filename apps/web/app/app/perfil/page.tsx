@@ -1,8 +1,7 @@
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/src/auth";
-import { getUserByGoogleSub } from "@/src/lib/users";
+import { auth } from "@/src/auth";
+import { getUserById } from "@/src/lib/users";
 import { getJornadasHistorialByUsuario } from "@/src/lib/jornadas";
-import { DEMO_MODE, DEMO_PROJECTS, DEMO_HISTORIAL, type ProyectoStats } from "@/src/demo";
+import { DEMO_MODE, DEMO_PROJECTS, DEMO_HISTORIAL, getDemoPresetById, type ProyectoStats } from "@/src/demo";
 import { PerfilClient } from "./_components/PerfilClient";
 
 function formatProyectoId(id: string): string {
@@ -10,19 +9,21 @@ function formatProyectoId(id: string): string {
 }
 
 export default async function PerfilPage() {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   if (!session) return null;
 
   const userId = session.user.id!;
 
   const [dbUser, jornadas] = await Promise.all([
-    DEMO_MODE ? null : getUserByGoogleSub(userId).catch(() => null),
+    DEMO_MODE ? null : getUserById(userId).catch(() => null),
     DEMO_MODE ? Promise.resolve([]) : getJornadasHistorialByUsuario(userId).catch(() => []),
   ]);
 
   const fotoUrl = dbUser?.foto_url ?? session.user.image ?? null;
   const nickname = dbUser?.nickname ?? null;
-  const proyectosAsignados = session.user.proyectos_asignados ?? [];
+  const proyectosAsignados = DEMO_MODE
+    ? getDemoPresetById(userId).proyectos_asignados
+    : (dbUser?.proyectos_asignados ?? []);
 
   // Build project name map
   const proyectosNombres: Record<string, string> = DEMO_MODE ? DEMO_PROJECTS : {};

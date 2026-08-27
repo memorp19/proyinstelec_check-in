@@ -14,19 +14,6 @@ vi.mock("googleapis", () => {
   };
 });
 
-vi.mock("@aws-sdk/client-ssm", () => ({
-  SSMClient: vi.fn().mockImplementation(() => ({
-    send: vi.fn().mockResolvedValue({
-      Parameter: {
-        Value: JSON.stringify({
-          client_email: "test@sa.iam.gserviceaccount.com",
-          private_key: "-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----",
-        }),
-      },
-    }),
-  })),
-  GetParameterCommand: vi.fn(),
-}));
 
 import { google } from "googleapis";
 import {
@@ -39,7 +26,7 @@ import {
 
 // Access mocks via the module mock
 const getMocks = () => {
-  const driveInstance = vi.mocked(google.drive)();
+  const driveInstance = vi.mocked(google.drive)({ version: "v3" });
   return {
     filesCreate: driveInstance.files.create as ReturnType<typeof vi.fn>,
     filesList: driveInstance.files.list as ReturnType<typeof vi.fn>,
@@ -49,7 +36,12 @@ const getMocks = () => {
 beforeEach(() => {
   vi.clearAllMocks();
   _resetDriveConfigCache();
-  process.env.DRIVE_ROOT_FOLDER_ID_PARAM = "/proyinstelec/drive/root-folder-id";
+  // Credenciales del service account por variables de entorno (antes venían de SSM)
+  process.env.DRIVE_SERVICE_ACCOUNT_KEY = JSON.stringify({
+    client_email: "drive@proyecto.iam.gserviceaccount.com",
+    private_key: "-----BEGIN PRIVATE KEY-----\\nfake\\n-----END PRIVATE KEY-----\\n",
+  });
+  process.env.DRIVE_ROOT_FOLDER_ID = "root-folder-id";
 });
 
 describe("getThumbnailUrl", () => {
@@ -73,7 +65,7 @@ describe("getOrCreateFolder", () => {
     const { filesList } = getMocks();
     filesList.mockResolvedValue({ data: { files: [{ id: "existing-folder-id" }] } });
 
-    const drive = vi.mocked(google.drive)() as any;
+    const drive = vi.mocked(google.drive)({ version: "v3" }) as any;
     const id = await getOrCreateFolder(drive, "Proyectos", "root-folder");
     expect(id).toBe("existing-folder-id");
     // Should NOT have called create
@@ -85,7 +77,7 @@ describe("getOrCreateFolder", () => {
     filesList.mockResolvedValue({ data: { files: [] } });
     filesCreate.mockResolvedValue({ data: { id: "new-folder-id" } });
 
-    const drive = vi.mocked(google.drive)() as any;
+    const drive = vi.mocked(google.drive)({ version: "v3" }) as any;
     const id = await getOrCreateFolder(drive, "NuevaCarpeta", "root-folder");
     expect(id).toBe("new-folder-id");
     expect(filesCreate).toHaveBeenCalledOnce();
@@ -98,7 +90,7 @@ describe("getOrCreateFolder", () => {
     const { filesList } = getMocks();
     filesList.mockResolvedValue({ data: { files: [{ id: "fid" }] } });
 
-    const drive = vi.mocked(google.drive)() as any;
+    const drive = vi.mocked(google.drive)({ version: "v3" }) as any;
     await getOrCreateFolder(drive, "O'Brien Project", "root");
     const query = filesList.mock.calls[0][0].q as string;
     expect(query).toContain("\\'");
@@ -116,7 +108,7 @@ describe("uploadFile", () => {
     });
 
     const buffer = Buffer.from("fake-image-bytes");
-    const drive = vi.mocked(google.drive)() as any;
+    const drive = vi.mocked(google.drive)({ version: "v3" }) as any;
     const result = await uploadFile({
       buffer,
       filename: "checkin_0941.jpg",
@@ -134,7 +126,7 @@ describe("uploadFile", () => {
     filesCreate.mockResolvedValue({ data: { id: "f1", webViewLink: "https://x" } });
 
     const buffer = Buffer.from("test content");
-    const drive = vi.mocked(google.drive)() as any;
+    const drive = vi.mocked(google.drive)({ version: "v3" }) as any;
     const r1 = await uploadFile({ buffer, filename: "a.jpg", mimeType: "image/jpeg", folderId: "f" });
     const r2 = await uploadFile({ buffer, filename: "b.jpg", mimeType: "image/jpeg", folderId: "f" });
 
@@ -145,7 +137,7 @@ describe("uploadFile", () => {
     const { filesCreate } = getMocks();
     filesCreate.mockResolvedValue({ data: { id: "fallback-id", webViewLink: null } });
 
-    const drive = vi.mocked(google.drive)() as any;
+    const drive = vi.mocked(google.drive)({ version: "v3" }) as any;
     const result = await uploadFile({
       buffer: Buffer.from("x"),
       filename: "x.jpg",

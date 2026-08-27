@@ -1,101 +1,133 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("@/src/lib/dynamo-client", () => ({
-  getDocClient: vi.fn(),
-}));
+vi.mock("@/src/db", () => ({ getDb: vi.fn() }));
 
-import { getDocClient } from "@/src/lib/dynamo-client";
-import { validateToken, consumeToken } from "@/src/lib/invitaciones";
+import { getDb } from "@/src/db";
+import { validateToken, consumeToken, crearInvitacion } from "@/src/lib/invitaciones";
 
-const FUTURE_TS = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7; // 7 days from now
-const PAST_TS = Math.floor(Date.now() / 1000) - 1;
-
-function makeClient(sendResult: unknown) {
-  return { send: vi.fn().mockResolvedValue(sendResult) };
+/**
+ * Encadenado falso de Drizzle: cualquier método devuelve el mismo objeto y el
+ * `await` final entrega el siguiente resultado de la cola.
+ */
+function fakeDb(resultados: unknown[][]) {
+  const cola = [...resultados];
+  const chain: any = new Proxy(
+    {},
+    {
+      get(_t, prop) {
+        if (prop === "then") {
+          const filas = cola.shift() ?? [];
+          return (resolve: (v: unknown) => void) => resolve(filas);
+        }
+        return () => chain;
+      },
+    },
+  );
+  return chain;
 }
 
+const EN_UNA_SEMANA = new Date(Date.now() + 7 * 86_400_000);
+const AYER = new Date(Date.now() - 86_400_000);
+
+function fila(over: Record<string, unknown> = {}) {
+  return {
+    token: "t1",
+    proyectoId: "proyecto-123",
+    creadoPor: "admin-001",
+    nombreSugerido: "Juan Pérez",
+    estado: "pendiente",
+    expiresAt: EN_UNA_SEMANA,
+    usadaPor: null,
+    createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    ...over,
+  };
+}
+
+beforeEach(() => vi.clearAllMocks());
+
 describe("validateToken", () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it("returns not_found when token does not exist in DB", async () => {
-    vi.mocked(getDocClient).mockReturnValue(makeClient({ Item: undefined }) as any);
-    const result = await validateToken("nonexistent-token");
-    expect(result).toEqual({ valid: false, reason: "not_found" });
+  it("devuelve not_found cuando el token no existe", async () => {
+    vi.mocked(getDb).mockReturnValue(fakeDb([[]]));
+    expect(await validateToken("fantasma")).toEqual({ valid: false, reason: "not_found" });
   });
 
-  it("returns expired when expiresAt is in the past", async () => {
-    vi.mocked(getDocClient).mockReturnValue(
-      makeClient({
-        Item: { token: "t1", estado: "pendiente", expiresAt: PAST_TS, proyectoId: "p1", creadoPor: "g1", nombreSugerido: "A" },
-      }) as any,
+  it("devuelve expired cuando expiresAt ya pasó", async () => {
+    vi.mocked(getDb).mockReturnValue(fakeDb([[fila({ expiresAt: AYER })]]));
+    expect(await validateToken("t1")).toEqual({ valid: false, reason: "expired" });
+  });
+
+  it("un token vencido es expired aunque siga pendiente y sin usar", async () => {
+    vi.mocked(getDb).mockReturnValue(
+      fakeDb([[fila({ expiresAt: new Date(Date.now() - 1000), estado: "pendiente" })]]),
     );
+    expect(await validateToken("t1")).toEqual({ valid: false, reason: "expired" });
+  });
+
+  it("devuelve already_used cuando el estado es 'usado'", async () => {
+    vi.mocked(getDb).mockReturnValue(fakeDb([[fila({ estado: "usado" })]]));
+    expect(await validateToken("t2")).toEqual({ valid: false, reason: "already_used" });
+  });
+
+  it("devuelve la invitación cuando está pendiente y vigente", async () => {
+    vi.mocked(getDb).mockReturnValue(fakeDb([[fila()]]));
     const result = await validateToken("t1");
-    expect(result).toEqual({ valid: false, reason: "expired" });
-  });
-
-  it("returns already_used when estado is 'usado'", async () => {
-    vi.mocked(getDocClient).mockReturnValue(
-      makeClient({
-        Item: { token: "t2", estado: "usado", expiresAt: FUTURE_TS, proyectoId: "p1", creadoPor: "g1", nombreSugerido: "B" },
-      }) as any,
-    );
-    const result = await validateToken("t2");
-    expect(result).toEqual({ valid: false, reason: "already_used" });
-  });
-
-  it("returns valid with invitacion when token is pending and not expired", async () => {
-    const inv = {
-      token: "valid-token",
-      estado: "pendiente",
-      expiresAt: FUTURE_TS,
-      proyectoId: "proyecto-123",
-      creadoPor: "google-sub-admin",
-      nombreSugerido: "Juan Pérez",
-    };
-    vi.mocked(getDocClient).mockReturnValue(makeClient({ Item: inv }) as any);
-
-    const result = await validateToken("valid-token");
     expect(result.valid).toBe(true);
     if (result.valid) {
       expect(result.invitacion.proyectoId).toBe("proyecto-123");
+      expect(result.invitacion.nombreSugerido).toBe("Juan Pérez");
     }
   });
 
-  it("expires a token that is at exactly now (boundary)", async () => {
-    const nowTs = Math.floor(Date.now() / 1000);
-    vi.mocked(getDocClient).mockReturnValue(
-      makeClient({
-        Item: { token: "t3", estado: "pendiente", expiresAt: nowTs - 1, proyectoId: "p", creadoPor: "g", nombreSugerido: "X" },
-      }) as any,
-    );
-    const result = await validateToken("t3");
-    expect(result).toEqual({ valid: false, reason: "expired" });
+  it("normaliza nombreSugerido nulo a undefined", async () => {
+    vi.mocked(getDb).mockReturnValue(fakeDb([[fila({ nombreSugerido: null })]]));
+    const result = await validateToken("t1");
+    expect(result.valid && result.invitacion.nombreSugerido).toBeUndefined();
   });
 });
 
 describe("consumeToken", () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it("sends an UpdateCommand with estado=usado and the correct googleSub", async () => {
-    const mockSend = vi.fn().mockResolvedValue({});
-    vi.mocked(getDocClient).mockReturnValue({ send: mockSend } as any);
-
-    await consumeToken("my-token", "google-sub-123");
-
-    expect(mockSend).toHaveBeenCalledOnce();
-    const cmd = mockSend.mock.calls[0][0];
-    expect(cmd.input.ExpressionAttributeValues[":usado"]).toBe("usado");
-    expect(cmd.input.ExpressionAttributeValues[":sub"]).toBe("google-sub-123");
-    // ConditionExpression prevents double-use
-    expect(cmd.input.ConditionExpression).toContain("pendiente");
+  it("marca el token como usado cuando seguía pendiente", async () => {
+    vi.mocked(getDb).mockReturnValue(fakeDb([[{ token: "t1" }]]));
+    await expect(consumeToken("t1", "usuario-001")).resolves.toBeUndefined();
   });
 
-  it("propagates DynamoDB ConditionalCheckFailedException (already used race)", async () => {
-    const error = new Error("ConditionalCheckFailedException");
-    vi.mocked(getDocClient).mockReturnValue({ send: vi.fn().mockRejectedValue(error) } as any);
+  it("lanza cuando el UPDATE no alcanzó fila pendiente (doble uso)", async () => {
+    vi.mocked(getDb).mockReturnValue(fakeDb([[]]));
+    await expect(consumeToken("t1", "otro-usuario")).rejects.toThrow(/ya fue utilizada/);
+  });
+});
 
-    await expect(consumeToken("used-token", "other-sub")).rejects.toThrow(
-      "ConditionalCheckFailedException",
+describe("crearInvitacion", () => {
+  it("genera un token uuid y calcula la vigencia en días", async () => {
+    let insertado: any = null;
+    const chain: any = new Proxy(
+      {},
+      {
+        get(_t, prop) {
+          if (prop === "then") return (resolve: any) => resolve([insertado]);
+          return (arg: unknown) => {
+            if (prop === "values") {
+              insertado = { usadaPor: null, estado: "pendiente", ...(arg as object) };
+            }
+            return chain;
+          };
+        },
+      },
     );
+    vi.mocked(getDb).mockReturnValue(chain);
+
+    const antes = Date.now();
+    const inv = await crearInvitacion({
+      proyectoId: "p1",
+      creadoPor: "admin-001",
+      nombreSugerido: "Ana",
+      diasVigencia: 3,
+    });
+
+    expect(inv.token).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
+    const dias = (inv.expiresAt.getTime() - antes) / 86_400_000;
+    expect(dias).toBeGreaterThan(2.99);
+    expect(dias).toBeLessThan(3.01);
+    expect(inv.estado).toBe("pendiente");
   });
 });

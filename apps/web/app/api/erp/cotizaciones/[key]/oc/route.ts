@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/src/auth";
+import { auth } from "@/src/auth";
 import { exigirPermiso } from "@/src/lib/permisos";
 import { parseCotKey } from "@/src/lib/cotizaciones";
 import { ingresarOrdenCompra } from "@/src/lib/cotizaciones-flujos";
 
 export async function POST(req: NextRequest, { params }: { params: { key: string } }) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   const rechazo = exigirPermiso(session?.user, "ot.crear");
   if (rechazo) return NextResponse.json({ error: rechazo.error }, { status: rechazo.status });
 
@@ -44,9 +43,9 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
     });
     return NextResponse.json({ folioOt, avisos }, { status: 201 });
   } catch (err) {
-    const e = err as { name?: string; message: string };
-    if (e.name === "ConditionalCheckFailedException") {
-      return NextResponse.json({ error: "Esa OT ya existe" }, { status: 409 });
+    const e = err as { message: string };
+    if (e.message.includes("ya existe")) {
+      return NextResponse.json({ error: e.message }, { status: 409 });
     }
     if (
       e.message.includes("Solo se puede") ||

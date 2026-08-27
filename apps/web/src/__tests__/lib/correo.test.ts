@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-// Mock de bitácora (no queremos DynamoDB aquí)
+// Mock de bitácora (no queremos tocar la base aquí)
 vi.mock("@/src/lib/bitacora", () => ({
   registrarBitacora: vi.fn().mockResolvedValue(undefined),
 }));

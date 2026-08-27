@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/src/auth";
+import { auth } from "@/src/auth";
 import { exigirPermiso } from "@/src/lib/permisos";
 import {
   buscarCotizaciones,
@@ -12,7 +11,7 @@ import {
 import { crearCotizacionCompleta } from "@/src/lib/cotizaciones-flujos";
 
 export async function GET(req: NextRequest) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   const rechazo = exigirPermiso(session?.user, "modulo.cotizaciones");
   if (rechazo) return NextResponse.json({ error: rechazo.error }, { status: rechazo.status });
 
@@ -49,7 +48,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   const rechazo = exigirPermiso(session?.user, "modulo.cotizaciones");
   if (rechazo) return NextResponse.json({ error: rechazo.error }, { status: rechazo.status });
 
@@ -93,12 +92,10 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ cotizacion, avisos }, { status: 201 });
   } catch (err) {
-    const e = err as { name?: string; message: string };
-    if (e.name === "ConditionalCheckFailedException") {
-      return NextResponse.json(
-        { error: `La cotización ${numero}-${anio} ya existe; usa "Nueva Versión"` },
-        { status: 409 },
-      );
+    const e = err as { message: string };
+    // El choque de número duplicado lo detecta la llave primaria de la tabla
+    if (e.message.includes("ya existe")) {
+      return NextResponse.json({ error: e.message }, { status: 409 });
     }
     console.error("[erp/cotizaciones POST]", err);
     return NextResponse.json({ error: e.message }, { status: 500 });

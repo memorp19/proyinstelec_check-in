@@ -111,7 +111,7 @@ export interface ProyectoStats {
 }
 
 export interface DemoUser {
-  google_sub: string;
+  id: string;
   email: string;
   nombre: string;
   rol: "campo" | "admin" | "cliente";
@@ -123,7 +123,7 @@ export interface DemoUser {
 
 export const DEMO_USERS: DemoUser[] = [
   {
-    google_sub: "demo-user-001",
+    id: "demo-user-001",
     email: "demo@proyinstelec.mx",
     nombre: "Usuario Demo",
     rol: "campo",
@@ -133,7 +133,7 @@ export const DEMO_USERS: DemoUser[] = [
     created_at: "2026-01-15T10:00:00.000Z",
   },
   {
-    google_sub: "demo-planta-001",
+    id: "demo-planta-001",
     email: "carlos.reyes@proyinstelec.mx",
     nombre: "Carlos Reyes",
     rol: "campo",
@@ -143,7 +143,7 @@ export const DEMO_USERS: DemoUser[] = [
     created_at: "2025-11-03T09:30:00.000Z",
   },
   {
-    google_sub: "demo-planta-002",
+    id: "demo-planta-002",
     email: "lucia.mendoza@proyinstelec.mx",
     nombre: "Lucía Mendoza",
     rol: "campo",
@@ -153,7 +153,7 @@ export const DEMO_USERS: DemoUser[] = [
     created_at: "2025-11-10T08:00:00.000Z",
   },
   {
-    google_sub: "demo-admin-001",
+    id: "demo-admin-001",
     email: "admin@proyinstelec.mx",
     nombre: "Admin Demo",
     rol: "admin",
@@ -163,7 +163,7 @@ export const DEMO_USERS: DemoUser[] = [
     created_at: "2025-10-01T07:00:00.000Z",
   },
   {
-    google_sub: "demo-guest-001",
+    id: "demo-guest-001",
     email: "cliente@empresa-demo.com",
     nombre: "Invitado Demo",
     rol: "cliente",

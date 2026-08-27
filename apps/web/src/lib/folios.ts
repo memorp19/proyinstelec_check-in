@@ -1,7 +1,6 @@
-import { UpdateCommand } from "@aws-sdk/lib-dynamodb";
-import { getDocClient } from "./dynamo-client";
-
-const TABLE = () => process.env.MAIN_TABLE ?? "proyinstelec-main";
+import { sql } from "drizzle-orm";
+import { getDb } from "../db";
+import { contadores } from "../db/schema";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -9,7 +8,7 @@ const TABLE = () => process.env.MAIN_TABLE ?? "proyinstelec-main";
  * Contadores de folio del ERP. Cada tipo lleva su propia secuencia; los que
  * dependen del año (cotizaciones) usan un contador por año.
  * Reemplaza el "max + 1 leyendo toda la hoja" del ERP legacy con un
- * incremento atómico (ítem COUNTER#<tipo> / #N).
+ * incremento atómico en una sola sentencia (fila de `contadores`).
  */
 export type TipoFolio =
   | `cotizacion-${number}` // por año: cotizacion-2026
@@ -26,40 +25,36 @@ export type TipoFolio =
 
 /**
  * Devuelve el siguiente número de la secuencia `tipo` (1, 2, 3, ...).
- * Atómico: dos llamadas concurrentes nunca reciben el mismo número.
+ * Atómico: el INSERT ... ON CONFLICT DO UPDATE resuelve alta y incremento en
+ * una sola sentencia, así que dos llamadas concurrentes nunca reciben el mismo
+ * número (el driver HTTP de Neon no tiene transacciones interactivas).
  */
 export async function siguienteNumero(tipo: string): Promise<number> {
-  const result = await getDocClient().send(
-    new UpdateCommand({
-      TableName: TABLE(),
-      Key: { pk: `COUNTER#${tipo}`, sk: "#N" },
-      UpdateExpression: "ADD n :uno",
-      ExpressionAttributeValues: { ":uno": 1 },
-      ReturnValues: "UPDATED_NEW",
-    }),
-  );
-  return result.Attributes?.n as number;
+  const [fila] = await getDb()
+    .insert(contadores)
+    .values({ tipo, n: 1 })
+    .onConflictDoUpdate({
+      target: contadores.tipo,
+      set: { n: sql`${contadores.n} + 1` },
+    })
+    .returning({ n: contadores.n });
+  return fila.n;
 }
 
 /**
  * Fija el contador en un valor (para importaciones: dejarlo en el máximo
- * encontrado en los Sheets antes de empezar a operar). Solo sube, nunca baja.
+ * encontrado en los Sheets antes de empezar a operar). Solo sube, nunca baja:
+ * el WHERE del ON CONFLICT descarta el caso en que ya va más adelante.
  */
 export async function asegurarContadorMinimo(tipo: string, minimo: number): Promise<void> {
-  try {
-    await getDocClient().send(
-      new UpdateCommand({
-        TableName: TABLE(),
-        Key: { pk: `COUNTER#${tipo}`, sk: "#N" },
-        UpdateExpression: "SET n = :min",
-        ConditionExpression: "attribute_not_exists(n) OR n < :min",
-        ExpressionAttributeValues: { ":min": minimo },
-      }),
-    );
-  } catch (err) {
-    // ConditionalCheckFailed = el contador ya va más adelante; no es error
-    if ((err as { name?: string }).name !== "ConditionalCheckFailedException") throw err;
-  }
+  await getDb()
+    .insert(contadores)
+    .values({ tipo, n: minimo })
+    .onConflictDoUpdate({
+      target: contadores.tipo,
+      set: { n: minimo },
+      setWhere: sql`${contadores.n} < ${minimo}`,
+    });
 }
 
 // ── Formato de folios (convenciones del ERP legacy, sin cambios) ──────────────

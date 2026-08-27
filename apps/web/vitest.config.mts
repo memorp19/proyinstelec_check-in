@@ -17,7 +17,6 @@ export default defineConfig({
         "vitest.setup.ts",
         "**/*.d.ts",
         "app/**",          // pages — tested via e2e, not unit
-        "src/lib/dynamo-client.ts", // singleton wrapper, tested via integration
       ],
     },
   },
