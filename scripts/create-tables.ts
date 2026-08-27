@@ -106,6 +106,10 @@ async function main() {
       { AttributeName: "gsi2sk", AttributeType: "S" },
       { AttributeName: "gsi3pk", AttributeType: "S" },
       { AttributeName: "gsi3sk", AttributeType: "S" },
+      { AttributeName: "gsi4pk", AttributeType: "S" },
+      { AttributeName: "gsi4sk", AttributeType: "S" },
+      { AttributeName: "gsi5pk", AttributeType: "S" },
+      { AttributeName: "gsi5sk", AttributeType: "S" },
     ],
     GlobalSecondaryIndexes: [
       {
@@ -134,6 +138,22 @@ async function main() {
           ProjectionType: "INCLUDE",
           NonKeyAttributes: ["pk", "sk", "nombre", "estado", "fechaInicio", "fechaFin", "proyectoId", "usuarioId"],
         },
+      },
+      {
+        IndexName: "gsi4-coleccion",
+        KeySchema: [
+          { AttributeName: "gsi4pk", KeyType: "HASH" },
+          { AttributeName: "gsi4sk", KeyType: "RANGE" },
+        ],
+        Projection: { ProjectionType: "ALL" },
+      },
+      {
+        IndexName: "gsi5-fecha",
+        KeySchema: [
+          { AttributeName: "gsi5pk", KeyType: "HASH" },
+          { AttributeName: "gsi5sk", KeyType: "RANGE" },
+        ],
+        Projection: { ProjectionType: "ALL" },
       },
     ],
   });

@@ -89,6 +89,9 @@ export async function handleJwt(params: {
       token.perfil_completo = profile.perfil_completo;
       token.proyectos_asignados = profile.proyectos_asignados;
       token.odoo_sync = profile.odoo_sync;
+      token.permisos = profile.permisos ?? [];
+      token.iniciales = profile.iniciales;
+      token.gerencia = profile.gerencia;
     } else {
       // Fallback in case DB write in handleSignIn hasn't propagated (rare)
       token.rol = "campo";
@@ -96,7 +99,9 @@ export async function handleJwt(params: {
       token.perfil_completo = false;
       token.proyectos_asignados = [];
       token.odoo_sync = false;
+      token.permisos = [];
     }
+    token.es_super_admin = isSuperAdmin(token.email ?? "");
   }
 
   return token;
@@ -111,9 +116,19 @@ export function handleSession(params: { session: Session; token: JWT }): Session
   session.user.id = token.sub;
   session.user.rol = token.rol;
   session.user.tipo = token.tipo;
+  session.user.es_super_admin = isSuperAdmin(token.email ?? "");
   session.user.perfil_completo = token.perfil_completo;
   session.user.proyectos_asignados = token.proyectos_asignados ?? [];
   session.user.odoo_sync = token.odoo_sync;
+  session.user.permisos = token.permisos ?? [];
+  session.user.iniciales = token.iniciales;
+  session.user.gerencia = token.gerencia;
 
   return session;
+}
+
+const SUPER_ADMIN_EMAIL = "soporteit@proyinstelec.mx";
+
+export function isSuperAdmin(email: string): boolean {
+  return email.toLowerCase() === SUPER_ADMIN_EMAIL;
 }

@@ -17,10 +17,11 @@ export const viewport: Viewport = {
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  const demoMode = process.env.DEMO_MODE === "true";
   return (
     <html lang="es">
       <body>
-        <Providers>{children}</Providers>
+        <Providers demoMode={demoMode}>{children}</Providers>
       </body>
     </html>
   );

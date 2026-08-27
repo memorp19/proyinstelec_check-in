@@ -14,6 +14,9 @@ importers:
       '@aws-sdk/lib-dynamodb':
         specifier: ^3.600.0
         version: 3.1046.0(@aws-sdk/client-dynamodb@3.1046.0)
+      googleapis:
+        specifier: ^144.0.0
+        version: 144.0.0
       tsx:
         specifier: ^4.19.2
         version: 4.21.0

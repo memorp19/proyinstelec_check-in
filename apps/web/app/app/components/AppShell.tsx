@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { CheckinCard } from "./CheckinCard";
 import { CheckoutCard } from "./CheckoutCard";
 import { OfflineBanner } from "./OfflineBanner";
@@ -88,6 +89,7 @@ export function AppShell({
   openJornadaProyectoId,
 }: AppShellProps) {
   const isDev = process.env.NODE_ENV === "development";
+  const router = useRouter();
 
   // If there's an open jornada on load, go directly to "active"
   const initialView: View = openJornadaId ? "active" : "dashboard";
@@ -209,7 +211,19 @@ export function AppShell({
       <main className="min-h-screen bg-navy flex flex-col">
         {/* Header */}
         <div className="px-5 pt-10 pb-5">
-          <p className="font-mono text-[10px] text-white/40 uppercase tracking-widest mb-1">Bienvenido</p>
+          <div className="flex items-start justify-between mb-1">
+            <p className="font-mono text-[10px] text-white/40 uppercase tracking-widest">Bienvenido</p>
+            <button
+              onClick={() => router.push("/app/perfil")}
+              className="w-9 h-9 rounded-full bg-white/10 border border-white/10 flex items-center justify-center active:scale-95 transition-transform"
+              aria-label="Mi perfil"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                <circle cx="12" cy="7" r="4" />
+              </svg>
+            </button>
+          </div>
           <p className="font-head text-[34px] font-bold text-white leading-tight">{firstName}</p>
           <div className="inline-flex items-center gap-1.5 bg-white/10 rounded-full px-3 py-1 mt-2">
             <span className="w-2 h-2 rounded-full bg-amber" />

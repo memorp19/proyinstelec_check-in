@@ -127,6 +127,25 @@ export class DynamoTables extends Construct {
       nonKeyAttributes: ["pk", "sk", "nombre", "estado", "fechaInicio", "fechaFin", "proyectoId", "usuarioId"],
     });
 
+    // GSI 4 — colecciones del ERP por año/semana/estado (Fase 0)
+    // Item shape: gsi4pk = COT#<anio> | OT#<anio> | ACT#SEMANA#<aaaa-ss> | AYUDA#<area> | SOL#Pendiente
+    //             gsi4sk = <estatus>#<numero> | <fecha> | <folio> según colección
+    this.main.addGlobalSecondaryIndex({
+      indexName: "gsi4-coleccion",
+      partitionKey: { name: "gsi4pk", type: AttributeType.STRING },
+      sortKey: { name: "gsi4sk", type: AttributeType.STRING },
+      projectionType: ProjectionType.ALL,
+    });
+
+    // GSI 5 — servicios (y futuros eventos) por fecha (Fase 0)
+    // Item shape: gsi5pk = SRV#<anio>, gsi5sk = <fecha inicio ISO>
+    this.main.addGlobalSecondaryIndex({
+      indexName: "gsi5-fecha",
+      partitionKey: { name: "gsi5pk", type: AttributeType.STRING },
+      sortKey: { name: "gsi5sk", type: AttributeType.STRING },
+      projectionType: ProjectionType.ALL,
+    });
+
     // ── odoo_sync_queue ──────────────────────────────────────────────────────
     this.odooQueue = new Table(this, "OdooQueue", {
       tableName: "proyinstelec-odoo-queue",

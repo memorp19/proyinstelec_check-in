@@ -11,7 +11,7 @@ const PROTECTED_ROUTES: Array<{ prefix: string; roles: string[] }> = [
 ];
 
 // Routes that require auth but no specific role (handled separately)
-const AUTH_REQUIRED_PREFIXES = ["/app", "/admin", "/cliente", "/unirse"];
+const AUTH_REQUIRED_PREFIXES = ["/app", "/admin", "/cliente", "/unirse", "/erp"];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -45,6 +45,19 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL("/unirse/completar-perfil", request.url));
   }
 
+  // /erp: acceso para admins o cualquier usuario con al menos un permiso ERP
+  // (la autorización fina por módulo vive en las API routes vía exigirPermiso)
+  if (pathname.startsWith("/erp")) {
+    const tieneAccesoErp =
+      token.rol === "admin" ||
+      token.es_super_admin === true ||
+      (Array.isArray(token.permisos) && token.permisos.length > 0);
+    if (!tieneAccesoErp) {
+      return NextResponse.redirect(new URL("/acceso-denegado", request.url));
+    }
+    return NextResponse.next();
+  }
+
   // Role-based access
   for (const route of PROTECTED_ROUTES) {
     if (pathname.startsWith(route.prefix)) {
@@ -65,5 +78,6 @@ export const config = {
     "/admin/:path*",
     "/cliente/:path*",
     "/unirse/:path*",
+    "/erp/:path*",
   ],
 };

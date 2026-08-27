@@ -54,10 +54,37 @@ async function main() {
     odoo_sync: false,
     perfil_completo: true,
     proyectos_asignados: [],
+    iniciales: "MARO",
+    gerencia: "Administración",
     created_at: now,
     updated_at: now,
   });
   console.log("  👤  Admin: admin@proyinstelec.mx");
+
+  // Usuaria del ERP sin rol admin: permisos explícitos (equipo comercial)
+  await put("proyinstelec-users", {
+    google_sub: "comercial-local-001",
+    email: "maria@proyinstelec.mx",
+    nombre: "María Álvarez",
+    foto_url: null,
+    tipo: "planta",
+    rol: "campo",
+    odoo_sync: false,
+    perfil_completo: true,
+    proyectos_asignados: [],
+    iniciales: "MNAA",
+    gerencia: "Administración",
+    permisos: [
+      "modulo.cotizaciones",
+      "modulo.clientes",
+      "dashboard.cotizaciones",
+      "cotizaciones.enviar",
+      "modulo.weekly",
+    ],
+    created_at: now,
+    updated_at: now,
+  });
+  console.log("  👤  Comercial (permisos ERP): maria@proyinstelec.mx");
 
   await put("proyinstelec-users", {
     google_sub: "planta-local-001",
@@ -134,6 +161,22 @@ async function main() {
     expiresAt: futureTs,
   });
   console.log("  🔗  Token de invitación: dev-token-valido-12345");
+
+  // ── Configuración del ERP (áreas para avisos de OT) ──────────────────────────
+
+  await put("proyinstelec-main", {
+    pk: "CONFIG#erp",
+    sk: "#METADATA",
+    areas_ot: [
+      { clave: "ESTUDIOS_ELECTRICOS", nombre: "Estudios Eléctricos", correo: "" },
+      { clave: "PROTECCIONES", nombre: "Protecciones", correo: "" },
+      { clave: "MANTENIMIENTOS", nombre: "Mantenimientos", correo: "" },
+      { clave: "ADMINISTRACION", nombre: "Administración", correo: "" },
+    ],
+    cc_aviso_ot: [],
+    updated_at: now,
+  });
+  console.log("  ⚙️   Config ERP: áreas de OT (captura los correos en el ítem CONFIG#erp)");
   console.log(`      URL: http://localhost:3000/unirse?token=dev-token-valido-12345`);
 
   console.log("\n✅  Datos de prueba listos.\n");

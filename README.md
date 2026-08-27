@@ -233,10 +233,50 @@ node_modules/.bin/vitest run          # todos los tests
 node_modules/.bin/vitest run --coverage  # con reporte de cobertura
 ```
 
-Cobertura actual: **132 tests** en 14 archivos (libs, API routes, auth callbacks, middleware, IDB/sync-queue).
+Cobertura actual: **208 tests** en 21 archivos (libs, API routes, auth callbacks, middleware, IDB/sync-queue, ERP Fases 0-1).
 
 ---
 
 ## Variables de entorno — referencia completa
 
 Ver [`apps/web/.env.example`](apps/web/.env.example) para la lista completa con comentarios.
+
+---
+
+## ERP (migración por fases)
+
+La app incorpora el ERP interno (Cotizaciones, Órdenes de Trabajo, Weekly/KPIs), migrado por fases
+desde el sistema anterior en Google Apps Script. Plan y decisiones: [`docs/plan-migracion-erp.md`](docs/plan-migracion-erp.md);
+análisis del sistema anterior: [`docs/erp-legacy/`](docs/erp-legacy/).
+
+**Fase 0 (lista):**
+
+- Permisos ERP en el perfil (`permisos`, `iniciales`, `gerencia`) — se editan en `/admin` → Usuarios → botón «ERP».
+  El rol `admin` tiene todos los permisos implícitamente; catálogo y guard en `apps/web/src/lib/permisos.ts` (`exigirPermiso`).
+- Sección `/erp` con menú por permisos (módulos se activan en las fases 1-4).
+- Folios atómicos (`src/lib/folios.ts`), bitácora (`src/lib/bitacora.ts`) y correo transaccional con
+  Gmail API + delegación de dominio (`src/lib/correo.ts`; en dev usar `CORREO_DESHABILITADO=true`).
+- GSIs nuevos en `proyinstelec-main`: `gsi4-coleccion` (colecciones por año/semana/estado) y `gsi5-fecha` (servicios por fecha).
+  En local: `pnpm db:reset` para recrear tablas con los índices nuevos.
+
+**Fase 1 (lista) — Clientes y Cotizaciones:**
+
+- `/erp/clientes`: empresas y contactos con verificación anti-duplicados por razón social normalizada.
+- `/erp/cotizaciones`: buscador con los 8 filtros del ERP anterior, alta con carpeta de Drive `NNN - AAAA`
+  y copia de plantillas, versiones (la vigente es la única que cuenta en búsquedas y dashboards),
+  edición, flujo completo de revisión → aprobación → envío al cliente (PDF obligatorio, CC al equipo)
+  → ingreso de OC → generación de OT (`OTnnnAAv`) con carpeta de Drive, responsable y aviso a áreas.
+- `/erp/revision`: bandeja para aprobar o solicitar corrección (permiso `cotizaciones.aprobar`) —
+  reemplaza los links sin autenticación del sistema anterior.
+- Libs: `clientes.ts`, `cotizaciones.ts` (estados y transiciones), `cotizaciones-flujos.ts` (correos y reglas),
+  `ot.ts`, `drive-erp.ts`, `config-erp.ts` (catálogo de áreas para avisos de OT — editar el ítem `CONFIG#erp`).
+- Importador idempotente desde los Sheets legacy: `pnpm import:erp` (variables `IMPORT_*` en `.env.example`;
+  `DRY_RUN=true` para solo reportar). Al terminar reporta los elaboradores cuyas iniciales hay que cruzar con los perfiles.
+
+**Configuración Drive del ERP:** crear los parámetros SSM `/proyinstelec/erp/*` (o las variables `ERP_*`
+en local) con la carpeta raíz de cotizaciones, la de OT y las dos plantillas.
+
+**Configuración del correo (producción):** crear el parámetro SSM `/proyinstelec/correo/service-account-key`
+(llave JSON del service account) y `/proyinstelec/correo/remitente` (cuenta del dominio), y habilitar la
+delegación de dominio del service account en la consola de administrador de Google Workspace con el scope
+`https://www.googleapis.com/auth/gmail.send`.

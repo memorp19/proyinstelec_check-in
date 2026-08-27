@@ -171,3 +171,70 @@ describe("middleware — cliente user", () => {
     expect(getRedirectPath(res)).toBe("/acceso-denegado");
   });
 });
+
+describe("middleware — /erp (Fase 0)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("redirects to /unirse without session", async () => {
+    vi.mocked(getToken).mockResolvedValue(null);
+    const res = await middleware(makeRequest("/erp"));
+    expect(res.status).toBe(307);
+    expect(getRedirectPath(res)).toBe("/unirse");
+  });
+
+  it("allows admins", async () => {
+    vi.mocked(getToken).mockResolvedValue({
+      sub: "s",
+      rol: "admin",
+      tipo: "planta",
+      perfil_completo: true,
+      proyectos_asignados: [],
+      odoo_sync: false,
+    } as any);
+    const res = await middleware(makeRequest("/erp"));
+    expect(res.status).toBe(200);
+  });
+
+  it("allows a campo user with at least one ERP permission", async () => {
+    vi.mocked(getToken).mockResolvedValue({
+      sub: "s",
+      rol: "campo",
+      tipo: "planta",
+      perfil_completo: true,
+      proyectos_asignados: [],
+      odoo_sync: false,
+      permisos: ["modulo.cotizaciones"],
+    } as any);
+    const res = await middleware(makeRequest("/erp/cotizaciones"));
+    expect(res.status).toBe(200);
+  });
+
+  it("denies a campo user without ERP permissions", async () => {
+    vi.mocked(getToken).mockResolvedValue({
+      sub: "s",
+      rol: "campo",
+      tipo: "planta",
+      perfil_completo: true,
+      proyectos_asignados: [],
+      odoo_sync: false,
+      permisos: [],
+    } as any);
+    const res = await middleware(makeRequest("/erp"));
+    expect(res.status).toBe(307);
+    expect(getRedirectPath(res)).toBe("/acceso-denegado");
+  });
+
+  it("allows super admin regardless of rol", async () => {
+    vi.mocked(getToken).mockResolvedValue({
+      sub: "s",
+      rol: "campo",
+      tipo: "planta",
+      es_super_admin: true,
+      perfil_completo: true,
+      proyectos_asignados: [],
+      odoo_sync: false,
+    } as any);
+    const res = await middleware(makeRequest("/erp"));
+    expect(res.status).toBe(200);
+  });
+});

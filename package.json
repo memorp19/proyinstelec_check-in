@@ -5,6 +5,7 @@
   "packageManager": "pnpm@9.15.0",
   "scripts": {
     "dev": "pnpm --filter web dev",
+    "dev:demo": "pnpm --filter web dev:demo",
     "build": "pnpm --filter web build",
     "test": "pnpm --filter web test",
     "test:ci": "pnpm --filter web test:ci",
@@ -15,12 +16,14 @@
     "db:create": "DYNAMODB_ENDPOINT=http://localhost:8000 ./node_modules/.bin/tsx scripts/create-tables.ts",
     "db:seed": "DYNAMODB_ENDPOINT=http://localhost:8000 ./node_modules/.bin/tsx scripts/seed.ts",
     "db:reset": "pnpm db:down && docker volume rm proyinstelecCheckinout_dynamodb_data 2>/dev/null; pnpm db:up && sleep 3 && pnpm db:create && pnpm db:seed",
-    "setup:local": "pnpm install && pnpm db:up && sleep 3 && pnpm db:create && pnpm db:seed"
+    "setup:local": "pnpm install && pnpm db:up && sleep 3 && pnpm db:create && pnpm db:seed",
+    "import:erp": "./node_modules/.bin/tsx scripts/importar-erp.ts"
   },
   "devDependencies": {
     "@aws-sdk/client-dynamodb": "^3.600.0",
     "@aws-sdk/lib-dynamodb": "^3.600.0",
     "tsx": "^4.19.2",
-    "typescript": "~5.6.0"
+    "typescript": "~5.6.0",
+    "googleapis": "^144.0.0"
   }
 }

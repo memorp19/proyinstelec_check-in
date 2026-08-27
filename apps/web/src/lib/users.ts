@@ -1,4 +1,4 @@
-import { DeleteCommand, GetCommand, PutCommand, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { DeleteCommand, GetCommand, PutCommand, QueryCommand, ScanCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { getDocClient } from "./dynamo-client";
 
 const TABLE = () => process.env.USERS_TABLE ?? "proyinstelec-users";
@@ -7,6 +7,7 @@ export interface UserProfile {
   google_sub: string;
   email: string;
   nombre: string;
+  nickname?: string;
   foto_url?: string;
   tipo: "planta" | "temporal" | "admin" | "cliente";
   rol: "campo" | "admin" | "cliente";
@@ -17,6 +18,13 @@ export interface UserProfile {
   id_oficial?: string;
   contacto_emergencia?: { nombre: string; telefono: string };
   terminos_aceptados_at?: string;
+  // ── Campos ERP (Fase 0) ──
+  /** Permisos del ERP; rol admin los tiene todos implícitamente (ver lib/permisos.ts) */
+  permisos?: string[];
+  /** Iniciales únicas (2-5 mayúsculas) — llave de cruce con datos del ERP legacy */
+  iniciales?: string;
+  /** Gerencia/área a la que pertenece (Administración, Operación, etc.) */
+  gerencia?: string;
   created_at: string;
   updated_at: string;
 }
@@ -121,6 +129,126 @@ export function buildInitialProfile(params: {
     created_at: now,
     updated_at: now,
   };
+}
+
+export async function listUsers(): Promise<UserProfile[]> {
+  const result = await getDocClient().send(
+    new ScanCommand({ TableName: TABLE() }),
+  );
+  return ((result.Items ?? []) as UserProfile[]).sort((a, b) =>
+    a.email.localeCompare(b.email),
+  );
+}
+
+export async function updateUserRol(
+  googleSub: string,
+  newRol: "campo" | "admin" | "cliente",
+  newTipo: "planta" | "temporal" | "admin" | "cliente",
+): Promise<void> {
+  await getDocClient().send(
+    new UpdateCommand({
+      TableName: TABLE(),
+      Key: { google_sub: googleSub },
+      UpdateExpression: "SET rol = :r, tipo = :t, updated_at = :ua",
+      ExpressionAttributeValues: {
+        ":r": newRol,
+        ":t": newTipo,
+        ":ua": new Date().toISOString(),
+      },
+    }),
+  );
+}
+
+export async function updatePerfil(
+  googleSub: string,
+  data: { nickname?: string | null; foto_url?: string | null },
+): Promise<void> {
+  const sets: string[] = ["updated_at = :ua"];
+  const values: Record<string, unknown> = { ":ua": new Date().toISOString() };
+  const removes: string[] = [];
+
+  if ("nickname" in data) {
+    if (data.nickname) {
+      sets.push("nickname = :nick");
+      values[":nick"] = data.nickname;
+    } else {
+      removes.push("nickname");
+    }
+  }
+  if ("foto_url" in data) {
+    if (data.foto_url) {
+      sets.push("foto_url = :foto");
+      values[":foto"] = data.foto_url;
+    } else {
+      removes.push("foto_url");
+    }
+  }
+
+  let expr = `SET ${sets.join(", ")}`;
+  if (removes.length > 0) expr += ` REMOVE ${removes.join(", ")}`;
+
+  await getDocClient().send(
+    new UpdateCommand({
+      TableName: TABLE(),
+      Key: { google_sub: googleSub },
+      UpdateExpression: expr,
+      ExpressionAttributeValues: values,
+    }),
+  );
+}
+
+/**
+ * Updates the ERP-related fields of a profile (Fase 0).
+ * Semantics per field: undefined = untouched; null or "" = cleared; value = set.
+ */
+export async function updateUserErp(
+  googleSub: string,
+  data: { permisos?: string[]; iniciales?: string | null; gerencia?: string | null },
+): Promise<void> {
+  const sets: string[] = ["updated_at = :ua"];
+  const values: Record<string, unknown> = { ":ua": new Date().toISOString() };
+  const removes: string[] = [];
+
+  if (data.permisos !== undefined) {
+    sets.push("permisos = :p");
+    values[":p"] = data.permisos;
+  }
+  if (data.iniciales !== undefined) {
+    if (data.iniciales) {
+      sets.push("iniciales = :i");
+      values[":i"] = data.iniciales;
+    } else {
+      removes.push("iniciales");
+    }
+  }
+  if (data.gerencia !== undefined) {
+    if (data.gerencia) {
+      sets.push("gerencia = :g");
+      values[":g"] = data.gerencia;
+    } else {
+      removes.push("gerencia");
+    }
+  }
+
+  let expr = `SET ${sets.join(", ")}`;
+  if (removes.length > 0) expr += ` REMOVE ${removes.join(", ")}`;
+
+  await getDocClient().send(
+    new UpdateCommand({
+      TableName: TABLE(),
+      Key: { google_sub: googleSub },
+      UpdateExpression: expr,
+      ExpressionAttributeValues: values,
+    }),
+  );
+}
+
+/**
+ * Finds an active user by their iniciales (llave de cruce con el ERP legacy).
+ */
+export async function getUserByIniciales(iniciales: string): Promise<UserProfile | null> {
+  const all = await listUsers();
+  return all.find((u) => u.iniciales === iniciales.toUpperCase()) ?? null;
 }
 
 /**

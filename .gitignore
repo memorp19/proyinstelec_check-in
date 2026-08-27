@@ -35,3 +35,6 @@ coverage/
 apps/web/public/sw.js
 apps/web/public/workbox-*.js
 apps/web/public/worker-*.js
+
+# Temporales de sesión
+_to_delete_snapshots/

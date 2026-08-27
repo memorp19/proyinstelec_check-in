@@ -152,3 +152,47 @@ export async function getJornadasByUsuario(
   );
   return (result.Items ?? []) as Jornada[];
 }
+
+export async function getJornadasByUsuarioProyecto(
+  usuarioId: string,
+  proyectoId: string,
+): Promise<Jornada[]> {
+  const result = await getDocClient().send(
+    new QueryCommand({
+      TableName: TABLE(),
+      IndexName: "gsi2-usuario-ts",
+      KeyConditionExpression: "gsi2pk = :uid AND gsi2sk >= :from",
+      FilterExpression: "proyectoId = :pid AND estado = :cerrada",
+      ExpressionAttributeValues: {
+        ":uid": usuarioId,
+        ":from": "2020-01-01T00:00:00.000Z",
+        ":pid": proyectoId,
+        ":cerrada": "cerrada",
+      },
+      Limit: 200,
+    }),
+  );
+  return ((result.Items ?? []) as Jornada[]).sort(
+    (a, b) => b.checkIn.timestamp.localeCompare(a.checkIn.timestamp),
+  );
+}
+
+export async function getJornadasHistorialByUsuario(
+  usuarioId: string,
+): Promise<Jornada[]> {
+  const result = await getDocClient().send(
+    new QueryCommand({
+      TableName: TABLE(),
+      IndexName: "gsi2-usuario-ts",
+      KeyConditionExpression: "gsi2pk = :uid AND gsi2sk >= :from",
+      FilterExpression: "estado = :cerrada",
+      ExpressionAttributeValues: {
+        ":uid": usuarioId,
+        ":from": "2020-01-01T00:00:00.000Z",
+        ":cerrada": "cerrada",
+      },
+      Limit: 200,
+    }),
+  );
+  return (result.Items ?? []) as Jornada[];
+}
