@@ -182,7 +182,7 @@ export function AppShell({
   // ── DONE ──────────────────────────────────────────────────────────────────
   if (view === "done") {
     return (
-      <main className="min-h-screen bg-navy flex flex-col items-center justify-center px-6 gap-4 text-center">
+      <main className="min-h-screen bg-navy flex flex-col items-center justify-center px-6 pb-20 md:pb-6 gap-4 text-center">
         <div className="w-16 h-16 rounded-full bg-green/20 flex items-center justify-center">
           <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#10B981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="20 6 9 17 4 12" />
@@ -210,19 +210,9 @@ export function AppShell({
     return (
       <main className="min-h-screen bg-navy flex flex-col">
         {/* Header */}
-        <div className="px-5 pt-10 pb-5">
-          <div className="flex items-start justify-between mb-1">
+        <div className="px-5 pt-10 pb-5 w-full max-w-2xl mx-auto">
+          <div className="mb-1">
             <p className="font-mono text-[10px] text-white/40 uppercase tracking-widest">Bienvenido</p>
-            <button
-              onClick={() => router.push("/app/perfil")}
-              className="w-9 h-9 rounded-full bg-white/10 border border-white/10 flex items-center justify-center active:scale-95 transition-transform"
-              aria-label="Mi perfil"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-                <circle cx="12" cy="7" r="4" />
-              </svg>
-            </button>
           </div>
           <p className="font-head text-[34px] font-bold text-white leading-tight">{firstName}</p>
           <div className="inline-flex items-center gap-1.5 bg-white/10 rounded-full px-3 py-1 mt-2">
@@ -248,7 +238,7 @@ export function AppShell({
         </div>
 
         {/* Body */}
-        <div className="flex-1 px-4 pb-6 space-y-3">
+        <div className="flex-1 px-4 pb-24 md:pb-8 space-y-3 w-full max-w-2xl mx-auto">
           <OfflineBanner />
 
           <p className="font-mono text-[10px] text-white/40 uppercase tracking-widest">
@@ -318,7 +308,7 @@ export function AppShell({
     return (
       <main className="min-h-screen bg-navy flex flex-col">
         {/* Header with back button */}
-        <div className="px-5 pt-10 pb-5">
+        <div className="px-5 pt-10 pb-5 w-full max-w-2xl mx-auto">
           <button
             onClick={() => setView("dashboard")}
             className="flex items-center gap-1.5 text-white/50 font-mono text-xs mb-4 active:text-white transition-colors"
@@ -350,7 +340,7 @@ export function AppShell({
           </div>
         </div>
 
-        <div className="flex-1 px-4 pb-6 space-y-3">
+        <div className="flex-1 px-4 pb-24 md:pb-8 space-y-3 w-full max-w-2xl mx-auto">
           <OfflineBanner />
           <CheckinCard
             proyectoId={proyectoActual.id}
@@ -367,6 +357,7 @@ export function AppShell({
     <main className="min-h-screen bg-[#f0f4f8] flex flex-col">
       {/* Active header — gradient navy → blue */}
       <div className="bg-gradient-to-b from-navy via-[#0f2e8c] to-blue px-5 pt-10 pb-6">
+        <div className="max-w-2xl mx-auto">
         <p className="font-mono text-[10px] text-white/60 uppercase tracking-widest mb-1">
           Jornada activa
         </p>
@@ -387,10 +378,11 @@ export function AppShell({
         <p className="font-mono text-[10px] text-white/50 mt-2">
           Check-in: {checkInTime} · {proyectoActual?.nombre ?? ""}
         </p>
+        </div>
       </div>
 
       {/* Body */}
-      <div className="flex-1 px-4 py-4 space-y-3">
+      <div className="flex-1 px-4 py-4 pb-24 md:pb-8 space-y-3 max-w-2xl mx-auto w-full">
         <OfflineBanner />
         <CheckoutCard
           jornadaId={jornadaId!}

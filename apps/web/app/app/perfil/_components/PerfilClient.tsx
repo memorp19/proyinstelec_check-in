@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+
 import type { ProyectoStats } from "@/src/demo";
 import { ProyectoDetalle } from "./ProyectoDetalle";
 
@@ -48,7 +48,6 @@ function Initials({ nombre }: { nombre: string }) {
 }
 
 export function PerfilClient({ nombre, fotoUrl: initialFotoUrl, nickname: initialNickname, proyectosAsignados, proyectosNombres, historial }: Props) {
-  const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [fotoUrl, setFotoUrl] = useState(initialFotoUrl);
@@ -147,17 +146,7 @@ export function PerfilClient({ nombre, fotoUrl: initialFotoUrl, nickname: initia
   return (
     <main className="min-h-screen bg-navy flex flex-col">
       {/* Header */}
-      <div className="px-5 pt-10 pb-5">
-        <button
-          onClick={() => router.push("/app")}
-          className="flex items-center gap-1.5 text-white/50 font-mono text-xs mb-5 active:text-white transition-colors"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="15 18 9 12 15 6" />
-          </svg>
-          Inicio
-        </button>
-
+      <div className="px-5 pt-10 pb-5 w-full max-w-2xl mx-auto">
         <p className="font-mono text-[10px] text-white/40 uppercase tracking-widest mb-4">Mi perfil</p>
 
         {/* Avatar + identity */}
@@ -255,7 +244,7 @@ export function PerfilClient({ nombre, fotoUrl: initialFotoUrl, nickname: initia
       </div>
 
       {/* Body */}
-      <div className="flex-1 px-4 pb-8 space-y-5">
+      <div className="flex-1 px-4 pb-24 md:pb-8 space-y-5 w-full max-w-2xl mx-auto">
 
         {/* Proyectos activos */}
         <section>

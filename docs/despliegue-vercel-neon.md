@@ -41,18 +41,42 @@ administrador de Workspace con el scope `https://www.googleapis.com/auth/gmail.s
 
 ## 3. Proyecto en Vercel
 
+**Un solo proyecto.** Si el import se intentó varias veces, Vercel creó un proyecto
+por intento (`…-web`, `…-web-kmtb`, `…-web-l14g`, …). Conservar uno y borrar el
+resto en *Project Settings → Advanced → Delete Project*, para que no compitan por
+el mismo repositorio.
+
 1. *Add New → Project* → importar `memorp19/proyinstelec_check-in`.
-2. **Root Directory: `.`** (la raíz del monorepo — `vercel.json` ya apunta el
-   build a `apps/web`).
-3. Framework: Next.js. No hace falta tocar los comandos.
-4. Cargar las variables de entorno de `apps/web/.env.example`. Importante:
-   - `DATABASE_URL`: la rama `develop` de Neon en *Preview*, la rama `main` en *Production*.
+2. **Root Directory: `apps/web`** ← lo más importante. Este es un monorepo pnpm y
+   la app de Next.js vive ahí. Si se deja la raíz, el build falla con
+   *"No Next.js version detected"*, porque el `package.json` de la raíz no
+   depende de `next`. Se cambia en *Settings → General → Root Directory → Edit*.
+3. Framework Preset: **Next.js** (se detecta solo al fijar el Root Directory).
+   Dejar *Build Command*, *Output Directory* e *Install Command* en automático:
+   Vercel reconoce el workspace de pnpm e instala desde la raíz por su cuenta.
+   Por eso este repositorio **no** lleva `vercel.json`.
+4. Cargar las variables de entorno de `apps/web/.env.example`:
+   - `DATABASE_URL`: rama `develop` de Neon en *Preview*, rama `main` en *Production*.
    - `AUTH_SECRET`: `openssl rand -base64 32`.
-   - **No** definir `NEXTAUTH_URL` en Vercel (se detecta solo).
+   - **No** definir `NEXTAUTH_URL` ni `AUTH_URL` en Vercel (se detectan solos).
    - `DRIVE_SERVICE_ACCOUNT_KEY`: el JSON completo en una sola línea.
-5. Para desplegar la rama de feature sin tocar producción: *Settings → Git →
-   Production Branch* debe seguir siendo `main`; cada push a `feat/vercel-neon`
-   genera un preview con su propia URL.
+   - Sin `DATABASE_URL` y `AUTH_SECRET` el build sí pasa, pero la app responde 500
+     en cuanto toca la base o la sesión.
+5. *Settings → Git → Production Branch* debe seguir siendo `main`: así cada push a
+   `feat/vercel-neon` publica un preview y producción no se toca.
+
+### Login en los previews
+
+Cada deployment tiene una URL distinta, pero Vercel mantiene además un alias
+estable por rama:
+
+```
+https://<proyecto>-git-feat-vercel-neon-<equipo>.vercel.app
+```
+
+Esa es la URL que conviene agregar a las URIs de redirección de Google
+(`…/api/auth/callback/google`) para poder probar el login en la rama sin ir
+agregando una URL por cada commit.
 
 ## 4. Migraciones
 

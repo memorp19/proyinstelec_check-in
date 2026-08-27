@@ -38,12 +38,14 @@ PWA offline-first de registro de asistencia para trabajadores de campo de Proyin
 ├── scripts/
 │   ├── seed.ts               # Datos de desarrollo
 │   └── importar-erp.ts       # Importación desde los Sheets del sistema anterior
-├── docs/
-│   ├── despliegue-vercel-neon.md
-│   ├── plan-migracion-erp.md
-│   └── erp-legacy/           # Análisis del ERP en Apps Script
-└── vercel.json
+└── docs/
+    ├── despliegue-vercel-neon.md
+    ├── plan-migracion-erp.md
+    └── erp-legacy/           # Análisis del ERP en Apps Script
 ```
+
+En Vercel, el **Root Directory del proyecto debe ser `apps/web`** (monorepo pnpm);
+con eso la detección automática hace el resto y no hace falta `vercel.json`.
 
 ---
 

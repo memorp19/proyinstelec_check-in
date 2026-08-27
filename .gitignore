@@ -38,3 +38,5 @@ apps/web/public/worker-*.js
 
 # Temporales de sesión
 _to_delete_snapshots/
+.vercel
+.env*
