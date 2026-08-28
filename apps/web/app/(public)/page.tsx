@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { auth } from "@/src/auth";
 import { signOut } from "@/src/auth";
+import { AppHeader } from "../_components/AppHeader";
 
 const SECTIONS = [
   { href: "/app",     label: "App",     desc: "Check-in / Check-out de campo" },
@@ -25,7 +26,9 @@ export default async function Home() {
   const name = session.user.name?.split(" ")[0] ?? session.user.email;
 
   return (
-    <main className="min-h-screen bg-navy text-white flex flex-col items-center justify-center px-6 py-12">
+    <>
+      <AppHeader />
+      <main className="min-h-screen bg-navy text-white flex flex-col items-center justify-center px-6 py-12 pt-[72px]">
       <div className="w-full max-w-lg">
         {/* Header */}
         <div className="mb-8">

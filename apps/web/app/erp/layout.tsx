@@ -3,6 +3,73 @@ import { redirect } from "next/navigation";
 import { auth } from "@/src/auth";
 import { permisosEfectivos, tienePermiso } from "@/src/lib/permisos";
 import { MODULOS_ERP } from "./modulos";
+import { AppHeader } from "../_components/AppHeader";
+
+export default async function ErpLayout({ children }: { children: React.ReactNode }) {
+  const session = await auth();
+  if (!session) redirect("/unirse?callbackUrl=/erp");
+
+  const permisos = permisosEfectivos(session.user);
+  if (permisos.length === 0) redirect("/acceso-denegado");
+
+  const modulosVisibles = MODULOS_ERP.filter((m) => tienePermiso(session.user, m.permiso));
+
+  return (
+    <>
+      <AppHeader />
+      <div className="min-h-screen bg-navy text-white flex pt-[52px]">
+        {/* Sidebar — ERP modules */}
+        <aside className="hidden md:flex w-56 shrink-0 flex-col border-r border-white/10 p-3 gap-1">
+          <p className="font-mono text-[9px] uppercase tracking-widest text-white/30 px-2 py-1 mt-1 mb-1">
+            Módulos ERP
+          </p>
+
+          <Link
+            href="/erp"
+            className="rounded-lg px-3 py-2 text-sm bg-white/10 border border-white/10"
+          >
+            Inicio
+          </Link>
+
+          {modulosVisibles.map((m) =>
+            m.disponible ? (
+              <Link
+                key={m.key}
+                href={m.href}
+                className="rounded-lg px-3 py-2 text-sm text-white/80 hover:bg-white/10 hover:text-white transition-colors"
+              >
+                {m.titulo}
+              </Link>
+            ) : (
+              <span
+                key={m.key}
+                className="rounded-lg px-3 py-2 text-sm text-white/40 cursor-not-allowed flex items-center justify-between"
+                title={`Disponible en la Fase ${m.fase}`}
+              >
+                {m.titulo}
+                <span className="font-mono text-[9px] uppercase tracking-widest text-white/25">
+                  F{m.fase}
+                </span>
+              </span>
+            ),
+          )}
+
+          {tienePermiso(session.user, "cotizaciones.aprobar") && (
+            <Link
+              href="/erp/revision"
+              className="rounded-lg px-3 py-2 text-sm text-white/80 hover:bg-white/10 hover:text-white transition-colors"
+            >
+              Revisión
+            </Link>
+          )}
+        </aside>
+
+        {/* Contenido */}
+        <main className="flex-1 min-w-0 p-4 md:p-8">{children}</main>
+      </div>
+    </>
+  );
+}
 
 export default async function ErpLayout({ children }: { children: React.ReactNode }) {
   const session = await auth();

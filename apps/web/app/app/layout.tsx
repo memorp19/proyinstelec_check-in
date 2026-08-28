@@ -1,5 +1,6 @@
 import { auth } from "@/src/auth";
 import { redirect } from "next/navigation";
+import { AppHeader } from "../_components/AppHeader";
 import { NavBar } from "./components/NavBar";
 
 // Server-side guard — middleware already handles the redirect,
@@ -11,9 +12,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const isAdmin = session.user.rol === "admin";
 
   return (
-    <div className="md:pl-[72px]">
+    <>
+      <AppHeader />
       <NavBar isAdmin={isAdmin} />
-      {children}
-    </div>
+      <div className="pt-[52px]">{children}</div>
+    </>
   );
 }
