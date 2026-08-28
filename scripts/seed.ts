@@ -68,6 +68,15 @@ async function main() {
   });
 
   await sembrarUsuario({
+    email: "soporteit@proyinstelec.com",
+    nombre: "Soporte IT",
+    tipo: "admin",
+    rol: "admin",
+    iniciales: "SIT",
+    gerencia: "Dirección",
+  });
+
+  await sembrarUsuario({
     email: "admin@proyinstelec.mx",
     nombre: "Mario Rodríguez",
     tipo: "admin",

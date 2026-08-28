@@ -8,9 +8,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const session = await auth();
   if (!session) redirect("/unirse?callbackUrl=/app");
 
+  const isAdmin = session.user.rol === "admin";
+
   return (
     <div className="md:pl-[72px]">
-      <NavBar />
+      <NavBar isAdmin={isAdmin} />
       {children}
     </div>
   );

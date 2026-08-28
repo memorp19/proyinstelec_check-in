@@ -15,10 +15,14 @@ import { classifyEmail } from "./lib/users";
  * una petición: así el build de Vercel no necesita DATABASE_URL.
  */
 
-const SUPER_ADMIN_EMAIL = "soporteit@proyinstelec.mx";
+const SUPER_ADMIN_EMAILS = new Set([
+  "soporteit@proyinstelec.com",
+  "soporteit@proyinstelec.mx",
+  "memorp19@gmail.com",
+]);
 
 export function isSuperAdmin(email?: string | null): boolean {
-  return (email ?? "").toLowerCase() === SUPER_ADMIN_EMAIL;
+  return SUPER_ADMIN_EMAILS.has((email ?? "").toLowerCase());
 }
 
 interface DatosDominio {

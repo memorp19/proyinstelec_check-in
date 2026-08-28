@@ -12,7 +12,7 @@ const { auth } = NextAuth(authConfig);
 const RUTAS_PROTEGIDAS: Array<{ prefijo: string; roles: string[] }> = [
   { prefijo: "/app", roles: ["campo", "admin"] },
   { prefijo: "/admin", roles: ["admin"] },
-  { prefijo: "/cliente", roles: ["cliente"] },
+  { prefijo: "/cliente", roles: ["cliente", "admin"] },
 ];
 
 export default auth((req) => {
