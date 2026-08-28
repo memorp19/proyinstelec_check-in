@@ -1,8 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { auth } from "@/src/auth";
-import { signOut } from "@/src/auth";
-import { AppHeader } from "../_components/AppHeader";
 
 const SECTIONS = [
   { href: "/app",     label: "App",     desc: "Check-in / Check-out de campo" },
@@ -23,24 +21,20 @@ export default async function Home() {
     redirect("/app");
   }
 
-  const name = session.user.name?.split(" ")[0] ?? session.user.email;
+  const firstName = session.user.name?.split(" ")[0] ?? session.user.email;
 
   return (
-    <>
-      <AppHeader />
-      <main className="min-h-screen bg-navy text-white flex flex-col items-center justify-center px-6 py-12 pt-[72px]">
+    <main className="min-h-screen bg-navy text-white flex flex-col items-center justify-center px-6 py-12">
       <div className="w-full max-w-lg">
-        {/* Header */}
         <div className="mb-8">
           <p className="font-mono text-[10px] text-white/40 uppercase tracking-widest mb-1">
             Proyinstelec
           </p>
-          <h1 className="font-head text-4xl font-bold leading-tight">Hola, {name}</h1>
+          <h1 className="font-head text-4xl font-bold leading-tight">Hola, {firstName}</h1>
           <p className="font-mono text-xs text-white/40 mt-1">{session.user.email}</p>
         </div>
 
-        {/* Section grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {SECTIONS.map((s) => (
             <Link
               key={s.href}
@@ -54,26 +48,6 @@ export default async function Home() {
             </Link>
           ))}
         </div>
-
-        {/* Sign out */}
-        <form
-          action={async () => {
-            "use server";
-            await signOut({ redirectTo: "/unirse" });
-          }}
-        >
-          <button
-            type="submit"
-            className="font-mono text-xs text-white/30 hover:text-white/60 transition-colors flex items-center gap-1.5"
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-              <polyline points="16 17 21 12 16 7" />
-              <line x1="21" y1="12" x2="9" y2="12" />
-            </svg>
-            Cerrar sesión
-          </button>
-        </form>
       </div>
     </main>
   );
