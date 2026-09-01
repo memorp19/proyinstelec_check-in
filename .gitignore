@@ -40,3 +40,6 @@ apps/web/public/worker-*.js
 _to_delete_snapshots/
 .vercel
 .env*
+
+# Paquetes temporales de sincronización
+*.tgz

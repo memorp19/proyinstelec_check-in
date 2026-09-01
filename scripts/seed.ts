@@ -77,6 +77,15 @@ async function main() {
   });
 
   await sembrarUsuario({
+    email: "jorge.gutierrez@proyinstelec.mx",
+    nombre: "Jorge Gutiérrez",
+    tipo: "admin",
+    rol: "admin",
+    iniciales: "JOGU",
+    gerencia: "Dirección",
+  });
+
+  await sembrarUsuario({
     email: "admin@proyinstelec.mx",
     nombre: "Mario Rodríguez",
     tipo: "admin",

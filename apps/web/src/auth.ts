@@ -6,6 +6,7 @@ import { getDb } from "./db";
 import { users, accounts, sessions, verificationTokens } from "./db/schema";
 import { DEMO_MODE, getDemoPresetById } from "./demo";
 import { classifyEmail } from "./lib/users";
+import { esSuperAdmin } from "./lib/super-admins";
 
 /**
  * Instancia completa de Auth.js v5: la configuración compartida más el
@@ -15,15 +16,8 @@ import { classifyEmail } from "./lib/users";
  * una petición: así el build de Vercel no necesita DATABASE_URL.
  */
 
-const SUPER_ADMIN_EMAILS = new Set([
-  "soporteit@proyinstelec.com",
-  "soporteit@proyinstelec.mx",
-  "memorp19@gmail.com",
-]);
-
-export function isSuperAdmin(email?: string | null): boolean {
-  return SUPER_ADMIN_EMAILS.has((email ?? "").toLowerCase());
-}
+/** Re-exportado por comodidad: la lista vive en lib/super-admins.ts */
+export const isSuperAdmin = esSuperAdmin;
 
 interface DatosDominio {
   rol: "campo" | "admin" | "cliente";
@@ -103,7 +97,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth(() => ({
           token.odoo_sync ??= false;
           token.permisos ??= [];
         }
-        token.es_super_admin = isSuperAdmin(token.email);
+        token.es_super_admin = esSuperAdmin(token.email);
+        if (token.es_super_admin) {
+          token.rol = "admin";
+          token.tipo = "admin";
+        }
       }
 
       return token;
@@ -118,15 +116,17 @@ export const { handlers, auth, signIn, signOut } = NextAuth(() => ({
      */
     async createUser({ user }) {
       if (!user.id || !user.email) return;
-      const tipo = classifyEmail(user.email);
+      const superAdmin = esSuperAdmin(user.email);
+      const tipo = superAdmin ? "admin" : classifyEmail(user.email);
       const esPlanta = tipo === "planta";
       await getDb()
         .update(users)
         .set({
           tipo,
-          rol: "campo",
+          rol: superAdmin ? "admin" : "campo",
           odooSync: esPlanta,
-          perfilCompleto: esPlanta,
+          // Los administradores no llenan el formulario de alta de campo
+          perfilCompleto: superAdmin || esPlanta,
           updatedAt: new Date(),
         })
         .where(eq(users.id, user.id));

@@ -5,6 +5,7 @@ import type { Empresa, Proyecto } from "@/src/lib/proyectos";
 import type { DemoUser } from "@/src/demo";
 import type { UserProfile } from "@/src/lib/users";
 import { GRUPOS_PERMISOS } from "@/src/lib/permisos";
+import { esSuperAdmin as esCuentaSuperAdmin } from "@/src/lib/super-admins";
 
 type UsuarioRow = (Pick<UserProfile, "id" | "email" | "nombre" | "rol" | "tipo" | "proyectos_asignados" | "created_at"> | DemoUser) & {
   permisos?: string[];
@@ -348,8 +349,6 @@ function UsuariosTab({ usuariosIniciales }: { usuariosIniciales: UsuarioRow[] })
     }
   }
 
-  const SUPER_ADMIN_EMAIL = "soporteit@proyinstelec.mx";
-
   return (
     <div className="space-y-4">
       {/* Filter pills */}
@@ -385,7 +384,7 @@ function UsuariosTab({ usuariosIniciales }: { usuariosIniciales: UsuarioRow[] })
           </div>
         ) : (
           filtrados.map((u) => {
-            const isSuper = u.email.toLowerCase() === SUPER_ADMIN_EMAIL;
+            const isSuper = esCuentaSuperAdmin(u.email);
             const isLoading = loadingId === u.id;
             return (
               <div key={u.id} className="bg-white/10 border border-white/10 rounded-xl px-4 py-3">
