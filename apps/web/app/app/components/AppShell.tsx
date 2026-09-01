@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { CheckinCard } from "./CheckinCard";
 import { CheckoutCard } from "./CheckoutCard";
 import { OfflineBanner } from "./OfflineBanner";
@@ -88,6 +89,7 @@ export function AppShell({
   openJornadaProyectoId,
 }: AppShellProps) {
   const isDev = process.env.NODE_ENV === "development";
+  const router = useRouter();
 
   // If there's an open jornada on load, go directly to "active"
   const initialView: View = openJornadaId ? "active" : "dashboard";
@@ -102,7 +104,7 @@ export function AppShell({
   const [deviceLabel, setDeviceLabel] = useState("Detectando dispositivo…");
 
   // Restore from localStorage when server didn't return an open jornada
-  // (covers browser refresh when DynamoDB query fails or offline start)
+  // (covers browser refresh when the server query fails or offline start)
   useEffect(() => {
     if (openJornadaId) return; // server data is authoritative
     const cached = loadJornada();
@@ -119,7 +121,7 @@ export function AppShell({
 
   useEffect(() => {
     const d = getDeviceInfo();
-    const parts = [d.os, d.browser].filter(Boolean);
+    const parts = [d.platform, d.userAgent.split(" ")[0]].filter(Boolean);
     setDeviceLabel(parts.join(" · ") || "Dispositivo desconocido");
   }, []);
 
@@ -180,7 +182,7 @@ export function AppShell({
   // ── DONE ──────────────────────────────────────────────────────────────────
   if (view === "done") {
     return (
-      <main className="min-h-screen bg-navy flex flex-col items-center justify-center px-6 gap-4 text-center">
+      <main className="min-h-screen bg-navy flex flex-col items-center justify-center px-6 pb-20 md:pb-6 gap-4 text-center">
         <div className="w-16 h-16 rounded-full bg-green/20 flex items-center justify-center">
           <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#10B981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="20 6 9 17 4 12" />
@@ -208,8 +210,10 @@ export function AppShell({
     return (
       <main className="min-h-screen bg-navy flex flex-col">
         {/* Header */}
-        <div className="px-5 pt-10 pb-5">
-          <p className="font-mono text-[10px] text-white/40 uppercase tracking-widest mb-1">Bienvenido</p>
+        <div className="px-5 pt-10 pb-5 w-full max-w-2xl mx-auto">
+          <div className="mb-1">
+            <p className="font-mono text-[10px] text-white/40 uppercase tracking-widest">Bienvenido</p>
+          </div>
           <p className="font-head text-[34px] font-bold text-white leading-tight">{firstName}</p>
           <div className="inline-flex items-center gap-1.5 bg-white/10 rounded-full px-3 py-1 mt-2">
             <span className="w-2 h-2 rounded-full bg-amber" />
@@ -234,7 +238,7 @@ export function AppShell({
         </div>
 
         {/* Body */}
-        <div className="flex-1 px-4 pb-6 space-y-3">
+        <div className="flex-1 px-4 pb-24 md:pb-8 space-y-3 w-full max-w-2xl mx-auto">
           <OfflineBanner />
 
           <p className="font-mono text-[10px] text-white/40 uppercase tracking-widest">
@@ -304,7 +308,7 @@ export function AppShell({
     return (
       <main className="min-h-screen bg-navy flex flex-col">
         {/* Header with back button */}
-        <div className="px-5 pt-10 pb-5">
+        <div className="px-5 pt-10 pb-5 w-full max-w-2xl mx-auto">
           <button
             onClick={() => setView("dashboard")}
             className="flex items-center gap-1.5 text-white/50 font-mono text-xs mb-4 active:text-white transition-colors"
@@ -336,7 +340,7 @@ export function AppShell({
           </div>
         </div>
 
-        <div className="flex-1 px-4 pb-6 space-y-3">
+        <div className="flex-1 px-4 pb-24 md:pb-8 space-y-3 w-full max-w-2xl mx-auto">
           <OfflineBanner />
           <CheckinCard
             proyectoId={proyectoActual.id}
@@ -353,6 +357,7 @@ export function AppShell({
     <main className="min-h-screen bg-[#f0f4f8] flex flex-col">
       {/* Active header — gradient navy → blue */}
       <div className="bg-gradient-to-b from-navy via-[#0f2e8c] to-blue px-5 pt-10 pb-6">
+        <div className="max-w-2xl mx-auto">
         <p className="font-mono text-[10px] text-white/60 uppercase tracking-widest mb-1">
           Jornada activa
         </p>
@@ -373,10 +378,11 @@ export function AppShell({
         <p className="font-mono text-[10px] text-white/50 mt-2">
           Check-in: {checkInTime} · {proyectoActual?.nombre ?? ""}
         </p>
+        </div>
       </div>
 
       {/* Body */}
-      <div className="flex-1 px-4 py-4 space-y-3">
+      <div className="flex-1 px-4 py-4 pb-24 md:pb-8 space-y-3 max-w-2xl mx-auto w-full">
         <OfflineBanner />
         <CheckoutCard
           jornadaId={jornadaId!}

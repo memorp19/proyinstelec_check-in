@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/src/auth";
+import { auth } from "@/src/auth";
 import { getJornada, closeJornada } from "@/src/lib/jornadas";
 import { syncToOdooAsync } from "@/src/lib/odoo";
 import type { DeviceInfo } from "@/src/lib/device-info";
@@ -10,14 +9,14 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: { jornadaId: string } },
 ) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   if (!session) {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }
 
   const { jornadaId } = params;
 
-  // In demo mode skip DynamoDB and return mock checkout data
+  // In demo mode skip the database and return mock checkout data
   if (DEMO_MODE) {
     return NextResponse.json({ jornadaId, duracionMinutos: 480 }, { status: 200 });
   }
@@ -73,6 +72,7 @@ export async function PATCH(
   // Update Odoo with check_out time
   if (session.user.odoo_sync && session.user.email) {
     syncToOdooAsync({
+      usuarioId: session.user.id,
       email: session.user.email,
       jornadaId,
       checkIn: jornada.checkIn.timestamp,

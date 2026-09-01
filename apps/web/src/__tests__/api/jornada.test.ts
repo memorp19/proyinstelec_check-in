@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
 
-vi.mock("next-auth", () => ({ getServerSession: vi.fn() }));
-vi.mock("@/src/auth", () => ({ authOptions: {} }));
+vi.mock("@/src/auth", () => ({ auth: vi.fn() }));
+vi.mock("@/src/lib/users", () => ({ getUserById: vi.fn() }));
 vi.mock("@/src/lib/jornadas", () => ({
   createJornada: vi.fn(),
   getJornada: vi.fn(),
@@ -14,7 +14,11 @@ vi.mock("@/src/lib/device-info", () => ({
   getDeviceInfo: vi.fn().mockReturnValue({ userAgent: "test", platform: "test", screenWidth: 390, screenHeight: 844, language: "es-MX" }),
 }));
 
-import { getServerSession } from "next-auth";
+import { auth } from "@/src/auth";
+
+/** `auth()` está sobrecargada en Auth.js v5; el cast deja usarla como mock simple. */
+const mockAuth = auth as unknown as ReturnType<typeof vi.fn>;
+import { getUserById } from "@/src/lib/users";
 import { createJornada, getJornada, closeJornada, getOpenJornada } from "@/src/lib/jornadas";
 import { syncToOdooAsync } from "@/src/lib/odoo";
 import { POST } from "@/app/api/jornada/route";
@@ -64,7 +68,11 @@ function makeRequest(url: string, body: unknown): NextRequest {
   });
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  // Las asignaciones se leen de la base, no del token de sesión.
+  vi.mocked(getUserById).mockResolvedValue({ proyectos_asignados: ["proj-1"] } as any);
+});
 
 // ── POST /api/jornada ─────────────────────────────────────────────────────────
 
@@ -75,13 +83,13 @@ describe("POST /api/jornada (check-in)", () => {
   });
 
   it("returns 401 when not authenticated", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(null);
+    mockAuth.mockResolvedValue(null);
     const res = await POST(makeRequest("http://localhost/api/jornada", VALID_CHECKIN_BODY));
     expect(res.status).toBe(401);
   });
 
   it("returns 409 when user already has an open jornada", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(PLANTA_SESSION as any);
+    mockAuth.mockResolvedValue(PLANTA_SESSION as any);
     vi.mocked(getOpenJornada).mockResolvedValue({ id: "existing" } as any);
 
     const res = await POST(makeRequest("http://localhost/api/jornada", VALID_CHECKIN_BODY));
@@ -89,7 +97,7 @@ describe("POST /api/jornada (check-in)", () => {
   });
 
   it("creates jornada and returns 201 with jornadaId for planta", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(PLANTA_SESSION as any);
+    mockAuth.mockResolvedValue(PLANTA_SESSION as any);
 
     const res = await POST(makeRequest("http://localhost/api/jornada", VALID_CHECKIN_BODY));
     expect(res.status).toBe(201);
@@ -98,7 +106,7 @@ describe("POST /api/jornada (check-in)", () => {
   });
 
   it("fires Odoo sync for planta workers", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(PLANTA_SESSION as any);
+    mockAuth.mockResolvedValue(PLANTA_SESSION as any);
 
     await POST(makeRequest("http://localhost/api/jornada", VALID_CHECKIN_BODY));
     expect(syncToOdooAsync).toHaveBeenCalledOnce();
@@ -108,14 +116,14 @@ describe("POST /api/jornada (check-in)", () => {
   });
 
   it("does NOT fire Odoo sync for temporal workers", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(TEMPORAL_SESSION as any);
+    mockAuth.mockResolvedValue(TEMPORAL_SESSION as any);
 
     await POST(makeRequest("http://localhost/api/jornada", VALID_CHECKIN_BODY));
     expect(syncToOdooAsync).not.toHaveBeenCalled();
   });
 
   it("returns 403 when temporal tries to check in to unassigned project", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(TEMPORAL_SESSION as any);
+    mockAuth.mockResolvedValue(TEMPORAL_SESSION as any);
 
     const res = await POST(
       makeRequest("http://localhost/api/jornada", { ...VALID_CHECKIN_BODY, proyectoId: "proj-not-assigned" }),
@@ -124,14 +132,14 @@ describe("POST /api/jornada (check-in)", () => {
   });
 
   it("returns 400 when required fields are missing", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(PLANTA_SESSION as any);
+    mockAuth.mockResolvedValue(PLANTA_SESSION as any);
 
     const res = await POST(makeRequest("http://localhost/api/jornada", { proyectoId: "p1" }));
     expect(res.status).toBe(400);
   });
 
   it("sets uploadStatus to 'pendiente' when no driveFileId provided (offline case)", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(PLANTA_SESSION as any);
+    mockAuth.mockResolvedValue(PLANTA_SESSION as any);
     const { driveFileId: _, ...noFile } = VALID_CHECKIN_BODY.checkIn;
 
     await POST(makeRequest("http://localhost/api/jornada", { ...VALID_CHECKIN_BODY, checkIn: noFile }));
@@ -179,26 +187,26 @@ describe("PATCH /api/jornada/:id (check-out)", () => {
   }
 
   it("returns 401 when not authenticated", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(null);
+    mockAuth.mockResolvedValue(null);
     const res = await PATCH(makePatchRequest(VALID_CHECKOUT_BODY), { params: { jornadaId: "jornada-abc" } });
     expect(res.status).toBe(401);
   });
 
   it("returns 404 when jornada not found", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(PLANTA_SESSION as any);
+    mockAuth.mockResolvedValue(PLANTA_SESSION as any);
     vi.mocked(getJornada).mockResolvedValue(null);
     const res = await PATCH(makePatchRequest(VALID_CHECKOUT_BODY), { params: { jornadaId: "ghost" } });
     expect(res.status).toBe(404);
   });
 
   it("returns 403 when user tries to close another user's jornada", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({ user: { ...PLANTA_SESSION.user, id: "other-user" } } as any);
+    mockAuth.mockResolvedValue({ user: { ...PLANTA_SESSION.user, id: "other-user" } } as any);
     const res = await PATCH(makePatchRequest(VALID_CHECKOUT_BODY), { params: { jornadaId: "jornada-abc" } });
     expect(res.status).toBe(403);
   });
 
   it("returns duracionMinutos on success", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(PLANTA_SESSION as any);
+    mockAuth.mockResolvedValue(PLANTA_SESSION as any);
     const res = await PATCH(makePatchRequest(VALID_CHECKOUT_BODY), { params: { jornadaId: "jornada-abc" } });
     expect(res.status).toBe(200);
     const json = await res.json();
@@ -206,7 +214,7 @@ describe("PATCH /api/jornada/:id (check-out)", () => {
   });
 
   it("returns 409 when jornada is already closed", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(PLANTA_SESSION as any);
+    mockAuth.mockResolvedValue(PLANTA_SESSION as any);
     vi.mocked(getJornada).mockResolvedValue({ ...OPEN_JORNADA, estado: "cerrada" } as any);
     const res = await PATCH(makePatchRequest(VALID_CHECKOUT_BODY), { params: { jornadaId: "jornada-abc" } });
     expect(res.status).toBe(409);

@@ -1,5 +1,4 @@
 import { google, type drive_v3 } from "googleapis";
-import { SSMClient, GetParameterCommand } from "@aws-sdk/client-ssm";
 import { createHash } from "crypto";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -20,51 +19,35 @@ interface DriveConfig {
 
 let _cachedConfig: DriveConfig | null = null;
 
+/**
+ * Credenciales del service account de Google Drive.
+ * En Vercel se definen como variables de entorno del proyecto (Settings →
+ * Environment Variables); en local, en apps/web/.env.local.
+ */
 async function getDriveConfig(): Promise<DriveConfig> {
   if (_cachedConfig) return _cachedConfig;
 
-  // Local dev shortcut — set DRIVE_SERVICE_ACCOUNT_KEY (JSON) and DRIVE_ROOT_FOLDER_ID in .env.local
-  // to bypass SSM entirely.
-  if (process.env.DRIVE_SERVICE_ACCOUNT_KEY && process.env.DRIVE_ROOT_FOLDER_ID) {
-    let parsed: { client_email: string; private_key: string };
-    try {
-      parsed = JSON.parse(process.env.DRIVE_SERVICE_ACCOUNT_KEY);
-    } catch {
-      throw new Error("DRIVE_SERVICE_ACCOUNT_KEY env var is not valid JSON");
-    }
-    _cachedConfig = {
-      serviceAccountEmail: parsed.client_email,
-      privateKey: parsed.private_key,
-      rootFolderId: process.env.DRIVE_ROOT_FOLDER_ID,
-    };
-    return _cachedConfig;
+  const keyJson = process.env.DRIVE_SERVICE_ACCOUNT_KEY;
+  const rootFolderId = process.env.DRIVE_ROOT_FOLDER_ID;
+  if (!keyJson || !rootFolderId) {
+    throw new Error(
+      "Faltan DRIVE_SERVICE_ACCOUNT_KEY y/o DRIVE_ROOT_FOLDER_ID (ver docs/setup-google-drive.md)",
+    );
   }
-
-  const ssm = new SSMClient({ region: process.env.AWS_REGION ?? "us-east-1" });
-  const get = async (name: string) => {
-    const r = await ssm.send(new GetParameterCommand({ Name: name, WithDecryption: true }));
-    return r.Parameter?.Value ?? "";
-  };
-
-  const keyJson = await get(
-    process.env.DRIVE_SERVICE_ACCOUNT_KEY_PARAM ?? "/proyinstelec/drive/service-account-key",
-  );
 
   let parsed: { client_email: string; private_key: string };
   try {
     parsed = JSON.parse(keyJson);
   } catch {
-    throw new Error("DRIVE_SERVICE_ACCOUNT_KEY is not valid JSON");
+    throw new Error("DRIVE_SERVICE_ACCOUNT_KEY no es un JSON válido");
   }
 
   _cachedConfig = {
     serviceAccountEmail: parsed.client_email,
-    privateKey: parsed.private_key,
-    rootFolderId: await get(
-      process.env.DRIVE_ROOT_FOLDER_ID_PARAM ?? "/proyinstelec/drive/root-folder-id",
-    ),
+    // Vercel guarda los saltos de línea escapados: hay que restaurarlos.
+    privateKey: parsed.private_key.replace(/\\n/g, "\n"),
+    rootFolderId,
   };
-
   return _cachedConfig;
 }
 
@@ -74,7 +57,7 @@ export function _resetDriveConfigCache() {
 
 // ── Drive client ──────────────────────────────────────────────────────────────
 
-async function getDriveClient(): Promise<drive_v3.Drive> {
+export async function getDriveClient(): Promise<drive_v3.Drive> {
   const config = await getDriveConfig();
 
   const auth = new google.auth.JWT({
@@ -181,6 +164,31 @@ export async function uploadFile(params: {
  */
 export function getThumbnailUrl(driveFileId: string, width = 400): string {
   return `https://drive.google.com/thumbnail?id=${driveFileId}&sz=w${width}`;
+}
+
+// ── Project folder creation ───────────────────────────────────────────────────
+
+/**
+ * Creates the canonical folder hierarchy for a project:
+ * {root} / Empresas / {empresaNombre} / {proyectoNombre}
+ *
+ * Idempotent — safe to call multiple times. Returns the project folder ID.
+ */
+export async function createEmpresaProyectoFolder(params: {
+  empresaNombre: string;
+  proyectoNombre: string;
+}): Promise<{ folderId: string; folderUrl: string }> {
+  const config = await getDriveConfig();
+  const drive = await getDriveClient();
+
+  const empresasRoot = await getOrCreateFolder(drive, "Empresas", config.rootFolderId);
+  const empresaFolder = await getOrCreateFolder(drive, params.empresaNombre, empresasRoot);
+  const proyectoFolderId = await getOrCreateFolder(drive, params.proyectoNombre, empresaFolder);
+
+  return {
+    folderId: proyectoFolderId,
+    folderUrl: `https://drive.google.com/drive/folders/${proyectoFolderId}`,
+  };
 }
 
 // ── High-level upload helper (used by the API route) ─────────────────────────

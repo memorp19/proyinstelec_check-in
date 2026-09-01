@@ -1,6 +1,5 @@
 import { redirect } from "next/navigation";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/src/auth";
+import { auth } from "@/src/auth";
 import { CompletarPerfilForm } from "./_components/CompletarPerfilForm";
 
 interface Props {
@@ -8,7 +7,7 @@ interface Props {
 }
 
 export default async function CompletarPerfilPage({ searchParams }: Props) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
 
   if (!session) {
     redirect("/unirse");

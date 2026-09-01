@@ -1,10 +1,33 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("@/src/lib/dynamo-client", () => ({ getDocClient: vi.fn() }));
-vi.mock("uuid", () => ({ v4: () => "fixed-uuid-1234" }));
+vi.mock("@/src/db", () => ({ getDb: vi.fn() }));
 
-import { getDocClient } from "@/src/lib/dynamo-client";
-import { createJornada, closeJornada, getJornada, getOpenJornada } from "@/src/lib/jornadas";
+import { getDb } from "@/src/db";
+import {
+  aJornada,
+  createJornada,
+  closeJornada,
+  getJornada,
+  getOpenJornada,
+} from "@/src/lib/jornadas";
+
+/** Encadenado falso de Drizzle: el `await` final entrega el siguiente resultado. */
+function fakeDb(resultados: unknown[][]) {
+  const cola = [...resultados];
+  const chain: any = new Proxy(
+    {},
+    {
+      get(_t, prop) {
+        if (prop === "then") {
+          const filas = cola.shift() ?? [];
+          return (resolve: (v: unknown) => void) => resolve(filas);
+        }
+        return () => chain;
+      },
+    },
+  );
+  return chain;
+}
 
 const DEVICE_INFO = {
   userAgent: "test-agent",
@@ -22,16 +45,89 @@ const CHECK_IN = {
   deviceInfo: DEVICE_INFO,
 };
 
-function makeClient(sendResult: unknown) {
-  return { send: vi.fn().mockResolvedValue(sendResult) };
+function filaAbierta(over: Record<string, unknown> = {}) {
+  return {
+    id: "jornada-001",
+    usuarioId: "user-001",
+    proyectoId: "proyecto-001",
+    tipo: "planta",
+    estado: "abierta",
+    checkinTs: new Date(CHECK_IN.timestamp),
+    checkinLat: CHECK_IN.lat,
+    checkinLng: CHECK_IN.lng,
+    checkinPrecision: 8,
+    checkinDriveFileId: "file-in",
+    checkinDriveUrl: "https://drive/in",
+    checkinFotoHash: "hash-in",
+    checkinUploadStatus: "ok",
+    checkinDevice: DEVICE_INFO,
+    checkoutTs: null,
+    checkoutLat: null,
+    checkoutLng: null,
+    checkoutPrecision: null,
+    checkoutDriveFileId: null,
+    checkoutDriveUrl: null,
+    checkoutFotoHash: null,
+    checkoutUploadStatus: null,
+    checkoutDevice: null,
+    observaciones: null,
+    duracionMinutos: null,
+    createdAt: new Date(CHECK_IN.timestamp),
+    ...over,
+  };
 }
 
 beforeEach(() => vi.clearAllMocks());
 
+// ── Mapeo fila → Jornada ──────────────────────────────────────────────────────
+
+describe("aJornada", () => {
+  it("anida las columnas planas de check-in", () => {
+    const j = aJornada(filaAbierta() as any);
+    expect(j.checkIn).toEqual({
+      timestamp: "2026-05-14T09:41:00.000Z",
+      lat: 19.4284,
+      lng: -99.1946,
+      precision: 8,
+      driveFileId: "file-in",
+      driveWebViewLink: "https://drive/in",
+      fotoHash: "hash-in",
+      uploadStatus: "ok",
+      deviceInfo: DEVICE_INFO,
+    });
+    expect(j.checkOut).toBeUndefined();
+    expect(j.duracionMinutos).toBeUndefined();
+  });
+
+  it("arma checkOut sólo cuando hay checkoutTs", () => {
+    const j = aJornada(
+      filaAbierta({
+        estado: "cerrada",
+        checkoutTs: new Date("2026-05-14T17:41:00.000Z"),
+        checkoutLat: 19.43,
+        checkoutLng: -99.19,
+        checkoutPrecision: 10,
+        observaciones: "Se entregó el tablero",
+        duracionMinutos: 480,
+      }) as any,
+    );
+    expect(j.checkOut?.timestamp).toBe("2026-05-14T17:41:00.000Z");
+    expect(j.checkOut?.observaciones).toBe("Se entregó el tablero");
+    expect(j.duracionMinutos).toBe(480);
+  });
+
+  it("no expone llaves de la tabla anterior", () => {
+    const j = aJornada(filaAbierta() as any);
+    expect(j).not.toHaveProperty("pk");
+    expect(j).not.toHaveProperty("gsi1pk");
+  });
+});
+
+// ── Escrituras ────────────────────────────────────────────────────────────────
+
 describe("createJornada", () => {
-  it("puts an item with correct pk/sk and GSI keys", async () => {
-    const mockSend = vi.fn().mockResolvedValue({});
-    vi.mocked(getDocClient).mockReturnValue({ send: mockSend } as any);
+  it("devuelve la jornada abierta con el check-in anidado", async () => {
+    vi.mocked(getDb).mockReturnValue(fakeDb([[filaAbierta()]]));
 
     const jornada = await createJornada({
       usuarioId: "user-001",
@@ -40,78 +136,69 @@ describe("createJornada", () => {
       checkIn: CHECK_IN,
     });
 
-    expect(jornada.id).toBe("fixed-uuid-1234");
-    expect(jornada.pk).toBe("JORNADA#fixed-uuid-1234");
-    expect(jornada.sk).toBe("#METADATA");
-    expect(jornada.gsi1pk).toBe("proyecto-001");
-    expect(jornada.gsi2pk).toBe("user-001");
+    expect(jornada.id).toBe("jornada-001");
     expect(jornada.estado).toBe("abierta");
-
-    const cmd = mockSend.mock.calls[0][0];
-    expect(cmd.input.TableName).toBe("proyinstelec-main");
-    expect(cmd.input.Item.pk).toBe("JORNADA#fixed-uuid-1234");
+    expect(jornada.checkIn.timestamp).toBe(CHECK_IN.timestamp);
   });
 });
 
 describe("closeJornada", () => {
-  it("calculates duracionMinutos correctly", async () => {
-    const mockSend = vi.fn().mockResolvedValue({});
-    vi.mocked(getDocClient).mockReturnValue({ send: mockSend } as any);
+  const checkOut = {
+    timestamp: "2026-05-14T17:41:00.000Z", // 8 horas después del check-in
+    lat: 19.4284,
+    lng: -99.1946,
+    precision: 10,
+    deviceInfo: DEVICE_INFO,
+  };
 
-    const checkOut = {
-      timestamp: "2026-05-14T17:41:00.000Z", // 8 hours after check-in
-      lat: 19.4284,
-      lng: -99.1946,
-      precision: 10,
-      deviceInfo: DEVICE_INFO,
-    };
-
-    const minutos = await closeJornada("fixed-uuid-1234", checkOut, CHECK_IN.timestamp);
-    expect(minutos).toBe(480); // 8 * 60
+  it("calcula la duración en minutos", async () => {
+    vi.mocked(getDb).mockReturnValue(fakeDb([[{ id: "jornada-001" }]]));
+    expect(await closeJornada("jornada-001", checkOut, CHECK_IN.timestamp)).toBe(480);
   });
 
-  it("sends UpdateCommand with ConditionExpression to prevent double close", async () => {
-    const mockSend = vi.fn().mockResolvedValue({});
-    vi.mocked(getDocClient).mockReturnValue({ send: mockSend } as any);
-
-    await closeJornada(
-      "j-id",
-      { ...{ timestamp: "2026-05-14T17:00:00.000Z", lat: 0, lng: 0, precision: 5, deviceInfo: DEVICE_INFO } },
+  it("redondea los segundos sueltos al minuto más cercano", async () => {
+    vi.mocked(getDb).mockReturnValue(fakeDb([[{ id: "jornada-001" }]]));
+    const minutos = await closeJornada(
+      "jornada-001",
+      { ...checkOut, timestamp: "2026-05-14T10:11:40.000Z" }, // 30m 40s
       CHECK_IN.timestamp,
     );
+    expect(minutos).toBe(31);
+  });
 
-    const cmd = mockSend.mock.calls[0][0];
-    expect(cmd.input.ConditionExpression).toContain("abierta");
-    expect(cmd.input.ExpressionAttributeValues[":e"]).toBe("cerrada");
+  it("lanza cuando la jornada ya estaba cerrada (guarda de estado)", async () => {
+    vi.mocked(getDb).mockReturnValue(fakeDb([[]]));
+    await expect(closeJornada("jornada-001", checkOut, CHECK_IN.timestamp)).rejects.toThrow(
+      /ya fue cerrada/,
+    );
   });
 });
 
-describe("getJornada", () => {
-  it("returns the jornada when found", async () => {
-    const mockItem = { id: "j1", estado: "abierta" };
-    vi.mocked(getDocClient).mockReturnValue(makeClient({ Item: mockItem }) as any);
+// ── Lecturas ──────────────────────────────────────────────────────────────────
 
-    const result = await getJornada("j1");
-    expect(result?.id).toBe("j1");
+describe("getJornada", () => {
+  it("devuelve la jornada mapeada cuando existe", async () => {
+    vi.mocked(getDb).mockReturnValue(fakeDb([[filaAbierta()]]));
+    const result = await getJornada("jornada-001");
+    expect(result?.id).toBe("jornada-001");
+    expect(result?.checkIn.lat).toBe(19.4284);
   });
 
-  it("returns null when not found", async () => {
-    vi.mocked(getDocClient).mockReturnValue(makeClient({ Item: undefined }) as any);
-    expect(await getJornada("ghost")).toBeNull();
+  it("devuelve null cuando no existe", async () => {
+    vi.mocked(getDb).mockReturnValue(fakeDb([[]]));
+    expect(await getJornada("fantasma")).toBeNull();
   });
 });
 
 describe("getOpenJornada", () => {
-  it("returns the first open jornada", async () => {
-    const mockJornada = { id: "open-j", estado: "abierta" };
-    vi.mocked(getDocClient).mockReturnValue(makeClient({ Items: [mockJornada] }) as any);
-
+  it("devuelve la jornada abierta del día", async () => {
+    vi.mocked(getDb).mockReturnValue(fakeDb([[filaAbierta()]]));
     const result = await getOpenJornada("user-001");
     expect(result?.estado).toBe("abierta");
   });
 
-  it("returns null when no open jornada today", async () => {
-    vi.mocked(getDocClient).mockReturnValue(makeClient({ Items: [] }) as any);
+  it("devuelve null cuando no hay jornada abierta hoy", async () => {
+    vi.mocked(getDb).mockReturnValue(fakeDb([[]]));
     expect(await getOpenJornada("user-001")).toBeNull();
   });
 });

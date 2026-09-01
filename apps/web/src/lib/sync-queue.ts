@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from "uuid";
+
 import {
   addToQueue,
   getPendingItems,
@@ -11,7 +11,7 @@ import {
 // ── Enqueue ───────────────────────────────────────────────────────────────────
 
 export async function enqueue(type: SyncItemType, payload: unknown): Promise<string> {
-  const id = uuidv4();
+  const id = crypto.randomUUID();
   await addToQueue({
     id,
     type,

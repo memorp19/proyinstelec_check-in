@@ -7,7 +7,7 @@ export function DemoSignInButton() {
 
   async function handleClick() {
     setLoading(true);
-    await signIn("demo", { callbackUrl: "/app" });
+    await signIn("demo", { demoRole: "user", callbackUrl: "/app" });
   }
 
   return (

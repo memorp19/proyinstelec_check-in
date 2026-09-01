@@ -1,38 +1,38 @@
 import "next-auth";
 import "next-auth/jwt";
 
+type Rol = "campo" | "admin" | "cliente";
+type Tipo = "planta" | "temporal" | "admin" | "cliente";
+
 declare module "next-auth" {
   interface Session {
     user: {
-      id: string;           // google_sub
+      id: string;
       name?: string | null;
       email?: string | null;
       image?: string | null;
-      rol: "campo" | "admin" | "cliente";
-      tipo: "planta" | "temporal" | "admin" | "cliente";
+      rol: Rol;
+      tipo: Tipo;
+      es_super_admin: boolean;
       perfil_completo: boolean;
-      proyectos_asignados: string[];
       odoo_sync: boolean;
+      permisos: string[];
+      iniciales?: string;
+      gerencia?: string;
     };
-  }
-
-  interface User {
-    id: string;             // google_sub
-    rol?: "campo" | "admin" | "cliente";
-    tipo?: "planta" | "temporal" | "admin" | "cliente";
-    perfil_completo?: boolean;
-    proyectos_asignados?: string[];
-    odoo_sync?: boolean;
   }
 }
 
 declare module "next-auth/jwt" {
   interface JWT {
-    sub: string;            // google_sub — always present after Google auth
-    rol: "campo" | "admin" | "cliente";
-    tipo: "planta" | "temporal" | "admin" | "cliente";
-    perfil_completo: boolean;
-    proyectos_asignados: string[];
-    odoo_sync: boolean;
+    sub?: string;
+    rol: Rol;
+    tipo: Tipo;
+    es_super_admin?: boolean;
+    perfil_completo?: boolean;
+    odoo_sync?: boolean;
+    permisos?: string[];
+    iniciales?: string;
+    gerencia?: string;
   }
 }

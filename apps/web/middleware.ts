@@ -1,69 +1,62 @@
+import NextAuth from "next-auth";
 import { NextResponse } from "next/server";
-import type { NextRequest } from "next/server";
-import { getToken } from "next-auth/jwt";
+import { authConfig } from "@/src/auth.config";
 
-// ── Route protection table ────────────────────────────────────────────────────
-// Each entry: path prefix → required rol values (OR logic).
-const PROTECTED_ROUTES: Array<{ prefix: string; roles: string[] }> = [
-  { prefix: "/app", roles: ["campo", "admin"] },
-  { prefix: "/admin", roles: ["admin"] },
-  { prefix: "/cliente", roles: ["cliente"] },
+/**
+ * Protección de rutas en el runtime edge. Usa la configuración sin adaptador:
+ * aquí sólo se verifica el token de sesión, nunca se consulta la base.
+ */
+const { auth } = NextAuth(authConfig);
+
+/** Prefijo de ruta → roles admitidos (OR). */
+const RUTAS_PROTEGIDAS: Array<{ prefijo: string; roles: string[] }> = [
+  { prefijo: "/app", roles: ["campo", "admin"] },
+  { prefijo: "/admin", roles: ["admin"] },
+  { prefijo: "/cliente", roles: ["cliente", "admin"] },
 ];
 
-// Routes that require auth but no specific role (handled separately)
-const AUTH_REQUIRED_PREFIXES = ["/app", "/admin", "/cliente", "/unirse"];
+export default auth((req) => {
+  const { pathname } = req.nextUrl;
+  const sesion = req.auth;
 
-export async function middleware(request: NextRequest) {
-  const { pathname } = request.nextUrl;
-
-  // Skip static assets and next-auth internal routes
-  if (
-    pathname.startsWith("/_next") ||
-    pathname.startsWith("/api/auth") ||
-    pathname.startsWith("/favicon")
-  ) {
-    return NextResponse.next();
-  }
-
-  const requiresAuth = AUTH_REQUIRED_PREFIXES.some((p) => pathname.startsWith(p));
-  if (!requiresAuth) return NextResponse.next();
-
-  // /unirse is special: accessible without auth (it's the entry point for temporales)
+  // /unirse es la puerta de entrada: siempre accesible
   if (pathname.startsWith("/unirse")) return NextResponse.next();
 
-  const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
-
-  if (!token) {
-    // Not authenticated — redirect to sign-in with return URL
-    const signIn = new URL("/unirse", request.url);
-    signIn.searchParams.set("callbackUrl", pathname);
-    return NextResponse.redirect(signIn);
+  if (!sesion?.user) {
+    const login = new URL("/unirse", req.nextUrl.origin);
+    login.searchParams.set("callbackUrl", pathname);
+    return NextResponse.redirect(login);
   }
 
-  // Temporales who haven't completed the onboarding form must do so before anything else
-  if (token.perfil_completo === false && !pathname.startsWith("/unirse")) {
-    return NextResponse.redirect(new URL("/unirse/completar-perfil", request.url));
+  // Los temporales completan su alta antes de cualquier otra cosa
+  if (sesion.user.perfil_completo === false) {
+    return NextResponse.redirect(new URL("/unirse/completar-perfil", req.nextUrl.origin));
   }
 
-  // Role-based access
-  for (const route of PROTECTED_ROUTES) {
-    if (pathname.startsWith(route.prefix)) {
-      if (!route.roles.includes(token.rol as string)) {
-        // Authenticated but wrong role — show a 403-equivalent page
-        return NextResponse.redirect(new URL("/acceso-denegado", request.url));
+  // ERP: admins, super admin o cualquiera con al menos un permiso del catálogo.
+  // La autorización fina por módulo la aplica cada ruta con exigirPermiso().
+  if (pathname.startsWith("/erp")) {
+    const puede =
+      sesion.user.rol === "admin" ||
+      sesion.user.es_super_admin === true ||
+      (sesion.user.permisos?.length ?? 0) > 0;
+    return puede
+      ? NextResponse.next()
+      : NextResponse.redirect(new URL("/acceso-denegado", req.nextUrl.origin));
+  }
+
+  for (const ruta of RUTAS_PROTEGIDAS) {
+    if (pathname.startsWith(ruta.prefijo)) {
+      if (!ruta.roles.includes(sesion.user.rol)) {
+        return NextResponse.redirect(new URL("/acceso-denegado", req.nextUrl.origin));
       }
       break;
     }
   }
 
   return NextResponse.next();
-}
+});
 
 export const config = {
-  matcher: [
-    "/app/:path*",
-    "/admin/:path*",
-    "/cliente/:path*",
-    "/unirse/:path*",
-  ],
+  matcher: ["/app/:path*", "/admin/:path*", "/cliente/:path*", "/unirse/:path*", "/erp/:path*"],
 };
