@@ -23,6 +23,8 @@ export interface UserProfile {
   odoo_sync: boolean;
   perfil_completo: boolean;
   activo: boolean;
+  /** Administra usuarios; ninguna otra cuenta puede degradarlo */
+  es_super_admin: boolean;
   proyectos_asignados: string[];
   permisos: string[];
   iniciales?: string;
@@ -49,6 +51,7 @@ function aPerfil(row: Row, proyectos: string[] = []): UserProfile {
     odoo_sync: row.odooSync,
     perfil_completo: row.perfilCompleto,
     activo: row.activo,
+    es_super_admin: row.esSuperAdmin,
     proyectos_asignados: proyectos,
     permisos: row.permisos ?? [],
     iniciales: row.iniciales ?? undefined,
@@ -170,6 +173,22 @@ export async function markProfileComplete(
     .where(eq(users.id, id));
 }
 
+/**
+ * Nombra o revoca a un super administrador. Solo otro super admin puede
+ * llamarla (lo valida la ruta de API).
+ */
+export async function setSuperAdmin(id: string, esSuperAdmin: boolean): Promise<void> {
+  await getDb()
+    .update(users)
+    .set({
+      esSuperAdmin,
+      // Un super admin siempre necesita rol de administrador para entrar al panel
+      ...(esSuperAdmin ? { rol: "admin" as const, tipo: "admin" as const } : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(users.id, id));
+}
+
 export async function setUsuarioActivo(id: string, activo: boolean): Promise<void> {
   await getDb().update(users).set({ activo, updatedAt: new Date() }).where(eq(users.id, id));
 }
@@ -187,6 +206,7 @@ export async function upsertUserSembrado(data: {
   iniciales?: string;
   gerencia?: string;
   perfil_completo?: boolean;
+  es_super_admin?: boolean;
 }): Promise<string> {
   const tipo = data.tipo ?? classifyEmail(data.email);
   const [row] = await getDb()
@@ -201,6 +221,7 @@ export async function upsertUserSembrado(data: {
       gerencia: data.gerencia,
       perfilCompleto: data.perfil_completo ?? tipo !== "temporal",
       odooSync: tipo === "planta",
+      esSuperAdmin: data.es_super_admin ?? false,
     })
     .onConflictDoUpdate({
       target: users.email,
@@ -211,6 +232,7 @@ export async function upsertUserSembrado(data: {
         ...(data.permisos ? { permisos: data.permisos } : {}),
         ...(data.iniciales ? { iniciales: data.iniciales } : {}),
         ...(data.gerencia ? { gerencia: data.gerencia } : {}),
+        ...(data.es_super_admin !== undefined ? { esSuperAdmin: data.es_super_admin } : {}),
         updatedAt: new Date(),
       },
     })

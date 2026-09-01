@@ -31,6 +31,7 @@ async function sembrarUsuario(u: {
   gerencia?: string;
   permisos?: string[];
   perfilCompleto?: boolean;
+  esSuperAdmin?: boolean;
 }): Promise<string> {
   const [row] = await db
     .insert(users)
@@ -44,13 +45,20 @@ async function sembrarUsuario(u: {
       permisos: u.permisos ?? [],
       perfilCompleto: u.perfilCompleto ?? true,
       odooSync: u.tipo === "planta",
+      esSuperAdmin: u.esSuperAdmin ?? false,
     })
     .onConflictDoUpdate({
       target: users.email,
-      set: { name: u.nombre, rol: u.rol, tipo: u.tipo, updatedAt: new Date() },
+      set: {
+        name: u.nombre,
+        rol: u.rol,
+        tipo: u.tipo,
+        esSuperAdmin: u.esSuperAdmin ?? false,
+        updatedAt: new Date(),
+      },
     })
     .returning({ id: users.id });
-  console.log(`  👤  ${u.rol.padEnd(7)} ${u.email}`);
+  console.log(`  ${u.esSuperAdmin ? "👑" : "👤"}  ${u.rol.padEnd(7)} ${u.email}`);
   return row.id;
 }
 
@@ -60,6 +68,7 @@ async function main() {
   // ── Usuarios ────────────────────────────────────────────────────────────────
   const adminId = await sembrarUsuario({
     email: "memorp19@gmail.com",
+    esSuperAdmin: true,
     nombre: "Super Admin",
     tipo: "admin",
     rol: "admin",
@@ -69,6 +78,7 @@ async function main() {
 
   await sembrarUsuario({
     email: "soporteit@proyinstelec.com",
+    esSuperAdmin: true,
     nombre: "Soporte IT",
     tipo: "admin",
     rol: "admin",
@@ -78,6 +88,7 @@ async function main() {
 
   await sembrarUsuario({
     email: "jorge.gutierrez@proyinstelec.mx",
+    esSuperAdmin: true,
     nombre: "Jorge Gutiérrez",
     tipo: "admin",
     rol: "admin",

@@ -561,10 +561,21 @@ protección: la verdadera va en la ruta de API.
 
 ### Super administradores
 
-La lista está en [`apps/web/src/lib/super-admins.ts`](apps/web/src/lib/super-admins.ts). Estas
-cuentas reciben rol de administrador automáticamente al entrar, pueden administrar usuarios y
-ninguna otra cuenta puede degradarlas. Es la única lista de personas que vive en el código; todo
-lo demás se administra desde la aplicación.
+Son las cuentas que administran usuarios y a las que nadie más puede degradar. **No hay ninguna
+lista de personas en el código**: la condición vive en la base, en la columna `es_super_admin` de
+la tabla `users`.
+
+- Se otorga y se retira desde **Admin → Usuarios** con el botón *Super Admin*; solo otro super
+  admin puede hacerlo, y nadie puede quitarse la condición a sí mismo (evita quedarse sin acceso).
+- Un super admin siempre tiene rol de administrador: al marcarlo se le ajusta el rol, y el token
+  de sesión lo refuerza en cada petición.
+- Los primeros super admins se crean con `pnpm db:seed`, que es el arranque del sistema. Si
+  necesitas restaurar el acceso sin pasar por la aplicación:
+
+  ```sql
+  UPDATE users SET es_super_admin = true, rol = 'admin', tipo = 'admin'
+  WHERE email = 'correo@proyinstelec.mx';
+  ```
 
 ### Identidad
 

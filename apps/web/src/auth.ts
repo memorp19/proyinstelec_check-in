@@ -6,7 +6,6 @@ import { getDb } from "./db";
 import { users, accounts, sessions, verificationTokens } from "./db/schema";
 import { DEMO_MODE, getDemoPresetById } from "./demo";
 import { classifyEmail } from "./lib/users";
-import { esSuperAdmin } from "./lib/super-admins";
 
 /**
  * Instancia completa de Auth.js v5: la configuración compartida más el
@@ -16,9 +15,6 @@ import { esSuperAdmin } from "./lib/super-admins";
  * una petición: así el build de Vercel no necesita DATABASE_URL.
  */
 
-/** Re-exportado por comodidad: la lista vive en lib/super-admins.ts */
-export const isSuperAdmin = esSuperAdmin;
-
 interface DatosDominio {
   rol: "campo" | "admin" | "cliente";
   tipo: "planta" | "temporal" | "admin" | "cliente";
@@ -27,6 +23,7 @@ interface DatosDominio {
   permisos: string[];
   iniciales?: string;
   gerencia?: string;
+  es_super_admin: boolean;
 }
 
 async function cargarDominio(userId: string): Promise<DatosDominio | null> {
@@ -40,6 +37,7 @@ async function cargarDominio(userId: string): Promise<DatosDominio | null> {
     permisos: row.permisos ?? [],
     iniciales: row.iniciales ?? undefined,
     gerencia: row.gerencia ?? undefined,
+    es_super_admin: row.esSuperAdmin,
   };
 }
 
@@ -97,7 +95,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth(() => ({
           token.odoo_sync ??= false;
           token.permisos ??= [];
         }
-        token.es_super_admin = esSuperAdmin(token.email);
+        // Un super admin siempre manda con rol de administrador
         if (token.es_super_admin) {
           token.rol = "admin";
           token.tipo = "admin";
@@ -116,17 +114,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth(() => ({
      */
     async createUser({ user }) {
       if (!user.id || !user.email) return;
-      const superAdmin = esSuperAdmin(user.email);
-      const tipo = superAdmin ? "admin" : classifyEmail(user.email);
+      const tipo = classifyEmail(user.email);
       const esPlanta = tipo === "planta";
       await getDb()
         .update(users)
         .set({
           tipo,
-          rol: superAdmin ? "admin" : "campo",
+          rol: "campo",
           odooSync: esPlanta,
-          // Los administradores no llenan el formulario de alta de campo
-          perfilCompleto: superAdmin || esPlanta,
+          perfilCompleto: esPlanta,
           updatedAt: new Date(),
         })
         .where(eq(users.id, user.id));

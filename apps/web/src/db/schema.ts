@@ -52,6 +52,12 @@ export const users = pgTable(
     iniciales: text("iniciales"),
     gerencia: text("gerencia"),
     activo: boolean("activo").notNull().default(true),
+    /**
+     * Super administrador: administra usuarios y nadie más puede degradarlo.
+     * Vive en la base — no hay lista de personas en el código. Los primeros se
+     * marcan con la siembra; después, un super admin puede nombrar a otro.
+     */
+    esSuperAdmin: boolean("es_super_admin").notNull().default(false),
 
     // ── Dominio: perfil de campo ──
     perfilCompleto: boolean("perfil_completo").notNull().default(false),

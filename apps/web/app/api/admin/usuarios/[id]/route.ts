@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth, isSuperAdmin } from "@/src/auth";
-import { updateUserRol, updateUserErp, getUserById, listUsers, classifyEmail } from "@/src/lib/users";
+import { auth } from "@/src/auth";
+import {
+  updateUserRol,
+  updateUserErp,
+  setSuperAdmin,
+  getUserById,
+  listUsers,
+  classifyEmail,
+} from "@/src/lib/users";
 import { esPermisoValido, esInicialesValidas } from "@/src/lib/permisos";
 import { DEMO_MODE } from "@/src/demo";
 
@@ -15,21 +22,16 @@ export async function PATCH(
 
   const usuarioId = params.id;
 
-  // Cannot modify the superAdmin account
   if (DEMO_MODE) {
-    return NextResponse.json({ ok: true }); // optimistic in demo
+    return NextResponse.json({ ok: true }); // optimista en demo
   }
 
   const target = await getUserById(usuarioId);
   if (!target) return NextResponse.json({ error: "Usuario no encontrado" }, { status: 404 });
 
-  // Protect the superAdmin email from being demoted
-  if (isSuperAdmin(target.email)) {
-    return NextResponse.json({ error: "No se puede modificar al Super Admin" }, { status: 403 });
-  }
-
   let body: {
-    accion: "promover" | "revocar" | "actualizar_erp";
+    accion: "promover" | "revocar" | "actualizar_erp" | "super_admin";
+    valor?: boolean;
     permisos?: string[];
     iniciales?: string | null;
     gerencia?: string | null;
@@ -38,6 +40,27 @@ export async function PATCH(
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Body inválido" }, { status: 400 });
+  }
+
+  // Nombrar o revocar super administradores: la lista vive en la base
+  if (body.accion === "super_admin") {
+    if (usuarioId === session.user.id && body.valor === false) {
+      return NextResponse.json(
+        { error: "No puedes quitarte a ti mismo el super admin" },
+        { status: 409 },
+      );
+    }
+    await setSuperAdmin(usuarioId, body.valor === true);
+    return NextResponse.json({ ok: true });
+  }
+
+  // Un super admin no se degrada ni se edita desde aquí; primero hay que
+  // quitarle esa condición con la acción de arriba.
+  if (target.es_super_admin) {
+    return NextResponse.json(
+      { error: "No se puede modificar a un super admin" },
+      { status: 403 },
+    );
   }
 
   if (body.accion === "actualizar_erp") {

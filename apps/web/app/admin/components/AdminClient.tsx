@@ -5,12 +5,12 @@ import type { Empresa, Proyecto } from "@/src/lib/proyectos";
 import type { DemoUser } from "@/src/demo";
 import type { UserProfile } from "@/src/lib/users";
 import { GRUPOS_PERMISOS } from "@/src/lib/permisos";
-import { esSuperAdmin as esCuentaSuperAdmin } from "@/src/lib/super-admins";
 
 type UsuarioRow = (Pick<UserProfile, "id" | "email" | "nombre" | "rol" | "tipo" | "proyectos_asignados" | "created_at"> | DemoUser) & {
   permisos?: string[];
   iniciales?: string;
   gerencia?: string;
+  es_super_admin?: boolean;
 };
 
 interface Props {
@@ -322,6 +322,37 @@ function UsuariosTab({ usuariosIniciales }: { usuariosIniciales: UsuarioRow[] })
 
   const filtrados = filtroRol === "todos" ? usuarios : usuarios.filter((u) => u.rol === filtroRol);
 
+  async function handleSuperAdmin(u: UsuarioRow, valor: boolean) {
+    const verbo = valor ? "nombrar super admin a" : "quitarle el super admin a";
+    if (!confirm(`¿Seguro que quieres ${verbo} ${u.nombre}?`)) return;
+    setLoadingId(u.id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/usuarios/${u.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accion: "super_admin", valor }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Error al actualizar");
+      setUsuarios((prev) =>
+        prev.map((usr) =>
+          usr.id === u.id
+            ? {
+                ...usr,
+                es_super_admin: valor,
+                ...(valor ? { rol: "admin" as const, tipo: "admin" as const } : {}),
+              }
+            : usr,
+        ),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error");
+    } finally {
+      setLoadingId(null);
+    }
+  }
+
   async function handleRolChange(u: UsuarioRow, accion: "promover" | "revocar") {
     setLoadingId(u.id);
     setError(null);
@@ -384,7 +415,7 @@ function UsuariosTab({ usuariosIniciales }: { usuariosIniciales: UsuarioRow[] })
           </div>
         ) : (
           filtrados.map((u) => {
-            const isSuper = esCuentaSuperAdmin(u.email);
+            const isSuper = u.es_super_admin === true;
             const isLoading = loadingId === u.id;
             return (
               <div key={u.id} className="bg-white/10 border border-white/10 rounded-xl px-4 py-3">
@@ -420,8 +451,25 @@ function UsuariosTab({ usuariosIniciales }: { usuariosIniciales: UsuarioRow[] })
                 </div>
 
                 {/* Actions */}
-                {!isSuper && (
+                {isSuper ? (
+                  <div className="shrink-0">
+                    <button
+                      onClick={() => handleSuperAdmin(u, false)}
+                      disabled={isLoading}
+                      className="font-mono text-[10px] text-purple-300 hover:text-white border border-purple-400/30 hover:border-white/30 rounded-lg px-3 py-1.5 transition-colors disabled:opacity-40"
+                    >
+                      {isLoading ? "…" : "Quitar Super Admin"}
+                    </button>
+                  </div>
+                ) : (
                   <div className="shrink-0 flex gap-1.5">
+                    <button
+                      onClick={() => handleSuperAdmin(u, true)}
+                      disabled={isLoading}
+                      className="font-mono text-[10px] text-purple-300 hover:text-white border border-purple-400/30 hover:border-white/30 rounded-lg px-3 py-1.5 transition-colors disabled:opacity-40"
+                    >
+                      {isLoading ? "…" : "Super Admin"}
+                    </button>
                     <button
                       onClick={() => setErpEditId(erpEditId === u.id ? null : u.id)}
                       className={`font-mono text-[10px] rounded-lg px-3 py-1.5 border transition-colors ${
