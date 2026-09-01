@@ -96,6 +96,52 @@ Las migraciones **no** corren solas en el despliegue: se aplican a mano antes de
 publicar un cambio de esquema, para que un deploy nunca altere la base por
 sorpresa.
 
+### Si las tablas se crearon con `db:push`: registrar la base (baseline)
+
+Síntoma: `pnpm db:migrate` falla con
+
+```
+PostgresError: relation "accounts" already exists  (code 42P07)
+```
+
+Por qué pasa: `db:push` crea las tablas pero **no** deja registro en
+`drizzle.__drizzle_migrations`. Como esa bitácora está vacía, el migrador cree
+que la base es nueva e intenta reproducir la migración `0000`, cuyas tablas ya
+existen.
+
+Solución (una sola vez por base): darle de alta la `0000` como ya aplicada. En
+el *SQL Editor* de Neon, sobre la rama que corresponda:
+
+```sql
+CREATE SCHEMA IF NOT EXISTS drizzle;
+
+CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
+  id SERIAL PRIMARY KEY,
+  hash text NOT NULL,
+  created_at bigint
+);
+
+-- Migración 0000: sus tablas ya existen en la base, solo falta registrarla
+INSERT INTO drizzle.__drizzle_migrations (hash, created_at)
+VALUES ('9d4852d42b2a1525db6e3a2b29642e8d35afc03e2e826aa15dbc28705180b9cf', 1787856706509);
+```
+
+Después `pnpm db:migrate` aplica solo lo que falta (la `0001` en adelante) y
+`pnpm db:seed` deja los datos de trabajo.
+
+Detalles por si hay que repetirlo con otra migración: el `hash` es el SHA-256
+del archivo `.sql` tal cual (`shasum -a 256 apps/web/drizzle/0000_pretty_devos.sql`)
+y `created_at` es el campo `when` de esa entrada en
+`apps/web/drizzle/meta/_journal.json`. El migrador aplica toda migración cuyo
+`when` sea mayor al `created_at` más grande que encuentre en la tabla.
+
+**El mismo INSERT hará falta en la rama de producción de Neon** antes de su
+primer `db:migrate`, si sus tablas también se crearon con `db:push`.
+
+Regla de aquí en adelante: `db:generate` + `db:migrate` en cualquier base
+compartida (producción, develop del equipo); `db:push` solo para experimentar en
+una rama de Neon personal.
+
 ## 5. Siembra
 
 ```bash
