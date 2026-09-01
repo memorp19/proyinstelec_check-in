@@ -29,6 +29,7 @@ Los datos viven en Neon (PostgreSQL) y los archivos en Google Drive.
 14. [Arquitectura](#14-arquitectura)
 15. [Despliegue](#15-despliegue)
 16. [El ERP y sus fases](#16-el-erp-y-sus-fases)
+17. [Trabajar con IA](#17-trabajar-con-ia)
 
 ---
 
@@ -417,6 +418,7 @@ Checklist rápido:
 - [ ] No estoy subiendo credenciales ni archivos de más (revisa `git status`).
 - [ ] Mi Pull Request apunta a `develop`.
 - [ ] Escribí en la descripción cómo probar lo que hice.
+- [ ] Si usé IA, corrí `/revisar` y leí el código generado línea por línea (ver [sección 17](#17-trabajar-con-ia)).
 
 ---
 
@@ -632,3 +634,24 @@ KPIs y tableros (4).
   `GMAIL_SERVICE_ACCOUNT_KEY`. Requiere habilitar la delegación de dominio del service account en
   la consola de administrador de Google Workspace con el scope
   `https://www.googleapis.com/auth/gmail.send`.
+
+---
+
+## 17. Trabajar con IA
+
+El repositorio viene preparado para trabajar con asistentes de IA: el contexto del
+proyecto, los agentes especializados y los comandos ya están dentro, no hay que
+configurar nada.
+
+- **`AGENTS.md`** — el contexto que la IA lee sola al abrir el proyecto: stack,
+  comandos, arquitectura y las reglas que no se rompen. Si el equipo cambia una
+  convención, se actualiza ahí en el mismo PR.
+- **`.claude/`** — subagentes (`revisor`, `datos`, `erp-legacy`, `ui`), comandos
+  (`/contexto`, `/ruta-api`, `/migracion`, `/revisar`, `/pr`) y la skill para dar de
+  alta un módulo del ERP.
+
+La guía de uso, con el flujo de un día de trabajo y las reglas de la casa, está en
+**[`docs/trabajar-con-ia.md`](docs/trabajar-con-ia.md)**. Léela antes de tu primer PR.
+
+Lo esencial: **tú firmas el código, no la IA**. Lee lo que genera antes de subirlo,
+nunca pegues credenciales en el chat, y corre `/revisar` antes de abrir el Pull Request.

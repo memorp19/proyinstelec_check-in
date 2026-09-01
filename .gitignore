@@ -43,3 +43,6 @@ _to_delete_snapshots/
 
 # Paquetes temporales de sincronización
 *.tgz
+
+# Claude Code: preferencias personales, no del equipo
+.claude/settings.local.json
