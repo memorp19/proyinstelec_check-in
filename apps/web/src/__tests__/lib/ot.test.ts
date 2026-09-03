@@ -7,6 +7,7 @@ import { dbFalso, errorDuplicado } from "../helpers/db-falso";
 import {
   createOT,
   getOT,
+  getOTDeCotizacion,
   listOTDeAnio,
   listResponsables,
   registrarResponsable,
@@ -76,8 +77,11 @@ const paramsAlta = {
 beforeEach(() => vi.clearAllMocks());
 
 describe("createOT", () => {
+  // La 1ª consulta es la comprobación "¿esta cotización ya tiene OT?"
+  const sinOTPrevia = (...resto: unknown[]) => usarDb([[], ...resto]);
+
   it("arma el folio con la convención del legacy (OT + NNN + AA + versión)", async () => {
-    const db = usarDb([[filaOT()]]);
+    const db = sinOTPrevia([filaOT()]);
 
     const ot = await createOT(paramsAlta);
 
@@ -87,7 +91,7 @@ describe("createOT", () => {
   });
 
   it("el folio incluye la versión de la cotización que originó la OT", async () => {
-    const db = usarDb([[filaOT({ folio: "OT012262", version: 2 })]]);
+    const db = sinOTPrevia([filaOT({ folio: "OT012262", version: 2 })]);
 
     await createOT({ ...paramsAlta, numeroCotizacion: 12, version: 2 });
 
@@ -96,7 +100,7 @@ describe("createOT", () => {
   });
 
   it("nace en PROCESO y sin control operativo", async () => {
-    const db = usarDb([[filaOT()]]);
+    const db = sinOTPrevia([filaOT()]);
 
     const ot = await createOT(paramsAlta);
 
@@ -106,7 +110,7 @@ describe("createOT", () => {
   });
 
   it("recorta los espacios de la orden de compra", async () => {
-    const db = usarDb([[filaOT()]]);
+    const db = sinOTPrevia([filaOT()]);
 
     await createOT({ ...paramsAlta, ordenCompra: "  OC-77  " });
 
@@ -114,22 +118,84 @@ describe("createOT", () => {
     expect(valores.ordenCompra).toBe("OC-77");
   });
 
+  it("acepta una OT sin orden de compra y la guarda como NULL, no como cadena vacía", async () => {
+    const db = sinOTPrevia([filaOT({ ordenCompra: null })]);
+
+    const ot = await createOT({ ...paramsAlta, ordenCompra: null });
+
+    const valores = db.llamadas.find((l) => l.metodo === "values")!.args[0] as Record<string, unknown>;
+    expect(valores.ordenCompra).toBeNull();
+    expect(ot.orden_compra).toBeUndefined();
+  });
+
+  it("una OC con solo espacios equivale a no tener OC", async () => {
+    const db = sinOTPrevia([filaOT({ ordenCompra: null })]);
+
+    await createOT({ ...paramsAlta, ordenCompra: "   " });
+
+    const valores = db.llamadas.find((l) => l.metodo === "values")!.args[0] as Record<string, unknown>;
+    expect(valores.ordenCompra).toBeNull();
+  });
+
   it("traduce la violación de llave primaria a un mensaje con el folio", async () => {
-    usarDb([{ error: errorDuplicado() }]);
+    sinOTPrevia({ error: errorDuplicado() });
 
     await expect(createOT(paramsAlta)).rejects.toThrow("La OT OT001260 ya existe");
   });
 
   it("reconoce el 23505 aunque el driver de Neon lo envuelva en `cause`", async () => {
-    usarDb([{ error: Object.assign(new Error("falló"), { cause: { code: "23505" } }) }]);
+    sinOTPrevia({ error: Object.assign(new Error("falló"), { cause: { code: "23505" } }) });
 
     await expect(createOT(paramsAlta)).rejects.toThrow("La OT OT001260 ya existe");
   });
 
   it("deja pasar los errores que no son de unicidad", async () => {
-    usarDb([{ error: new Error("conexión perdida") }]);
+    sinOTPrevia({ error: new Error("conexión perdida") });
 
     await expect(createOT(paramsAlta)).rejects.toThrow("conexión perdida");
+  });
+});
+
+describe("createOT — una cotización, una OT", () => {
+  it("rechaza la segunda OT y dice que hay que levantar una cotización nueva", async () => {
+    usarDb([[filaOT()]]); // la cotización ya tiene OT
+
+    await expect(createOT(paramsAlta)).rejects.toThrow(
+      /La cotización 001-2026 ya tiene la OT OT001260.*cotización nueva/s,
+    );
+  });
+
+  it("bloquea aunque la versión sea distinta — es donde la llave primaria no alcanza", async () => {
+    // La OT existente nació de la v0 (OT001260); ahora entra una OC sobre la v1,
+    // cuyo folio sería OT001261 y por tanto NO chocaría con la llave primaria.
+    const db = usarDb([[filaOT({ folio: "OT001260", version: 0 })]]);
+
+    await expect(createOT({ ...paramsAlta, version: 1 })).rejects.toThrow("ya tiene la OT OT001260");
+
+    // Lo importante: se rechazó antes de escribir nada
+    expect(db.metodos()).not.toContain("insert");
+  });
+
+  it("no se deja engañar por la versión: busca por (numero, anio), no por folio", async () => {
+    const db = usarDb([[]]);
+    await createOT({ ...paramsAlta, version: 3 }).catch(() => {});
+
+    // El WHERE de la comprobación no menciona el folio
+    expect(db.llamadas.some((l) => l.metodo === "where")).toBe(true);
+    expect(db.metodos().indexOf("select")).toBeLessThan(db.metodos().indexOf("insert"));
+  });
+});
+
+describe("getOTDeCotizacion", () => {
+  it("devuelve null cuando la cotización todavía no tiene OT", async () => {
+    usarDb([[]]);
+    expect(await getOTDeCotizacion(1, 2026)).toBeNull();
+  });
+
+  it("devuelve la OT existente sin importar de qué versión nació", async () => {
+    usarDb([[filaOT({ folio: "OT001262", version: 2 })]]);
+    const ot = await getOTDeCotizacion(1, 2026);
+    expect(ot?.folio).toBe("OT001262");
   });
 });
 

@@ -3,6 +3,7 @@ import {
   index,
   integer,
   jsonb,
+  numeric,
   pgTable,
   primaryKey,
   real,
@@ -347,6 +348,31 @@ export const cotizaciones = pgTable(
     fechaEntrega: timestamp("fecha_entrega", { withTimezone: true }),
     /** Envío real al cliente (el sistema anterior mezclaba ambas en una columna) */
     fechaEnvio: timestamp("fecha_envio", { withTimezone: true }),
+
+    /**
+     * Importe de la cotización, capturado al elaborarla (antes del envío al
+     * cliente), no al ingresar la orden de compra.
+     *
+     * Son DOS columnas y no un par (monto, moneda) porque una misma cotización
+     * lleva partidas en pesos y en dólares a la vez —mano de obra nacional y
+     * equipo importado—, y son importes independientes: sumarlos exigiría
+     * inventar un tipo de cambio, así que se guardan y se reportan por separado.
+     *
+     * `numeric` y no `real`: el flotante binario no representa centavos exactos.
+     * Nullable a propósito — un monto que todavía no se localiza se queda en
+     * NULL y nunca en 0; una cotización aceptada sin monto sigue contando como
+     * aceptada, y el monto puede capturarse después sin tocar el estatus.
+     */
+    montoMxn: numeric("monto_mxn", { precision: 14, scale: 2 }),
+    montoUsd: numeric("monto_usd", { precision: 14, scale: 2 }),
+
+    /**
+     * Una orden de compra puede cubrir VARIAS cotizaciones: SYMRISE mandó una
+     * sola OC para la 005 (planta Monterrey) y la 006 (Cuautitlán Izcalli). Hoy
+     * eso se captura repitiendo el número de OC en cada cotización. La relación
+     * muchos-a-muchos no se modela: la operación se separa por planta a partir
+     * de 2027, así que la excepción vive solo hasta 2026.
+     */
     ordenCompra: text("orden_compra"),
     folioOt: text("folio_ot"),
     driveFolderId: text("drive_folder_id"),
@@ -377,6 +403,17 @@ export const aprobaciones = pgTable(
 
 // ── ERP: órdenes de trabajo ───────────────────────────────────────────────────
 
+/**
+ * Orden de trabajo. Una por cotización: los agregados y excedentes no amplían
+ * la OT existente, se levanta una cotización nueva que genera su propia OT. La
+ * versión del folio dice qué versión de la cotización se aceptó — no habilita
+ * una segunda OT (el bloqueo vive en `getOTDeCotizacion`, lib/ot.ts).
+ *
+ * El monto NO se copia aquí: se lee de la cotización origen por
+ * (numero_cotizacion, anio). Como la relación es 1:1 no hay ambigüedad, y así
+ * un monto capturado después de crear la OT se refleja solo en vez de quedar
+ * congelado en la copia.
+ */
 export const ordenesTrabajo = pgTable(
   "ordenes_trabajo",
   {
@@ -384,7 +421,8 @@ export const ordenesTrabajo = pgTable(
     numeroCotizacion: integer("numero_cotizacion").notNull(),
     anio: integer("anio").notNull(),
     version: integer("version").notNull().default(0),
-    ordenCompra: text("orden_compra").notNull(),
+    /** Nullable: una cotización aceptada sin OC también genera OT. */
+    ordenCompra: text("orden_compra"),
     fechaOc: timestamp("fecha_oc", { withTimezone: true }),
     cliente: text("cliente").notNull(),
     titulo: text("titulo").notNull(),

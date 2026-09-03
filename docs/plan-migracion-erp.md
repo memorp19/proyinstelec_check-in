@@ -128,10 +128,22 @@ Lo que **no** se simplifica: folios, estados, reglas de negocio (aprobación por
 - **Iniciales como llave de personas:** los controles operativos y cotizaciones identifican gente por iniciales; hay que capturar iniciales en cada perfil antes de importar (el importador reportará las que no crucen).
 - **PDF de la cotización:** en el legacy el PDF lo genera una persona manualmente en la carpeta y el sistema lo busca por nombre exacto. Mantendremos ese flujo (buscar el PDF en la carpeta al enviar), pero conviene decidir después si la app lo genera.
 - **Delegación de dominio para Gmail API** (si eliges D5-a) requiere configuración en la consola de administrador de Google Workspace.
+- **OC compartida entre cotizaciones (excepción vigente hasta 2026):** una misma orden de compra puede cubrir varias cotizaciones. El caso real es SYMRISE, que mandó una sola OC para la cotización 005 (planta Monterrey) y la 006 (Cuautitlán Izcalli). Hoy se captura repitiendo el número de OC en ambas cotizaciones, y `cotizaciones.orden_compra` es texto libre precisamente por eso. **No se modela la relación muchos-a-muchos**: la operación se separa por planta a partir de 2027, así que la excepción muere sola. Si antes de esa fecha hiciera falta reportar por OC, el agrupado se hace en la consulta, no en el esquema.
 
 ---
 
-## 7. Decisiones confirmadas (27/08/2026)
+## 8. Reglas de negocio de OT y monto (confirmadas por Eduardo)
+
+1. **Una cotización, una OT.** Los agregados o excedentes no amplían la OT existente: se elabora una cotización nueva con esos suministros y esa cotización genera su propia OT. La versión dentro del folio identifica cuál versión se aceptó; no habilita una segunda OT. El bloqueo vive en `createOT` y busca por `(numero, anio)` —no por folio— porque el folio cambia con la versión y la llave primaria no lo detectaría.
+2. **Bloqueo con aviso.** Si una cotización ya tiene OT y entra otra orden de compra, el sistema avisa (HTTP 409) y no genera una segunda OT en silencio; el mensaje indica que corresponde levantar una cotización nueva.
+3. **OT sin orden de compra.** Una cotización aceptada sin OC genera OT igualmente, por `POST /api/erp/cotizaciones/[key]/ot`. Mismo flujo que la vía con OC salvo la OC y su adjunto; la cotización queda `ASIGNADA` y la OC puede capturarse después.
+4. **El monto vive en la cotización**, capturado al elaborarla y antes de enviarla al cliente — no en la ingesta de OC. La OT no copia el importe: lo lee de su cotización origen por `(numero_cotizacion, anio)`. Como la relación es 1:1 no hay ambigüedad, y un monto capturado después de crear la OT se refleja solo en vez de quedar congelado.
+5. **Doble moneda, nunca sumadas.** Una cotización puede llevar partidas en MXN y en USD a la vez (mano de obra nacional y equipo importado). Por eso son dos columnas, `monto_mxn` y `monto_usd`, y no un par `(monto, moneda)`: son importes independientes y totalizarlos exigiría inventar un tipo de cambio. Se guardan y se reportan por separado.
+6. **NULL no es cero.** Un monto ausente se queda en `NULL` y nunca se convierte en 0. Una cotización aceptada sin monto localizado sigue contando como aceptada.
+
+---
+
+## 9. Decisiones confirmadas (27/08/2026)
 
 1. **Correo:** Gmail API con cuenta del dominio (delegación de dominio en Workspace).
 2. **Histórico 2024:** pospuesto.

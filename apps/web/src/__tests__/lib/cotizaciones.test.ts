@@ -10,6 +10,8 @@ import {
   transicionValida,
   createCotizacion,
   crearNuevaVersion,
+  normalizarMonto,
+  updateCotizacion,
   cambiarEstatus,
   puedeEnviarseAlCliente,
   buscarCotizaciones,
@@ -38,6 +40,8 @@ function fila(extra: Record<string, unknown> = {}) {
     fechaSolicitud: new Date("2026-01-10T00:00:00Z"),
     fechaEntrega: null,
     fechaEnvio: null,
+    montoMxn: null,
+    montoUsd: null,
     ordenCompra: null,
     folioOt: null,
     driveFolderId: null,
@@ -221,5 +225,109 @@ describe("buscarCotizaciones", () => {
     usarDb([[{ ...fila(), aprobada: false }]]);
     const r = await buscarCotizaciones({ anio: 2026, mesEntrega: 9 });
     expect(r[0].aprobada).toBe(false);
+  });
+});
+
+// ── Montos: dos monedas independientes, y NULL ≠ 0 ────────────────────────────
+
+describe("normalizarMonto", () => {
+  it("un monto ausente o vacío es NULL, nunca 0", () => {
+    // La diferencia entre "no lo hemos localizado" y "no cuesta nada" es real
+    expect(normalizarMonto(undefined)).toBeNull();
+    expect(normalizarMonto(null)).toBeNull();
+    expect(normalizarMonto("")).toBeNull();
+    expect(normalizarMonto("   ")).toBeNull();
+  });
+
+  it("cero explícito sí se guarda como cero", () => {
+    expect(normalizarMonto(0)).toBe("0.00");
+    expect(normalizarMonto("0")).toBe("0.00");
+  });
+
+  it("normaliza a dos decimales exactos", () => {
+    expect(normalizarMonto("1234.5")).toBe("1234.50");
+    expect(normalizarMonto(98765.4321)).toBe("98765.43");
+    expect(normalizarMonto("1000")).toBe("1000.00");
+  });
+
+  it("tolera el formato con que la gente teclea importes", () => {
+    expect(normalizarMonto("$1,234.50")).toBe("1234.50");
+    expect(normalizarMonto(" 1 234.50 ")).toBe("1234.50");
+  });
+
+  it("rechaza importes negativos y basura", () => {
+    expect(() => normalizarMonto("-100")).toThrow("no puede ser negativo");
+    expect(() => normalizarMonto("mil pesos")).toThrow("Monto inválido");
+  });
+});
+
+describe("createCotizacion — montos", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("guarda las dos monedas a la vez sin sumarlas", async () => {
+    // Mano de obra nacional en pesos + equipo importado en dólares
+    const db = usarDb([[fila({ montoMxn: "50000.00", montoUsd: "3000.00" })]]);
+
+    const cot = await createCotizacion({
+      numero: 1, anio: 2026, cliente: "Aceros", titulo: "Subestación",
+      dirigidaA: "Ing. Pérez", elaboro: "EAOL", createdBy: "x@x.mx",
+      montoMxn: "50000", montoUsd: "3000",
+    });
+
+    const valores = db.llamadas.find((l) => l.metodo === "values")!.args[0] as Record<string, unknown>;
+    expect(valores.montoMxn).toBe("50000.00");
+    expect(valores.montoUsd).toBe("3000.00");
+    expect(cot.monto_mxn).toBe("50000.00");
+    expect(cot.monto_usd).toBe("3000.00");
+  });
+
+  it("sin montos capturados las dos columnas quedan en NULL", async () => {
+    const db = usarDb([[fila()]]);
+
+    const cot = await createCotizacion({
+      numero: 1, anio: 2026, cliente: "Aceros", titulo: "Subestación",
+      dirigidaA: "Ing. Pérez", elaboro: "EAOL", createdBy: "x@x.mx",
+    });
+
+    const valores = db.llamadas.find((l) => l.metodo === "values")!.args[0] as Record<string, unknown>;
+    expect(valores.montoMxn).toBeNull();
+    expect(valores.montoUsd).toBeNull();
+    expect(cot.monto_mxn).toBeUndefined();
+  });
+});
+
+describe("crearNuevaVersion — montos", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("la versión nueva hereda los importes de la vigente", async () => {
+    const vigente = fila({ montoMxn: "50000.00", montoUsd: "3000.00" });
+    const db = usarDb([[vigente], [fila({ version: 1, montoMxn: "50000.00", montoUsd: "3000.00" })]]);
+
+    await crearNuevaVersion({ numero: 1, anio: 2026, createdBy: "x@x.mx" });
+
+    const valores = db.llamadas.find((l) => l.metodo === "values")!.args[0] as Record<string, unknown>;
+    expect(valores.montoMxn).toBe("50000.00");
+    expect(valores.montoUsd).toBe("3000.00");
+  });
+});
+
+describe("updateCotizacion — montos", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("omitir el campo no lo toca; mandarlo en null lo vacía", async () => {
+    const db = usarDb([[{ numero: 1 }]]);
+    await updateCotizacion(1, 2026, { montoUsd: null });
+
+    const set = db.llamadas.find((l) => l.metodo === "set")!.args[0] as Record<string, unknown>;
+    expect(set.montoUsd).toBeNull();
+    expect("montoMxn" in set).toBe(false);
+  });
+
+  it("un importe corregido se normaliza igual que en el alta", async () => {
+    const db = usarDb([[{ numero: 1 }]]);
+    await updateCotizacion(1, 2026, { montoMxn: "$72,500" });
+
+    const set = db.llamadas.find((l) => l.metodo === "set")!.args[0] as Record<string, unknown>;
+    expect(set.montoMxn).toBe("72500.00");
   });
 });

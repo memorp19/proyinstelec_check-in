@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { getDb } from "../db";
 import { ordenesTrabajo, otResponsables } from "../db/schema";
-import { folioOT } from "./folios";
+import { folioOT, pad } from "./folios";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -14,7 +14,8 @@ export interface OrdenTrabajo {
   numero_cotizacion: number;
   anio: number;
   version: number;
-  orden_compra: string;
+  /** Ausente cuando la OT se generó sin orden de compra. */
+  orden_compra?: string;
   fecha_oc?: string;
   cliente: string;
   titulo: string;
@@ -49,7 +50,7 @@ function aOT(f: FilaOT): OrdenTrabajo {
     numero_cotizacion: f.numeroCotizacion,
     anio: f.anio,
     version: f.version,
-    orden_compra: f.ordenCompra,
+    orden_compra: f.ordenCompra ?? undefined,
     fecha_oc: f.fechaOc?.toISOString(),
     cliente: f.cliente,
     titulo: f.titulo,
@@ -79,6 +80,23 @@ function aResponsable(f: FilaResponsable): ResponsableOT {
 }
 
 // ── Lecturas ──────────────────────────────────────────────────────────────────
+
+/**
+ * OT de una cotización, si ya tiene. Busca por (numero, anio) y NO por folio:
+ * el folio lleva la versión dentro, así que una versión nueva produciría otro
+ * folio y se colaría una segunda OT sin chocar con la llave primaria.
+ */
+export async function getOTDeCotizacion(
+  numero: number,
+  anio: number,
+): Promise<OrdenTrabajo | null> {
+  const [fila] = await getDb()
+    .select()
+    .from(ordenesTrabajo)
+    .where(and(eq(ordenesTrabajo.numeroCotizacion, numero), eq(ordenesTrabajo.anio, anio)))
+    .limit(1);
+  return fila ? aOT(fila) : null;
+}
 
 export async function getOT(folio: string): Promise<OrdenTrabajo | null> {
   const [fila] = await getDb()
@@ -129,7 +147,8 @@ export async function createOT(params: {
   numeroCotizacion: number;
   anio: number;
   version: number;
-  ordenCompra: string;
+  /** null cuando el cliente aceptó sin emitir orden de compra. */
+  ordenCompra: string | null;
   cliente: string;
   titulo: string;
   dirigidaA?: string;
@@ -137,6 +156,19 @@ export async function createOT(params: {
   createdBy: string;
 }): Promise<OrdenTrabajo> {
   const folio = folioOT(params.numeroCotizacion, params.anio, params.version);
+
+  // Una cotización, una OT: los agregados van en una cotización nueva. Se
+  // comprueba antes de insertar porque la llave primaria no lo detecta — el
+  // folio cambia con la versión.
+  const existente = await getOTDeCotizacion(params.numeroCotizacion, params.anio);
+  if (existente) {
+    throw new Error(
+      `La cotización ${pad(params.numeroCotizacion, 3)}-${params.anio} ya tiene la OT ${existente.folio}. ` +
+        `Los agregados o excedentes no amplían una OT existente: levanta una cotización nueva con esos ` +
+        `suministros y esa cotización generará su propia OT.`,
+    );
+  }
+
   try {
     const [fila] = await getDb()
       .insert(ordenesTrabajo)
@@ -145,7 +177,7 @@ export async function createOT(params: {
         numeroCotizacion: params.numeroCotizacion,
         anio: params.anio,
         version: params.version,
-        ordenCompra: params.ordenCompra.trim(),
+        ordenCompra: params.ordenCompra?.trim() || null,
         cliente: params.cliente,
         titulo: params.titulo,
         dirigidaA: params.dirigidaA ?? null,
