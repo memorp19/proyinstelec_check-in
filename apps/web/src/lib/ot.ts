@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { getDb } from "../db";
 import { ordenesTrabajo, otResponsables } from "../db/schema";
 import { folioOT } from "./folios";
@@ -106,6 +106,21 @@ export async function listResponsables(folio: string): Promise<ResponsableOT[]> 
     .where(eq(otResponsables.folioOt, folio))
     .orderBy(desc(otResponsables.fecha));
   return filas.map(aResponsable);
+}
+
+/**
+ * Responsable activo de varias OT, indexado por folio. Una sola consulta para
+ * todo el listado: sin esto la pantalla haría una por tarjeta.
+ */
+export async function responsablesActivosPorFolio(
+  folios: string[],
+): Promise<Record<string, ResponsableOT>> {
+  if (folios.length === 0) return {};
+  const filas = await getDb()
+    .select()
+    .from(otResponsables)
+    .where(and(inArray(otResponsables.folioOt, folios), eq(otResponsables.activo, true)));
+  return Object.fromEntries(filas.map((f) => [f.folioOt, aResponsable(f)]));
 }
 
 // ── Alta (desde el ingreso de OC) ─────────────────────────────────────────────
