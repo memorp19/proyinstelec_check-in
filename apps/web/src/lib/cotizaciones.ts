@@ -41,6 +41,13 @@ export interface Cotizacion {
   fecha_solicitud: string; // ISO
   fecha_entrega?: string; // compromiso (el legacy la mezclaba con fecha de envío; aquí separadas)
   fecha_envio?: string; // fecha real de envío al cliente
+  /**
+   * Importes por moneda, como cadena decimal para no perder centavos al pasar
+   * por JSON. Independientes: una cotización puede traer los dos a la vez y
+   * NUNCA se suman. Ausente = no capturado todavía; nunca es 0.
+   */
+  monto_mxn?: string;
+  monto_usd?: string;
   orden_compra?: string;
   folio_ot?: string;
   drive_folder_id?: string;
@@ -76,6 +83,8 @@ function aCotizacion(f: FilaCotizacion): Cotizacion {
     fecha_solicitud: f.fechaSolicitud.toISOString(),
     fecha_entrega: f.fechaEntrega?.toISOString(),
     fecha_envio: f.fechaEnvio?.toISOString(),
+    monto_mxn: f.montoMxn ?? undefined,
+    monto_usd: f.montoUsd ?? undefined,
     orden_compra: f.ordenCompra ?? undefined,
     folio_ot: f.folioOt ?? undefined,
     drive_folder_id: f.driveFolderId ?? undefined,
@@ -113,6 +122,23 @@ function esConflicto(err: unknown): boolean {
 /** Fecha ISO → Date para las columnas timestamp. */
 function aFecha(valor: string | undefined): Date | undefined {
   return valor ? new Date(valor) : undefined;
+}
+
+/**
+ * Normaliza un importe a la cadena decimal que espera `numeric`.
+ *
+ * Un monto vacío o ausente vale NULL, nunca 0: la diferencia entre "todavía no
+ * lo localizamos" y "no cuesta nada" es real, y una cotización aceptada sin
+ * monto sigue contando como aceptada.
+ */
+export function normalizarMonto(valor: string | number | null | undefined): string | null {
+  if (valor === null || valor === undefined) return null;
+  const texto = String(valor).trim().replace(/[$,\s]/g, "");
+  if (texto === "") return null;
+  const n = Number(texto);
+  if (!Number.isFinite(n)) throw new Error(`Monto inválido: "${valor}"`);
+  if (n < 0) throw new Error("El monto no puede ser negativo");
+  return n.toFixed(2);
 }
 
 // ── Lecturas ──────────────────────────────────────────────────────────────────
@@ -169,6 +195,8 @@ function camposVigentes(v: ReturnType<typeof vigentesDeAnio>) {
     fechaSolicitud: v.fechaSolicitud,
     fechaEntrega: v.fechaEntrega,
     fechaEnvio: v.fechaEnvio,
+    montoMxn: v.montoMxn,
+    montoUsd: v.montoUsd,
     ordenCompra: v.ordenCompra,
     folioOt: v.folioOt,
     driveFolderId: v.driveFolderId,
@@ -269,6 +297,8 @@ export async function createCotizacion(params: {
   prioridad?: Prioridad;
   elaboro: string;
   fechaEntrega?: string;
+  montoMxn?: string | number | null;
+  montoUsd?: string | number | null;
   createdBy: string;
 }): Promise<Cotizacion> {
   try {
@@ -287,6 +317,8 @@ export async function createCotizacion(params: {
         estatus: "PROCESO",
         elaboro: params.elaboro.trim(),
         fechaEntrega: aFecha(params.fechaEntrega) ?? null,
+        montoMxn: normalizarMonto(params.montoMxn),
+        montoUsd: normalizarMonto(params.montoUsd),
         createdBy: params.createdBy,
       })
       .returning();
@@ -306,6 +338,10 @@ export async function createCotizacion(params: {
  * Nueva versión: hereda los datos de la vigente, arranca en PROCESO y limpia
  * fecha de entrega/envío, OC y OT. No hay nada más que mover: la vigente pasa a
  * ser esta por tener el número de versión más alto.
+ *
+ * Los montos se heredan como el resto del contenido de la cotización; si la
+ * nueva versión se cotiza a otro precio, se editan. Heredar y corregir pierde
+ * menos que arrancar en blanco cuando la versión solo arregla una errata.
  */
 export async function crearNuevaVersion(params: {
   numero: number;
@@ -334,6 +370,8 @@ export async function crearNuevaVersion(params: {
         estatus: "PROCESO",
         elaboro: params.elaboro?.trim() || vigente.elaboro,
         fechaSolicitud: new Date(),
+        montoMxn: vigente.monto_mxn ?? null,
+        montoUsd: vigente.monto_usd ?? null,
         driveFolderId: vigente.drive_folder_id ?? null,
         driveFolderUrl: vigente.drive_folder_url ?? null,
         createdBy: params.createdBy,
@@ -372,6 +410,9 @@ export async function updateCotizacion(
     prioridad?: Prioridad;
     elaboro?: string;
     fechaEntrega?: string | null;
+    /** null borra el importe (vuelve a "no capturado"); undefined lo deja igual. */
+    montoMxn?: string | number | null;
+    montoUsd?: string | number | null;
     ordenCompra?: string;
     folioOt?: string;
     fechaEnvio?: string;
@@ -388,6 +429,8 @@ export async function updateCotizacion(
   if (data.fechaEntrega !== undefined) {
     cambios.fechaEntrega = data.fechaEntrega ? new Date(data.fechaEntrega) : null;
   }
+  if (data.montoMxn !== undefined) cambios.montoMxn = normalizarMonto(data.montoMxn);
+  if (data.montoUsd !== undefined) cambios.montoUsd = normalizarMonto(data.montoUsd);
   if (data.ordenCompra !== undefined) cambios.ordenCompra = data.ordenCompra.trim();
   if (data.folioOt !== undefined) cambios.folioOt = data.folioOt;
   if (data.fechaEnvio !== undefined) cambios.fechaEnvio = new Date(data.fechaEnvio);

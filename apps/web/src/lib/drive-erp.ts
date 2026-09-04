@@ -130,6 +130,12 @@ export async function ensureCarpetaOT(params: {
   anio: number;
 }): Promise<{ folderId: string; folderUrl: string; ocFolderId: string }> {
   const config = await getErpDriveConfig();
+  // Sin raíz configurada, `getOrCreateFolder` pediría a Drive crear en el padre
+  // "" y fallaría con un error opaco. Se avisa aquí con el nombre de la variable:
+  // quien reciba el aviso en la pantalla de OC sabe qué configurar.
+  if (!config.otRootId) {
+    throw new Error("Falta ERP_OT_FOLDER_ID — carpeta raíz de las OT en Drive");
+  }
   const drive = await getDriveClient();
 
   const anioFolder = await getOrCreateFolder(drive, String(params.anio), config.otRootId);

@@ -62,6 +62,8 @@ export async function POST(req: NextRequest) {
     prioridad?: Prioridad;
     elaboro?: string;
     fechaEntrega?: string;
+    montoMxn?: string | number | null;
+    montoUsd?: string | number | null;
   };
   try {
     body = await req.json();
@@ -88,6 +90,8 @@ export async function POST(req: NextRequest) {
       prioridad: body.prioridad,
       elaboro,
       fechaEntrega: body.fechaEntrega,
+      montoMxn: body.montoMxn,
+      montoUsd: body.montoUsd,
       createdBy: session!.user.email ?? "",
     });
     return NextResponse.json({ cotizacion, avisos }, { status: 201 });
@@ -96,6 +100,9 @@ export async function POST(req: NextRequest) {
     // El choque de número duplicado lo detecta la llave primaria de la tabla
     if (e.message.includes("ya existe")) {
       return NextResponse.json({ error: e.message }, { status: 409 });
+    }
+    if (e.message.includes("Monto") || e.message.includes("monto")) {
+      return NextResponse.json({ error: e.message }, { status: 422 });
     }
     console.error("[erp/cotizaciones POST]", err);
     return NextResponse.json({ error: e.message }, { status: 500 });

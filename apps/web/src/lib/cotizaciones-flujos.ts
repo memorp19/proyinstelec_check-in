@@ -58,6 +58,27 @@ const urlSistema = () => process.env.NEXTAUTH_URL ?? "";
 const filaTabla = (etiqueta: string, valor: string) =>
   `<tr><td style="padding:4px 12px 4px 0;color:#6b7280;font-size:13px;">${etiqueta}</td><td style="padding:4px 0;color:#111827;font-size:13px;font-weight:bold;">${valor}</td></tr>`;
 
+/** Importe con separadores de miles: "1234.5" → "1,234.50". */
+export function formatearMonto(monto: string, moneda: "MXN" | "USD"): string {
+  const n = Number(monto);
+  const cifra = Number.isFinite(n)
+    ? n.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : monto;
+  return `$${cifra} ${moneda}`;
+}
+
+/**
+ * Filas de importe para los correos. Una por moneda y nunca una suma: los
+ * montos en pesos y en dólares son independientes, y totalizarlos exigiría
+ * inventar un tipo de cambio. Sin montos capturados no se imprime nada.
+ */
+function montoParaCorreo(cot: Cotizacion): string {
+  return [
+    cot.monto_mxn ? filaTabla("Monto MXN", formatearMonto(cot.monto_mxn, "MXN")) : "",
+    cot.monto_usd ? filaTabla("Monto USD", formatearMonto(cot.monto_usd, "USD")) : "",
+  ].join("");
+}
+
 // ── 0. Alta y nueva versión (con carpeta y plantillas de Drive) ───────────────
 
 export async function crearCotizacionCompleta(params: {
@@ -70,6 +91,8 @@ export async function crearCotizacionCompleta(params: {
   prioridad?: "BAJA" | "MEDIA" | "ALTA";
   elaboro: string;
   fechaEntrega?: string;
+  montoMxn?: string | number | null;
+  montoUsd?: string | number | null;
   createdBy: string;
 }): Promise<{ cotizacion: Cotizacion; avisos: string[] }> {
   const avisos: string[] = [];
@@ -434,23 +457,29 @@ export async function enviarAlCliente(params: {
 
 // ── 4. Ingreso de OC → generación de OT ───────────────────────────────────────
 
-export async function ingresarOrdenCompra(params: {
+/**
+ * Núcleo compartido por las dos vías de generación de OT: con orden de compra
+ * y sin ella. Una cotización aceptada de palabra genera OT igual; el bloqueo de
+ * "una cotización, una OT" vive en `createOT`, que revisa por (numero, anio).
+ */
+async function generarOT(params: {
   numero: number;
   anio: number;
-  ordenCompra: string;
+  /** null = el cliente aceptó sin emitir OC. */
+  ordenCompra: string | null;
   responsableCorreo: string;
   areas: string[]; // claves del catálogo de áreas
   adjunto?: { filename: string; mimeType: string; base64: string };
   usuario: string;
 }): Promise<{ folioOt: string; avisos: string[] }> {
   const avisos: string[] = [];
+  const ordenCompra = params.ordenCompra?.trim() || null;
 
   const vigente = await getVigente(params.numero, params.anio);
   if (!vigente) throw new Error("Cotización no encontrada");
   if (vigente.estatus !== "ENVIADA") {
-    throw new Error(`Solo se puede ingresar OC con estatus ENVIADA (actual: ${vigente.estatus})`);
+    throw new Error(`Solo se puede generar OT con estatus ENVIADA (actual: ${vigente.estatus})`);
   }
-  if (!params.ordenCompra.trim()) throw new Error("La orden de compra es obligatoria");
   if (params.areas.length === 0) throw new Error("Selecciona al menos un área");
 
   // Responsable: debe existir en el catálogo y tener iniciales (cruce con CO, legacy)
@@ -471,12 +500,12 @@ export async function ingresarOrdenCompra(params: {
 
   const folio = folioOT(params.numero, params.anio, vigente.version);
 
-  // 1) OT en la base
+  // 1) OT en la base (aquí se rechaza la segunda OT de una misma cotización)
   const ot = await createOT({
     numeroCotizacion: params.numero,
     anio: params.anio,
     version: vigente.version,
-    ordenCompra: params.ordenCompra,
+    ordenCompra,
     cliente: vigente.cliente,
     titulo: vigente.titulo,
     dirigidaA: vigente.dirigida_a,
@@ -492,9 +521,9 @@ export async function ingresarOrdenCompra(params: {
     asignadoPor: params.usuario,
   });
 
-  // 3) Cotización: OC + folio OT + estatus ASIGNADA
+  // 3) Cotización: OC (si la hay) + folio OT + estatus ASIGNADA
   await updateCotizacion(params.numero, params.anio, {
-    ordenCompra: params.ordenCompra,
+    ...(ordenCompra ? { ordenCompra } : {}),
     folioOt: folio,
   });
   await cambiarEstatus(params.numero, params.anio, "ASIGNADA");
@@ -554,7 +583,7 @@ export async function ingresarOrdenCompra(params: {
       asunto: `Nueva OT ${folio} · ${vigente.cliente} · ${areasValidas.map((a) => a.nombre).join(", ")}`,
       html: plantillaCorreo({
         titulo: `Nueva Orden de Trabajo ${folio}`,
-        cuerpoHtml: `<table>${filaTabla("Folio OT", folio)}${filaTabla("Responsable", `${responsable.nombre} (${responsable.iniciales})`)}${filaTabla("OC", params.ordenCompra)}${filaTabla("Cotización origen", vigente.folio)}${filaTabla("Cliente", vigente.cliente)}${filaTabla("Título", vigente.titulo)}${filaTabla("Áreas", areasValidas.map((a) => a.nombre).join(", "))}</table>
+        cuerpoHtml: `<table>${filaTabla("Folio OT", folio)}${filaTabla("Responsable", `${responsable.nombre} (${responsable.iniciales})`)}${filaTabla("OC", ordenCompra ?? "Sin orden de compra")}${filaTabla("Cotización origen", vigente.folio)}${filaTabla("Cliente", vigente.cliente)}${filaTabla("Título", vigente.titulo)}${filaTabla("Áreas", areasValidas.map((a) => a.nombre).join(", "))}${montoParaCorreo(vigente)}</table>
         ${carpetaUrl ? `<p style="margin-top:12px;font-size:13px;"><a href="${carpetaUrl}" style="color:#1d4ed8;">Carpeta de la OT en Drive</a></p>` : ""}`,
       }),
       registradoPor: params.usuario,
@@ -566,8 +595,36 @@ export async function ingresarOrdenCompra(params: {
     accion: "OT_CREADA",
     usuario: params.usuario,
     referencia: `OT#${ot.folio}`,
-    detalle: `${folio} desde ${vigente.folio} · OC ${params.ordenCompra}`,
+    detalle: `${folio} desde ${vigente.folio} · ${ordenCompra ? `OC ${ordenCompra}` : "sin OC"}`,
   });
 
   return { folioOt: folio, avisos };
+}
+
+/** Ingreso de la orden de compra del cliente → OT. */
+export async function ingresarOrdenCompra(params: {
+  numero: number;
+  anio: number;
+  ordenCompra: string;
+  responsableCorreo: string;
+  areas: string[];
+  adjunto?: { filename: string; mimeType: string; base64: string };
+  usuario: string;
+}): Promise<{ folioOt: string; avisos: string[] }> {
+  if (!params.ordenCompra.trim()) throw new Error("La orden de compra es obligatoria");
+  return generarOT({ ...params, ordenCompra: params.ordenCompra });
+}
+
+/**
+ * OT de una cotización aceptada sin orden de compra. Mismo flujo salvo la OC:
+ * la cotización queda ASIGNADA y la OC puede capturarse después.
+ */
+export async function generarOTSinOrdenCompra(params: {
+  numero: number;
+  anio: number;
+  responsableCorreo: string;
+  areas: string[];
+  usuario: string;
+}): Promise<{ folioOt: string; avisos: string[] }> {
+  return generarOT({ ...params, ordenCompra: null });
 }

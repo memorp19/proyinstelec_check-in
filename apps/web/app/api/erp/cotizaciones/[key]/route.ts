@@ -91,6 +91,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { key: strin
     prioridad?: Prioridad;
     elaboro?: string;
     fechaEntrega?: string | null;
+    /** null borra el importe; omitirlo lo deja como estaba. */
+    montoMxn?: string | number | null;
+    montoUsd?: string | number | null;
     estatus?: EstatusCotizacion;
   };
   try {
@@ -124,7 +127,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { key: strin
     return NextResponse.json({ ok: true });
   } catch (err) {
     const msg = (err as Error).message;
-    if (msg.includes("Transición no permitida")) {
+    if (msg.includes("Transición no permitida") || msg.toLowerCase().includes("monto")) {
       return NextResponse.json({ error: msg }, { status: 422 });
     }
     console.error("[erp/cotizacion PATCH]", err);
