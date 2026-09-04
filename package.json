@@ -15,8 +15,8 @@
     "db:migrate": "pnpm --filter web db:migrate",
     "db:push": "pnpm --filter web db:push",
     "db:studio": "pnpm --filter web db:studio",
-    "db:seed": "./node_modules/.bin/tsx scripts/seed.ts",
-    "import:erp": "./node_modules/.bin/tsx scripts/importar-erp.ts"
+    "db:seed": "tsx scripts/seed.ts",
+    "import:erp": "tsx scripts/importar-erp.ts"
   },
   "devDependencies": {
     "dotenv": "^16.4.7",
