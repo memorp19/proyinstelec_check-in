@@ -36,11 +36,11 @@ export const MODULOS_ERP: ModuloErp[] = [
   {
     key: "ot",
     titulo: "Órdenes de Trabajo",
-    descripcion: "Ficha de OT, responsables y documentos",
+    descripcion: "Listado por año, responsables y carpeta en Drive",
     href: "/erp/ot",
     permiso: "modulo.ot",
     fase: 2,
-    disponible: false,
+    disponible: true,
   },
   {
     key: "control-operativo",

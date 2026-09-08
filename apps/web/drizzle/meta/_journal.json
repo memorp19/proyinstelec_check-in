@@ -15,6 +15,13 @@
       "when": 1788279271440,
       "tag": "0001_flawless_slapstick",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788471922236,
+      "tag": "0002_montos_y_ot_sin_oc",
+      "breakpoints": true
     }
   ]
 }
