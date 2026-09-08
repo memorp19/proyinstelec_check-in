@@ -58,6 +58,9 @@ export async function ensureCarpetaCotizacion(
  * Copia las plantillas base (Doc + Sheet) a la carpeta de la cotización con
  * el nombre estándar: `PCOTOP-NNN-AAAA[-v] <titulo>` (convención con la que
  * después se localiza el PDF).
+ *
+ * Falla si alguna plantilla no está configurada: sin ellas la cotización no
+ * sirve para nada.
  */
 export async function copiarPlantillasCotizacion(params: {
   folderId: string;
@@ -65,7 +68,20 @@ export async function copiarPlantillasCotizacion(params: {
   titulo: string;
 }): Promise<void> {
   const config = await getErpDriveConfig();
-  if (!config.plantillaDocId && !config.plantillaSheetId) return; // plantillas no configuradas
+
+  // Antes esto hacía `return` en silencio: la cotización quedaba con carpeta y
+  // sin Doc ni Sheet que llenar, y el fallo aparecía dos pasos después, al no
+  // encontrar el PDF que nadie pudo generar. Se avisa aquí, con el nombre de la
+  // variable, para que el problema se vea donde nace.
+  const faltantes: string[] = [];
+  if (!config.plantillaDocId) faltantes.push("ERP_PLANTILLA_DOC_ID");
+  if (!config.plantillaSheetId) faltantes.push("ERP_PLANTILLA_SHEET_ID");
+  if (faltantes.length > 0) {
+    throw new Error(
+      `Falta ${faltantes.join(" y ")} — sin las plantillas la cotización nace sin Doc ni Sheet, y sin ellos no hay PDF que enviar al cliente`,
+    );
+  }
+
   const drive = await getDriveClient();
   const nombre = `${params.folio} ${params.titulo}`.trim();
 
@@ -75,8 +91,8 @@ export async function copiarPlantillasCotizacion(params: {
       requestBody: { name: nombre, parents: [params.folderId] },
     });
   };
-  if (config.plantillaDocId) await copiar(config.plantillaDocId);
-  if (config.plantillaSheetId) await copiar(config.plantillaSheetId);
+  await copiar(config.plantillaDocId);
+  await copiar(config.plantillaSheetId);
 }
 
 // ── PDF de la cotización ──────────────────────────────────────────────────────

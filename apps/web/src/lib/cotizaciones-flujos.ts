@@ -10,7 +10,7 @@ import {
   type Cotizacion,
 } from "./cotizaciones";
 import { contactosParaEnvio, type ClienteEmpresa, type Contacto } from "./clientes";
-import { enviarCorreo, plantillaCorreo, type Adjunto } from "./correo";
+import { enviarCorreo, plantillaCorreo, type Adjunto, type ResultadoCorreo } from "./correo";
 import {
   buscarPdfCotizacion,
   ensureCarpetaOT,
@@ -381,6 +381,24 @@ export async function datosParaEnvio(params: {
   };
 }
 
+/**
+ * Traduce el motivo de no-envío a un mensaje que dice qué configurar. La
+ * cotización no avanza en ninguno de estos casos, así que quien lo lea en
+ * pantalla necesita saber si es un problema de configuración o de datos.
+ */
+function motivoNoEnviado(motivo: ResultadoCorreo["motivo"]): string {
+  switch (motivo) {
+    case "deshabilitado":
+      return "El correo está deshabilitado (CORREO_DESHABILITADO=true): la cotización NO se marcó como enviada";
+    case "demo":
+      return "En modo demo no se envían correos: la cotización NO se marcó como enviada";
+    case "sin_destinatarios":
+      return "Ningún destinatario tiene correo válido; la cotización NO se marcó como enviada";
+    default:
+      return "El correo al cliente no pudo enviarse; revisa la bitácora. La cotización NO se marcó como enviada";
+  }
+}
+
 export async function enviarAlCliente(params: {
   numero: number;
   anio: number;
@@ -433,8 +451,12 @@ export async function enviarAlCliente(params: {
     registradoPor: params.remitente.email,
     referencia: cotPk(cotizacion.numero, cotizacion.anio),
   });
-  if (!resultado.enviado && resultado.motivo === "error") {
-    throw new Error("El correo al cliente no pudo enviarse; revisa la bitácora");
+  // El correo que llega al cliente es el hecho que justifica el estatus ENVIADA.
+  // Antes solo se abortaba con motivo "error", así que con CORREO_DESHABILITADO=true
+  // la cotización quedaba ENVIADA y con fecha_envio sellada sin que nadie recibiera
+  // nada: la app afirmaba algo falso. Cualquier motivo de no-envío detiene el flujo.
+  if (!resultado.enviado) {
+    throw new Error(motivoNoEnviado(resultado.motivo));
   }
 
   // Estatus → ENVIADA (si venía de REVISION) y fecha de envío

@@ -9,7 +9,11 @@ const { getDriveClient, getOrCreateFolder } = vi.hoisted(() => ({
 
 vi.mock("@/src/lib/drive", () => ({ getDriveClient, getOrCreateFolder }));
 
-import { ensureCarpetaOT, _resetErpDriveConfigCache } from "@/src/lib/drive-erp";
+import {
+  ensureCarpetaOT,
+  copiarPlantillasCotizacion,
+  _resetErpDriveConfigCache,
+} from "@/src/lib/drive-erp";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -66,5 +70,69 @@ describe("ensureCarpetaOT — estructura de carpetas", () => {
       folderUrl: "https://drive.google.com/drive/folders/carpeta-ot",
       ocFolderId: "carpeta-oc",
     });
+  });
+});
+
+// Sin plantillas la cotización nace con carpeta y sin nada que llenar; el fallo
+// aparecía dos pasos después, al no encontrar un PDF que nadie pudo generar.
+describe("copiarPlantillasCotizacion — plantillas sin configurar", () => {
+  const params = { folderId: "carpeta-001", folio: "PCOTOP-001-2026", titulo: "Subestación" };
+
+  it("falla nombrando las dos variables cuando no hay ninguna", async () => {
+    delete process.env.ERP_PLANTILLA_DOC_ID;
+    delete process.env.ERP_PLANTILLA_SHEET_ID;
+
+    await expect(copiarPlantillasCotizacion(params)).rejects.toThrow(
+      "ERP_PLANTILLA_DOC_ID y ERP_PLANTILLA_SHEET_ID",
+    );
+    // Nunca se pide el cliente de Drive si no hay nada que copiar
+    expect(getDriveClient).not.toHaveBeenCalled();
+  });
+
+  it("falla si solo falta el Doc", async () => {
+    delete process.env.ERP_PLANTILLA_DOC_ID;
+    process.env.ERP_PLANTILLA_SHEET_ID = "sheet-base";
+
+    await expect(copiarPlantillasCotizacion(params)).rejects.toThrow("ERP_PLANTILLA_DOC_ID");
+  });
+
+  it("falla si solo falta el Sheet", async () => {
+    process.env.ERP_PLANTILLA_DOC_ID = "doc-base";
+    delete process.env.ERP_PLANTILLA_SHEET_ID;
+
+    await expect(copiarPlantillasCotizacion(params)).rejects.toThrow("ERP_PLANTILLA_SHEET_ID");
+  });
+
+  it("trata la cadena vacía igual que la variable ausente", async () => {
+    process.env.ERP_PLANTILLA_DOC_ID = "";
+    process.env.ERP_PLANTILLA_SHEET_ID = "";
+
+    await expect(copiarPlantillasCotizacion(params)).rejects.toThrow("ERP_PLANTILLA_DOC_ID");
+  });
+});
+
+describe("copiarPlantillasCotizacion — con plantillas configuradas", () => {
+  it("copia Doc y Sheet a la carpeta con el nombre estándar del folio", async () => {
+    process.env.ERP_PLANTILLA_DOC_ID = "doc-base";
+    process.env.ERP_PLANTILLA_SHEET_ID = "sheet-base";
+    const copy = vi.fn().mockResolvedValue({});
+    getDriveClient.mockResolvedValue({ files: { copy } });
+
+    await copiarPlantillasCotizacion({
+      folderId: "carpeta-001",
+      folio: "PCOTOP-001-2026",
+      titulo: "Subestación",
+    });
+
+    expect(copy.mock.calls.map((c) => c[0])).toEqual([
+      {
+        fileId: "doc-base",
+        requestBody: { name: "PCOTOP-001-2026 Subestación", parents: ["carpeta-001"] },
+      },
+      {
+        fileId: "sheet-base",
+        requestBody: { name: "PCOTOP-001-2026 Subestación", parents: ["carpeta-001"] },
+      },
+    ]);
   });
 });

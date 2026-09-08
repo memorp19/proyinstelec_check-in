@@ -159,6 +159,60 @@ describe("enviarAlCliente", () => {
     expect(llamada.adjuntos?.[0].filename).toBe("PCOTOP-001-2026.pdf");
     expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "ENVIADA");
   });
+
+  // El estatus ENVIADA afirma que el cliente recibió la cotización. Si el correo
+  // no salió, la afirmación es falsa: el flujo tiene que abortar antes de tocar
+  // el estatus y la fecha de envío, no degradar en silencio.
+  describe("si el correo no salió, la cotización no se marca como enviada", () => {
+    beforeEach(() => {
+      vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({ puede: true, cotizacion: vigente as any });
+      vi.mocked(buscarPdfCotizacion).mockResolvedValue({
+        filename: "PCOTOP-001-2026.pdf", contenido: Buffer.from("pdf"),
+      });
+    });
+
+    const enviar = () =>
+      enviarAlCliente({
+        numero: 1, anio: 2026, destinatarios: ["cliente@aceros.mx"],
+        remitente: { email: "maria@proyinstelec.mx", nombre: "María" },
+      });
+
+    it("CORREO_DESHABILITADO=true: nombra la variable y no cambia nada", async () => {
+      vi.mocked(enviarCorreo).mockResolvedValueOnce({ enviado: false, motivo: "deshabilitado" });
+
+      await expect(enviar()).rejects.toThrow("CORREO_DESHABILITADO");
+
+      expect(cambiarEstatus).not.toHaveBeenCalled();
+      expect(updateCotizacion).not.toHaveBeenCalled();
+    });
+
+    it("modo demo: tampoco sella el envío", async () => {
+      vi.mocked(enviarCorreo).mockResolvedValueOnce({ enviado: false, motivo: "demo" });
+
+      await expect(enviar()).rejects.toThrow("demo");
+
+      expect(cambiarEstatus).not.toHaveBeenCalled();
+      expect(updateCotizacion).not.toHaveBeenCalled();
+    });
+
+    it("sin destinatarios válidos: aborta", async () => {
+      vi.mocked(enviarCorreo).mockResolvedValueOnce({ enviado: false, motivo: "sin_destinatarios" });
+
+      await expect(enviar()).rejects.toThrow("destinatario");
+
+      expect(cambiarEstatus).not.toHaveBeenCalled();
+      expect(updateCotizacion).not.toHaveBeenCalled();
+    });
+
+    it("error del proveedor de correo: sigue abortando", async () => {
+      vi.mocked(enviarCorreo).mockResolvedValueOnce({ enviado: false, motivo: "error" });
+
+      await expect(enviar()).rejects.toThrow("bitácora");
+
+      expect(cambiarEstatus).not.toHaveBeenCalled();
+      expect(updateCotizacion).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe("ingresarOrdenCompra", () => {
