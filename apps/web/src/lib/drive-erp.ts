@@ -12,7 +12,8 @@ import { pad } from "./folios";
 // ── Config (carpetas raíz y plantillas del ERP) ───────────────────────────────
 
 interface ErpDriveConfig {
-  cotizacionesRootId: string; // carpeta raíz de cotizaciones (subcarpetas "NNN-AAAA")
+  /** Raíz de cotizaciones. El código crea dentro el nivel del año: {raíz}/{año}/{NNN-AAAA}. */
+  cotizacionesRootId: string;
   otRootId: string; // carpeta raíz de OT por año
   /** Plantilla base de la cotización: es un .docx de Office, no un Google Doc. */
   plantillaDocId: string;
@@ -28,7 +29,7 @@ async function getErpDriveConfig(): Promise<ErpDriveConfig> {
   const cotizacionesRootId = process.env.ERP_COTIZACIONES_FOLDER_ID;
   if (!cotizacionesRootId) {
     throw new Error(
-      "Falta ERP_COTIZACIONES_FOLDER_ID — carpeta raíz de cotizaciones en Drive",
+      "Falta ERP_COTIZACIONES_FOLDER_ID — raíz de cotizaciones en Drive (la que contiene las carpetas por año, no la del año)",
     );
   }
   _cachedConfig = {
@@ -46,7 +47,7 @@ export function _resetErpDriveConfigCache() {
 
 const folderUrl = (id: string) => `https://drive.google.com/drive/folders/${id}`;
 
-// ── Carpeta de cotización: "NNN-AAAA" ─────────────────────────────────────────
+// ── Carpeta de cotización: {raíz}/{año}/{NNN-AAAA} ────────────────────────────
 
 /**
  * Nombres con los que puede estar guardada la carpeta de una cotización. En
@@ -62,6 +63,12 @@ export function nombresCarpetaCotizacion(numero: number, anio: number): string[]
  * Busca/crea la carpeta de una cotización (compartida por todas sus versiones,
  * convención del legacy) y devuelve id + url. Reconoce las dos escrituras para
  * no duplicar la carpeta que ya tiene los archivos históricos.
+ *
+ * El nivel del año lo crea el código, igual que `ensureCarpetaOT`: así el año
+ * sale del dato y no de la configuración —nadie tiene que cambiar
+ * `ERP_COTIZACIONES_FOLDER_ID` cada enero— y las cotizaciones de años
+ * anteriores siguen siendo alcanzables (una versión nueva de una de 2025
+ * encuentra su carpeta en `2025/`, con sus PDFs).
  */
 export async function ensureCarpetaCotizacion(
   numero: number,
@@ -69,10 +76,11 @@ export async function ensureCarpetaCotizacion(
 ): Promise<{ folderId: string; folderUrl: string }> {
   const config = await getErpDriveConfig();
   const drive = await getDriveClient();
+  const anioFolder = await getOrCreateFolder(drive, String(anio), config.cotizacionesRootId);
   const folderId = await getOrCreateFolderAlias(
     drive,
     nombresCarpetaCotizacion(numero, anio),
-    config.cotizacionesRootId,
+    anioFolder,
   );
   return { folderId, folderUrl: folderUrl(folderId) };
 }

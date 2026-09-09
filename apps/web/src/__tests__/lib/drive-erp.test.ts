@@ -114,18 +114,36 @@ describe("nombresCarpetaCotizacion", () => {
 });
 
 describe("ensureCarpetaCotizacion", () => {
-  it("busca por alias para no duplicar la carpeta histórica", async () => {
+  it("anida {raíz}/{año}/{NNN-AAAA} y busca por alias dentro del año", async () => {
+    getOrCreateFolder.mockResolvedValueOnce("carpeta-2026");
     getOrCreateFolderAlias.mockResolvedValueOnce("carpeta-242");
 
     const r = await ensureCarpetaCotizacion(242, 2026);
 
+    // El año se crea bajo la raíz, con match exacto
+    expect(getOrCreateFolder.mock.calls[0].slice(1)).toEqual(["2026", "raiz-cotizaciones"]);
+    // Y la carpeta de la cotización se busca DENTRO del año, no en la raíz
     const [, nombres, padre] = getOrCreateFolderAlias.mock.calls[0];
     expect(nombres).toEqual(["242-2026", "242 - 2026"]);
-    expect(padre).toBe("raiz-cotizaciones");
+    expect(padre).toBe("carpeta-2026");
     expect(r).toEqual({
       folderId: "carpeta-242",
       folderUrl: "https://drive.google.com/drive/folders/carpeta-242",
     });
+  });
+
+  // La razón de haber movido la variable a la raíz: sin esto, versionar una
+  // cotización vieja no encontraba su carpeta y perdía sus PDFs de vista.
+  it("una cotización de un año anterior busca en la carpeta de SU año", async () => {
+    getOrCreateFolder.mockResolvedValueOnce("carpeta-2025");
+    getOrCreateFolderAlias.mockResolvedValueOnce("carpeta-137-2025");
+
+    await ensureCarpetaCotizacion(137, 2025);
+
+    expect(getOrCreateFolder.mock.calls[0].slice(1)).toEqual(["2025", "raiz-cotizaciones"]);
+    const [, nombres, padre] = getOrCreateFolderAlias.mock.calls[0];
+    expect(nombres).toEqual(["137-2025", "137 - 2025"]);
+    expect(padre).toBe("carpeta-2025");
   });
 });
 
