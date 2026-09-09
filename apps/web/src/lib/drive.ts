@@ -69,27 +69,35 @@ export async function getDriveClient(): Promise<drive_v3.Drive> {
   return google.drive({ version: "v3", auth });
 }
 
-// ── Folder management ─────────────────────────────────────────────────────────
+// ── Unidades compartidas ──────────────────────────────────────────────────────
 
 /**
- * Finds a folder by name inside parentId; creates it if it doesn't exist.
- * Idempotent — safe to call on every upload.
+ * Las carpetas del ERP viven en unidades compartidas (sus ids empiezan con
+ * "0A"). Sin estos parámetros la API se comporta como si no existieran:
+ * `files.list` omite su contenido y `create`/`copy`/`get` responden 404 al
+ * padre. Van en TODA llamada, no solo en las del ERP.
+ *
+ * `includeItemsFromAllDrives` solo lo acepta `files.list`; el resto de métodos
+ * llevan únicamente `supportsAllDrives`.
  */
-export async function getOrCreateFolder(
+export const LISTAR_TODAS_LAS_UNIDADES = {
+  supportsAllDrives: true,
+  includeItemsFromAllDrives: true,
+} as const;
+
+export const ESCRIBIR_TODAS_LAS_UNIDADES = { supportsAllDrives: true } as const;
+
+// ── Folder management ─────────────────────────────────────────────────────────
+
+const escaparComilla = (valor: string) => valor.replace(/'/g, "\\'");
+
+const CARPETA = "mimeType='application/vnd.google-apps.folder' and trashed=false";
+
+async function crearCarpeta(
   drive: drive_v3.Drive,
   name: string,
   parentId: string,
 ): Promise<string> {
-  const res = await drive.files.list({
-    q: `name='${name.replace(/'/g, "\\'")}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-    fields: "files(id, name)",
-    pageSize: 1,
-  });
-
-  if (res.data.files && res.data.files.length > 0) {
-    return res.data.files[0].id!;
-  }
-
   const created = await drive.files.create({
     requestBody: {
       name,
@@ -97,9 +105,105 @@ export async function getOrCreateFolder(
       parents: [parentId],
     },
     fields: "id",
+    ...ESCRIBIR_TODAS_LAS_UNIDADES,
   });
 
   return created.data.id!;
+}
+
+/**
+ * Finds a folder by name inside parentId; creates it if it doesn't exist.
+ * Idempotent — safe to call on every upload.
+ *
+ * El match es exacto: úsala solo cuando el nombre lo controlamos nosotros
+ * ("Proyectos", "OC", el año). Para nombres que el equipo ya escribió a mano en
+ * Drive, ver `getOrCreateFolderAlias` y `getOrCreateFolderPorPrefijo`.
+ */
+export async function getOrCreateFolder(
+  drive: drive_v3.Drive,
+  name: string,
+  parentId: string,
+): Promise<string> {
+  const res = await drive.files.list({
+    q: `name='${escaparComilla(name)}' and '${parentId}' in parents and ${CARPETA}`,
+    fields: "files(id, name)",
+    pageSize: 1,
+    ...LISTAR_TODAS_LAS_UNIDADES,
+  });
+
+  if (res.data.files && res.data.files.length > 0) {
+    return res.data.files[0].id!;
+  }
+
+  return crearCarpeta(drive, name, parentId);
+}
+
+/**
+ * Igual que `getOrCreateFolder` pero acepta varias escrituras del mismo nombre.
+ * Existe porque el equipo creó las carpetas a mano durante años y conviven dos
+ * formatos ("242-2026" y "242 - 2026"); si buscáramos solo uno, crearíamos una
+ * carpeta duplicada al lado de la que ya tiene los archivos.
+ *
+ * `nombres[0]` es el que se usa al crear.
+ */
+export async function getOrCreateFolderAlias(
+  drive: drive_v3.Drive,
+  nombres: string[],
+  parentId: string,
+): Promise<string> {
+  if (nombres.length === 0) throw new Error("getOrCreateFolderAlias sin nombres");
+
+  const alternativas = nombres.map((n) => `name='${escaparComilla(n)}'`).join(" or ");
+  const res = await drive.files.list({
+    q: `(${alternativas}) and '${parentId}' in parents and ${CARPETA}`,
+    fields: "files(id, name)",
+    pageSize: 10,
+    ...LISTAR_TODAS_LAS_UNIDADES,
+  });
+
+  const encontradas = res.data.files ?? [];
+  if (encontradas.length > 0) {
+    // Si ya existen las dos escrituras, gana el orden en que se pidieron:
+    // así dos llamadas seguidas devuelven siempre la misma carpeta.
+    for (const nombre of nombres) {
+      const exacta = encontradas.find((f) => f.name === nombre);
+      if (exacta?.id) return exacta.id;
+    }
+    if (encontradas[0].id) return encontradas[0].id;
+  }
+
+  return crearCarpeta(drive, nombres[0], parentId);
+}
+
+/**
+ * Busca una carpeta cuyo nombre empiece con `prefijo`; si no existe crea
+ * `nombreNuevo`. Para las carpetas de OT, cuyo nombre es "<folio> - <cliente>":
+ * el folio es estable y único, y el nombre del cliente está escrito a mano con
+ * mayúsculas y puntuación variables ("IGSA S.A.P.I de C.V."), así que buscar
+ * por el nombre completo nunca acertaría.
+ */
+export async function getOrCreateFolderPorPrefijo(
+  drive: drive_v3.Drive,
+  prefijo: string,
+  nombreNuevo: string,
+  parentId: string,
+): Promise<string> {
+  const res = await drive.files.list({
+    // `contains` es subcadena y no distingue mayúsculas: filtramos después para
+    // exigir que el prefijo esté al principio.
+    q: `name contains '${escaparComilla(prefijo)}' and '${parentId}' in parents and ${CARPETA}`,
+    fields: "files(id, name)",
+    pageSize: 25,
+    ...LISTAR_TODAS_LAS_UNIDADES,
+  });
+
+  const objetivo = prefijo.trim().toUpperCase();
+  const encontrada = (res.data.files ?? []).find((f) =>
+    (f.name ?? "").trim().toUpperCase().startsWith(objetivo),
+  );
+  if (encontrada?.id) return encontrada.id;
+
+  return crearCarpeta(drive, nombreNuevo, parentId);
 }
 
 /**
@@ -148,6 +252,7 @@ export async function uploadFile(params: {
     },
     media: { mimeType, body: stream },
     fields: "id, webViewLink",
+    ...ESCRIBIR_TODAS_LAS_UNIDADES,
   });
 
   const driveFileId = res.data.id!;
