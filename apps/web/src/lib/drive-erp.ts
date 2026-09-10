@@ -4,6 +4,7 @@ import {
   getOrCreateFolder,
   getOrCreateFolderAlias,
   getOrCreateFolderPorPrefijo,
+  buscarCarpetaAlias,
   ESCRIBIR_TODAS_LAS_UNIDADES,
   LISTAR_TODAS_LAS_UNIDADES,
 } from "./drive";
@@ -76,13 +77,25 @@ export async function ensureCarpetaCotizacion(
 ): Promise<{ folderId: string; folderUrl: string }> {
   const config = await getErpDriveConfig();
   const drive = await getDriveClient();
+  const nombres = nombresCarpetaCotizacion(numero, anio);
+
+  // 1. Donde debe estar: {raíz}/{año}/{NNN-AAAA}.
   const anioFolder = await getOrCreateFolder(drive, String(anio), config.cotizacionesRootId);
-  const folderId = await getOrCreateFolderAlias(
-    drive,
-    nombresCarpetaCotizacion(numero, anio),
-    anioFolder,
-  );
-  return { folderId, folderUrl: folderUrl(folderId) };
+  const enAnio = await buscarCarpetaAlias(drive, nombres, anioFolder);
+  if (enAnio) return { folderId: enAnio, folderUrl: folderUrl(enAnio) };
+
+  // 2. Si no está ahí, colgando directo de la raíz: es la disposición anterior
+  //    al nivel del año. Importa porque el importador nunca escribe
+  //    `drive_folder_id` —todas las cotizaciones importadas lo tienen en NULL—,
+  //    así que al versionar una se vuelve a resolver la carpeta desde cero. Sin
+  //    este fallback se crearía una vacía al lado de la histórica, el PDF
+  //    quedaría fuera de vista y el envío al cliente fallaría por PDF ausente.
+  const enRaiz = await buscarCarpetaAlias(drive, nombres, config.cotizacionesRootId);
+  if (enRaiz) return { folderId: enRaiz, folderUrl: folderUrl(enRaiz) };
+
+  // 3. No existe en ningún nivel: se crea donde toca a partir de ahora.
+  const creada = await getOrCreateFolderAlias(drive, nombres, anioFolder);
+  return { folderId: creada, folderUrl: folderUrl(creada) };
 }
 
 /**

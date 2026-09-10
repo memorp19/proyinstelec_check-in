@@ -20,6 +20,7 @@ import {
   getOrCreateFolder,
   getOrCreateFolderAlias,
   getOrCreateFolderPorPrefijo,
+  buscarCarpetaAlias,
   buildFolderPath,
   uploadFile,
   getThumbnailUrl,
@@ -88,14 +89,155 @@ describe("getOrCreateFolder", () => {
     expect(call.requestBody.name).toBe("NuevaCarpeta");
   });
 
-  it("escapes single quotes in folder names to avoid query injection", async () => {
+  // Los nombres vienen de entrada de usuario (títulos, razones sociales). Se
+  // afirma la query COMPLETA: un `toContain` pasaba aunque el escape estuviera
+  // roto, porque la cadena escapada aparece igual dentro de una mal formada.
+  it("escapa la comilla simple en el nombre", async () => {
     const { filesList } = getMocks();
     filesList.mockResolvedValue({ data: { files: [{ id: "fid" }] } });
 
     const drive = vi.mocked(google.drive)({ version: "v3" }) as any;
     await getOrCreateFolder(drive, "O'Brien Project", "root");
-    const query = filesList.mock.calls[0][0].q as string;
-    expect(query).toContain("\\'");
+
+    expect(filesList.mock.calls[0][0].q).toBe(
+      "name='O\\'Brien Project' and 'root' in parents and " +
+        "mimeType='application/vnd.google-apps.folder' and trashed=false",
+    );
+  });
+
+  it("escapa también la barra invertida", async () => {
+    const { filesList } = getMocks();
+    filesList.mockResolvedValue({ data: { files: [{ id: "fid" }] } });
+
+    const drive = vi.mocked(google.drive)({ version: "v3" }) as any;
+    await getOrCreateFolder(drive, "Proyecto\\Norte", "root");
+
+    expect(filesList.mock.calls[0][0].q).toBe(
+      "name='Proyecto\\\\Norte' and 'root' in parents and " +
+        "mimeType='application/vnd.google-apps.folder' and trashed=false",
+    );
+  });
+
+  it("escapa la barra ANTES que la comilla, sin re-escapar el escape", async () => {
+    const { filesList } = getMocks();
+    filesList.mockResolvedValue({ data: { files: [{ id: "fid" }] } });
+
+    const drive = vi.mocked(google.drive)({ version: "v3" }) as any;
+    // Nombre real: a \ ' b   →  escapado: a \\ \' b
+    await getOrCreateFolder(drive, "a\\'b", "root");
+
+    expect(filesList.mock.calls[0][0].q).toContain("name='a\\\\\\'b'");
+  });
+});
+
+// Drive no impone unicidad de nombre: dos altas simultáneas dejan dos carpetas
+// iguales y el árbol se parte en dos. No se puede evitar la carrera, pero sí
+// que todos los que compitieron converjan en la misma carpeta.
+describe("carpetas duplicadas por carrera", () => {
+  it("lista ordenado por createdTime y sin pageSize: 1", async () => {
+    const { filesList } = getMocks();
+    filesList.mockResolvedValue({ data: { files: [{ id: "fid", name: "2026" }] } });
+
+    const drive = vi.mocked(google.drive)({ version: "v3" }) as any;
+    await getOrCreateFolder(drive, "2026", "raiz");
+
+    const args = filesList.mock.calls[0][0];
+    expect(args.orderBy).toBe("createdTime");
+    expect(args.pageSize).toBeGreaterThan(1);
+    // Sin createdTime en fields no se puede ordenar ni decidir cuál es la vieja
+    expect(args.fields).toContain("createdTime");
+  });
+
+  it("tras crear vuelve a listar y se queda con la más antigua", async () => {
+    const { filesList, filesCreate } = getMocks();
+    filesList
+      .mockResolvedValueOnce({ data: { files: [] } }) // nadie la había creado
+      .mockResolvedValueOnce({
+        // otro proceso ganó la carrera: la suya es más antigua y va primero
+        data: {
+          files: [
+            { id: "la-del-otro", name: "2026", createdTime: "2026-01-01T10:00:00Z" },
+            { id: "la-mia", name: "2026", createdTime: "2026-01-01T10:00:01Z" },
+          ],
+        },
+      });
+    filesCreate.mockResolvedValue({ data: { id: "la-mia" } });
+
+    const drive = vi.mocked(google.drive)({ version: "v3" }) as any;
+    const id = await getOrCreateFolder(drive, "2026", "raiz");
+
+    // Devuelve la del otro, no la que acaba de crear: así ambos convergen
+    expect(id).toBe("la-del-otro");
+    expect(filesList).toHaveBeenCalledTimes(2);
+  });
+
+  it("si el re-listado no la ve todavía, se queda con la que creó", async () => {
+    const { filesList, filesCreate } = getMocks();
+    filesList.mockResolvedValue({ data: { files: [] } });
+    filesCreate.mockResolvedValue({ data: { id: "la-mia" } });
+
+    const drive = vi.mocked(google.drive)({ version: "v3" }) as any;
+    expect(await getOrCreateFolder(drive, "2026", "raiz")).toBe("la-mia");
+  });
+
+  it("getOrCreateFolderAlias también converge en la más antigua", async () => {
+    const { filesList, filesCreate } = getMocks();
+    filesList.mockResolvedValueOnce({ data: { files: [] } }).mockResolvedValueOnce({
+      data: {
+        files: [
+          { id: "vieja", name: "242-2026", createdTime: "2026-01-01T10:00:00Z" },
+          { id: "nueva", name: "242-2026", createdTime: "2026-01-01T10:00:01Z" },
+        ],
+      },
+    });
+    filesCreate.mockResolvedValue({ data: { id: "nueva" } });
+
+    const drive = vi.mocked(google.drive)({ version: "v3" }) as any;
+    expect(await getOrCreateFolderAlias(drive, ["242-2026", "242 - 2026"], "raiz")).toBe("vieja");
+  });
+
+  it("getOrCreateFolderPorPrefijo también converge en la más antigua", async () => {
+    const { filesList, filesCreate } = getMocks();
+    filesList.mockResolvedValueOnce({ data: { files: [] } }).mockResolvedValueOnce({
+      data: {
+        files: [
+          { id: "vieja", name: "OT450260 - IGSA", createdTime: "2026-01-01T10:00:00Z" },
+          { id: "nueva", name: "OT450260 - Igsa", createdTime: "2026-01-01T10:00:01Z" },
+        ],
+      },
+    });
+    filesCreate.mockResolvedValue({ data: { id: "nueva" } });
+
+    const drive = vi.mocked(google.drive)({ version: "v3" }) as any;
+    expect(await getOrCreateFolderPorPrefijo(drive, "OT450260", "OT450260 - Igsa", "c2026")).toBe(
+      "vieja",
+    );
+  });
+});
+
+describe("buscarCarpetaAlias", () => {
+  it("devuelve null en vez de crear cuando no está", async () => {
+    const { filesList, filesCreate } = getMocks();
+    filesList.mockResolvedValue({ data: { files: [] } });
+
+    const drive = vi.mocked(google.drive)({ version: "v3" }) as any;
+    expect(await buscarCarpetaAlias(drive, ["242-2026", "242 - 2026"], "raiz")).toBeNull();
+    expect(filesCreate).not.toHaveBeenCalled();
+  });
+
+  it("respeta el orden de preferencia de los nombres", async () => {
+    const { filesList } = getMocks();
+    filesList.mockResolvedValue({
+      data: {
+        files: [
+          { id: "con-espacios", name: "242 - 2026", createdTime: "2026-01-01T10:00:00Z" },
+          { id: "pegada", name: "242-2026", createdTime: "2026-01-01T10:00:01Z" },
+        ],
+      },
+    });
+
+    const drive = vi.mocked(google.drive)({ version: "v3" }) as any;
+    expect(await buscarCarpetaAlias(drive, ["242-2026", "242 - 2026"], "raiz")).toBe("pegada");
   });
 });
 

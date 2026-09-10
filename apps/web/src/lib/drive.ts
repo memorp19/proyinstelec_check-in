@@ -89,9 +89,39 @@ export const ESCRIBIR_TODAS_LAS_UNIDADES = { supportsAllDrives: true } as const;
 
 // ── Folder management ─────────────────────────────────────────────────────────
 
-const escaparComilla = (valor: string) => valor.replace(/'/g, "\\'");
+/**
+ * Escapa un valor para meterlo entre comillas simples en una query de Drive.
+ * La barra invertida va PRIMERO: si se escaparan las comillas antes, el
+ * escape que acabamos de añadir se volvería a escapar. Los nombres vienen de
+ * entrada de usuario (títulos, razones sociales), así que ninguno de los dos
+ * caracteres es hipotético.
+ */
+const escaparValor = (valor: string) => valor.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 
 const CARPETA = "mimeType='application/vnd.google-apps.folder' and trashed=false";
+
+/** Una candidata devuelta por Drive, o `undefined` si ninguna sirve. */
+type Elegir = (carpetas: drive_v3.Schema$File[]) => drive_v3.Schema$File | undefined;
+
+/**
+ * Lista carpetas que cumplen `q`, siempre de la más antigua a la más nueva.
+ * El `orderBy` no es cosmético: es lo que hace determinista cuál se elige
+ * cuando hay duplicados (antes era `pageSize: 1` sin orden, así que Drive
+ * devolvía cualquiera y dos llamadas podían discrepar).
+ */
+async function listarCarpetas(
+  drive: drive_v3.Drive,
+  q: string,
+): Promise<drive_v3.Schema$File[]> {
+  const res = await drive.files.list({
+    q,
+    fields: "files(id, name, createdTime)",
+    orderBy: "createdTime",
+    pageSize: 25,
+    ...LISTAR_TODAS_LAS_UNIDADES,
+  });
+  return res.data.files ?? [];
+}
 
 async function crearCarpeta(
   drive: drive_v3.Drive,
@@ -112,6 +142,31 @@ async function crearCarpeta(
 }
 
 /**
+ * Crea la carpeta y decide con cuál quedarse.
+ *
+ * Drive no impone unicidad de nombre, así que "listar y si no está, crear" es
+ * una carrera: dos personas dando de alta una cotización el mismo segundo
+ * dejan dos carpetas "2026" y el año se parte en dos árboles, cada uno con
+ * archivos distintos dentro.
+ *
+ * La carrera no se puede evitar desde el cliente, pero sí se puede hacer que
+ * todos los que compitieron converjan en la MISMA carpeta: se vuelve a listar
+ * y gana la más antigua. El que pierde deja una carpeta vacía —basura visible
+ * y fácil de borrar— en lugar de un árbol paralelo con contenido.
+ */
+async function crearYResolverCarrera(
+  drive: drive_v3.Drive,
+  nombre: string,
+  parentId: string,
+  q: string,
+  elegir: Elegir,
+): Promise<string> {
+  const creadaId = await crearCarpeta(drive, nombre, parentId);
+  const ganadora = elegir(await listarCarpetas(drive, q));
+  return ganadora?.id ?? creadaId;
+}
+
+/**
  * Finds a folder by name inside parentId; creates it if it doesn't exist.
  * Idempotent — safe to call on every upload.
  *
@@ -124,18 +179,15 @@ export async function getOrCreateFolder(
   name: string,
   parentId: string,
 ): Promise<string> {
-  const res = await drive.files.list({
-    q: `name='${escaparComilla(name)}' and '${parentId}' in parents and ${CARPETA}`,
-    fields: "files(id, name)",
-    pageSize: 1,
-    ...LISTAR_TODAS_LAS_UNIDADES,
-  });
+  const q = `name='${escaparValor(name)}' and '${parentId}' in parents and ${CARPETA}`;
+  // Todas las candidatas tienen el nombre exacto; `listarCarpetas` las devuelve
+  // de la más antigua a la más nueva, así que la primera es la ganadora.
+  const elegir: Elegir = (carpetas) => carpetas[0];
 
-  if (res.data.files && res.data.files.length > 0) {
-    return res.data.files[0].id!;
-  }
+  const existente = elegir(await listarCarpetas(drive, q));
+  if (existente?.id) return existente.id;
 
-  return crearCarpeta(drive, name, parentId);
+  return crearYResolverCarrera(drive, name, parentId, q, elegir);
 }
 
 /**
@@ -146,6 +198,42 @@ export async function getOrCreateFolder(
  *
  * `nombres[0]` es el que se usa al crear.
  */
+function queryAlias(nombres: string[], parentId: string): string {
+  const alternativas = nombres.map((n) => `name='${escaparValor(n)}'`).join(" or ");
+  return `(${alternativas}) and '${parentId}' in parents and ${CARPETA}`;
+}
+
+/**
+ * Si existen varias escrituras, gana el orden en que se pidieron; entre
+ * carpetas del mismo nombre gana la más antigua, porque `listarCarpetas` las
+ * entrega ordenadas y `find` devuelve la primera.
+ */
+const elegirAlias =
+  (nombres: string[]): Elegir =>
+  (carpetas) => {
+    for (const nombre of nombres) {
+      const exacta = carpetas.find((f) => f.name === nombre);
+      if (exacta) return exacta;
+    }
+    return carpetas[0];
+  };
+
+/**
+ * Busca sin crear. Devuelve `null` si no está: lo usa el fallback de las
+ * cotizaciones, que necesita mirar en dos sitios antes de decidir crear.
+ */
+export async function buscarCarpetaAlias(
+  drive: drive_v3.Drive,
+  nombres: string[],
+  parentId: string,
+): Promise<string | null> {
+  if (nombres.length === 0) throw new Error("buscarCarpetaAlias sin nombres");
+  const encontrada = elegirAlias(nombres)(
+    await listarCarpetas(drive, queryAlias(nombres, parentId)),
+  );
+  return encontrada?.id ?? null;
+}
+
 export async function getOrCreateFolderAlias(
   drive: drive_v3.Drive,
   nombres: string[],
@@ -153,26 +241,13 @@ export async function getOrCreateFolderAlias(
 ): Promise<string> {
   if (nombres.length === 0) throw new Error("getOrCreateFolderAlias sin nombres");
 
-  const alternativas = nombres.map((n) => `name='${escaparComilla(n)}'`).join(" or ");
-  const res = await drive.files.list({
-    q: `(${alternativas}) and '${parentId}' in parents and ${CARPETA}`,
-    fields: "files(id, name)",
-    pageSize: 10,
-    ...LISTAR_TODAS_LAS_UNIDADES,
-  });
+  const q = queryAlias(nombres, parentId);
+  const elegir = elegirAlias(nombres);
 
-  const encontradas = res.data.files ?? [];
-  if (encontradas.length > 0) {
-    // Si ya existen las dos escrituras, gana el orden en que se pidieron:
-    // así dos llamadas seguidas devuelven siempre la misma carpeta.
-    for (const nombre of nombres) {
-      const exacta = encontradas.find((f) => f.name === nombre);
-      if (exacta?.id) return exacta.id;
-    }
-    if (encontradas[0].id) return encontradas[0].id;
-  }
+  const existente = elegir(await listarCarpetas(drive, q));
+  if (existente?.id) return existente.id;
 
-  return crearCarpeta(drive, nombres[0], parentId);
+  return crearYResolverCarrera(drive, nombres[0], parentId, q, elegir);
 }
 
 /**
@@ -188,22 +263,17 @@ export async function getOrCreateFolderPorPrefijo(
   nombreNuevo: string,
   parentId: string,
 ): Promise<string> {
-  const res = await drive.files.list({
-    // `contains` es subcadena y no distingue mayúsculas: filtramos después para
-    // exigir que el prefijo esté al principio.
-    q: `name contains '${escaparComilla(prefijo)}' and '${parentId}' in parents and ${CARPETA}`,
-    fields: "files(id, name)",
-    pageSize: 25,
-    ...LISTAR_TODAS_LAS_UNIDADES,
-  });
-
+  // `contains` es subcadena y no distingue mayúsculas: se filtra después para
+  // exigir que el prefijo esté al principio.
+  const q = `name contains '${escaparValor(prefijo)}' and '${parentId}' in parents and ${CARPETA}`;
   const objetivo = prefijo.trim().toUpperCase();
-  const encontrada = (res.data.files ?? []).find((f) =>
-    (f.name ?? "").trim().toUpperCase().startsWith(objetivo),
-  );
-  if (encontrada?.id) return encontrada.id;
+  const elegir: Elegir = (carpetas) =>
+    carpetas.find((f) => (f.name ?? "").trim().toUpperCase().startsWith(objetivo));
 
-  return crearCarpeta(drive, nombreNuevo, parentId);
+  const existente = elegir(await listarCarpetas(drive, q));
+  if (existente?.id) return existente.id;
+
+  return crearYResolverCarrera(drive, nombreNuevo, parentId, q, elegir);
 }
 
 /**

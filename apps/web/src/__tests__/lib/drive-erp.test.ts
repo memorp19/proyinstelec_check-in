@@ -2,21 +2,30 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // vi.hoisted: `vi.mock` se eleva sobre las declaraciones, así que las dobles
 // tienen que crearse en el mismo salto para poder inspeccionarlas después.
-const { getDriveClient, getOrCreateFolder, getOrCreateFolderAlias, getOrCreateFolderPorPrefijo } =
-  vi.hoisted(() => ({
-    getDriveClient: vi.fn(),
-    getOrCreateFolder: vi.fn(),
-    getOrCreateFolderAlias: vi.fn(),
-    getOrCreateFolderPorPrefijo: vi.fn(),
-  }));
-
-vi.mock("@/src/lib/drive", () => ({
+const {
   getDriveClient,
   getOrCreateFolder,
   getOrCreateFolderAlias,
   getOrCreateFolderPorPrefijo,
-  ESCRIBIR_TODAS_LAS_UNIDADES: { supportsAllDrives: true },
-  LISTAR_TODAS_LAS_UNIDADES: { supportsAllDrives: true, includeItemsFromAllDrives: true },
+  buscarCarpetaAlias,
+} = vi.hoisted(() => ({
+  getDriveClient: vi.fn(),
+  getOrCreateFolder: vi.fn(),
+  getOrCreateFolderAlias: vi.fn(),
+  getOrCreateFolderPorPrefijo: vi.fn(),
+  buscarCarpetaAlias: vi.fn(),
+}));
+
+// Se doblan solo las funciones; las constantes salen del módulo real. Si se
+// redefinieran aquí, el test afirmaría lo que él mismo escribió: quitar
+// includeItemsFromAllDrives de la implementación dejaría los tests en verde.
+vi.mock("@/src/lib/drive", async (importarReal) => ({
+  ...(await importarReal<typeof import("@/src/lib/drive")>()),
+  getDriveClient,
+  getOrCreateFolder,
+  getOrCreateFolderAlias,
+  getOrCreateFolderPorPrefijo,
+  buscarCarpetaAlias,
 }));
 
 import {
@@ -114,36 +123,67 @@ describe("nombresCarpetaCotizacion", () => {
 });
 
 describe("ensureCarpetaCotizacion", () => {
-  it("anida {raíz}/{año}/{NNN-AAAA} y busca por alias dentro del año", async () => {
+  it("la encuentra en {raíz}/{año}/{NNN-AAAA} y no crea nada", async () => {
     getOrCreateFolder.mockResolvedValueOnce("carpeta-2026");
-    getOrCreateFolderAlias.mockResolvedValueOnce("carpeta-242");
+    buscarCarpetaAlias.mockResolvedValueOnce("carpeta-242");
 
     const r = await ensureCarpetaCotizacion(242, 2026);
 
-    // El año se crea bajo la raíz, con match exacto
+    // El año se resuelve bajo la raíz, con match exacto
     expect(getOrCreateFolder.mock.calls[0].slice(1)).toEqual(["2026", "raiz-cotizaciones"]);
-    // Y la carpeta de la cotización se busca DENTRO del año, no en la raíz
-    const [, nombres, padre] = getOrCreateFolderAlias.mock.calls[0];
+    // Y la carpeta de la cotización se busca DENTRO del año
+    const [, nombres, padre] = buscarCarpetaAlias.mock.calls[0];
     expect(nombres).toEqual(["242-2026", "242 - 2026"]);
     expect(padre).toBe("carpeta-2026");
+    expect(getOrCreateFolderAlias).not.toHaveBeenCalled();
     expect(r).toEqual({
       folderId: "carpeta-242",
       folderUrl: "https://drive.google.com/drive/folders/carpeta-242",
     });
   });
 
-  // La razón de haber movido la variable a la raíz: sin esto, versionar una
-  // cotización vieja no encontraba su carpeta y perdía sus PDFs de vista.
   it("una cotización de un año anterior busca en la carpeta de SU año", async () => {
     getOrCreateFolder.mockResolvedValueOnce("carpeta-2025");
-    getOrCreateFolderAlias.mockResolvedValueOnce("carpeta-137-2025");
+    buscarCarpetaAlias.mockResolvedValueOnce("carpeta-137-2025");
 
     await ensureCarpetaCotizacion(137, 2025);
 
     expect(getOrCreateFolder.mock.calls[0].slice(1)).toEqual(["2025", "raiz-cotizaciones"]);
-    const [, nombres, padre] = getOrCreateFolderAlias.mock.calls[0];
-    expect(nombres).toEqual(["137-2025", "137 - 2025"]);
-    expect(padre).toBe("carpeta-2025");
+    expect(buscarCarpetaAlias.mock.calls[0][2]).toBe("carpeta-2025");
+  });
+
+  // Las importadas tienen drive_folder_id en NULL, así que al versionarlas la
+  // carpeta se resuelve desde cero. Si su carpeta histórica cuelga directo de
+  // la raíz, hay que reutilizarla: crear una vacía al lado dejaría el PDF
+  // fuera de vista y el envío al cliente fallaría por PDF ausente.
+  describe("fallback a la raíz", () => {
+    it("reutiliza la carpeta histórica que cuelga de la raíz", async () => {
+      getOrCreateFolder.mockResolvedValueOnce("carpeta-2026");
+      buscarCarpetaAlias
+        .mockResolvedValueOnce(null) // no está en el nivel del año
+        .mockResolvedValueOnce("carpeta-historica"); // sí en la raíz
+
+      const r = await ensureCarpetaCotizacion(242, 2026);
+
+      expect(buscarCarpetaAlias.mock.calls[1][2]).toBe("raiz-cotizaciones");
+      expect(r.folderId).toBe("carpeta-historica");
+      // Lo que importa: NO se crea una carpeta nueva al lado de la que tiene los PDFs
+      expect(getOrCreateFolderAlias).not.toHaveBeenCalled();
+    });
+
+    it("si no está en ningún nivel, la crea dentro del año", async () => {
+      getOrCreateFolder.mockResolvedValueOnce("carpeta-2026");
+      buscarCarpetaAlias.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+      getOrCreateFolderAlias.mockResolvedValueOnce("carpeta-nueva");
+
+      const r = await ensureCarpetaCotizacion(242, 2026);
+
+      const [, nombres, padre] = getOrCreateFolderAlias.mock.calls[0];
+      expect(nombres).toEqual(["242-2026", "242 - 2026"]);
+      // Se crea en el nivel del año, nunca en la raíz
+      expect(padre).toBe("carpeta-2026");
+      expect(r.folderId).toBe("carpeta-nueva");
+    });
   });
 });
 
