@@ -18,6 +18,8 @@ interface Cot {
   fecha_solicitud: string;
   fecha_entrega?: string;
   fecha_envio?: string;
+  monto_mxn?: string;
+  monto_usd?: string;
   orden_compra?: string;
   folio_ot?: string;
   drive_folder_url?: string;
@@ -38,6 +40,7 @@ type Modal =
   | { tipo: "versiones"; cot: Cot }
   | { tipo: "enviar"; cot: Cot }
   | { tipo: "oc"; cot: Cot }
+  | { tipo: "ot-sin-oc"; cot: Cot }
   | null;
 
 const key = (c: Cot) => `${String(c.numero).padStart(3, "0")}-${c.anio}`;
@@ -61,6 +64,75 @@ const btnGhost =
 function fmtFecha(iso?: string) {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function fmtMonto(monto: string, moneda: string) {
+  const n = Number(monto);
+  const cifra = Number.isFinite(n)
+    ? n.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : monto;
+  return `$${cifra} ${moneda}`;
+}
+
+/**
+ * Importes de una cotización, cada moneda por separado. Nunca un total: los
+ * montos en pesos y en dólares son independientes y sumarlos exigiría inventar
+ * un tipo de cambio. Sin montos capturados no se dibuja nada — vacío no es cero.
+ */
+function Montos({ cot }: { cot: Cot }) {
+  if (!cot.monto_mxn && !cot.monto_usd) return null;
+  return (
+    <span className="inline-flex gap-1.5 flex-wrap">
+      {cot.monto_mxn && (
+        <span className="font-mono text-[9px] px-2 py-0.5 rounded-full bg-white/10 border border-white/20 text-white/70">
+          {fmtMonto(cot.monto_mxn, "MXN")}
+        </span>
+      )}
+      {cot.monto_usd && (
+        <span className="font-mono text-[9px] px-2 py-0.5 rounded-full bg-white/10 border border-white/20 text-white/70">
+          {fmtMonto(cot.monto_usd, "USD")}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** Par de campos de importe, compartido por el alta y la edición. */
+function CamposMonto({
+  mxn,
+  usd,
+  onChange,
+}: {
+  mxn: string;
+  usd: string;
+  onChange: (campo: "montoMxn" | "montoUsd", valor: string) => void;
+}) {
+  return (
+    <div>
+      <p className="font-mono text-[9px] text-white/40 uppercase tracking-widest mb-1">
+        Importe — se puede capturar en las dos monedas
+      </p>
+      <div className="grid grid-cols-2 gap-2">
+        <input
+          className={input}
+          placeholder="Monto MXN"
+          inputMode="decimal"
+          value={mxn}
+          onChange={(e) => onChange("montoMxn", e.target.value)}
+        />
+        <input
+          className={input}
+          placeholder="Monto USD"
+          inputMode="decimal"
+          value={usd}
+          onChange={(e) => onChange("montoUsd", e.target.value)}
+        />
+      </div>
+      <p className="font-mono text-[10px] text-white/30 mt-1">
+        Déjalo vacío si aún no se conoce; no se guarda como cero ni se suman entre sí.
+      </p>
+    </div>
+  );
 }
 
 // ── Componente principal ──────────────────────────────────────────────────────
@@ -147,6 +219,9 @@ export function CotizacionesClient({
           {modal.tipo === "oc" && (
             <OcForm cot={modal.cot} catalogos={catalogos} onDone={(msg) => { setAviso(msg); setModal(null); }} />
           )}
+          {modal.tipo === "ot-sin-oc" && (
+            <OcForm sinOc cot={modal.cot} catalogos={catalogos} onDone={(msg) => { setAviso(msg); setModal(null); }} />
+          )}
         </ModalShell>
       )}
     </div>
@@ -154,7 +229,14 @@ export function CotizacionesClient({
 }
 
 function tituloModal(m: NonNullable<Modal>) {
-  const t = { editar: "Editar", version: "Nueva versión", versiones: "Versiones", enviar: "Enviar al cliente", oc: "Ingresar OC → Generar OT" }[m.tipo];
+  const t = {
+    editar: "Editar",
+    version: "Nueva versión",
+    versiones: "Versiones",
+    enviar: "Enviar al cliente",
+    oc: "Ingresar OC → Generar OT",
+    "ot-sin-oc": "Generar OT sin OC",
+  }[m.tipo];
   return `${t} · ${m.cot.folio}`;
 }
 
@@ -307,6 +389,9 @@ function Buscador({
                     Dirigida: {c.dirigida_a} · Elaboró: {c.elaboro} · Entrega: {fmtFecha(c.fecha_entrega)}
                     {c.folio_ot ? ` · OT ${c.folio_ot}` : ""}{c.orden_compra ? ` · OC ${c.orden_compra}` : ""}
                   </p>
+                  <div className="mt-1.5">
+                    <Montos cot={c} />
+                  </div>
                 </div>
 
                 {/* Acción principal según estado (regla del legacy) */}
@@ -325,10 +410,16 @@ function Buscador({
                       Enviar al Cliente
                     </button>
                   )}
-                  {c.estatus === "ENVIADA" && !c.orden_compra && puedeCrearOT && (
-                    <button onClick={() => abrirModal({ tipo: "oc", cot: c })} className="font-mono text-[10px] font-bold text-navy bg-amber-400 rounded-lg px-3 py-1.5 active:scale-[0.97] transition-transform">
-                      Ingresar OC
-                    </button>
+                  {c.estatus === "ENVIADA" && !c.folio_ot && puedeCrearOT && (
+                    <>
+                      <button onClick={() => abrirModal({ tipo: "oc", cot: c })} className="font-mono text-[10px] font-bold text-navy bg-amber-400 rounded-lg px-3 py-1.5 active:scale-[0.97] transition-transform">
+                        Ingresar OC
+                      </button>
+                      {/* El cliente puede aceptar sin emitir OC; la OT se genera igual */}
+                      <button onClick={() => abrirModal({ tipo: "ot-sin-oc", cot: c })} className={`${btnGhost} ml-1.5`}>
+                        Generar OT sin OC
+                      </button>
+                    </>
                   )}
                   {c.estatus === "ENVIADA" && puedeEnviar && (
                     <button onClick={() => abrirModal({ tipo: "enviar", cot: c })} className={`${btnGhost} ml-1.5`}>
@@ -367,7 +458,7 @@ function NuevaCotizacion({
   catalogos: Catalogos | null;
   onCreada: (avisos: string[]) => void;
 }) {
-  const [form, setForm] = useState({ numero: "", cliente: "", titulo: "", dirigidaA: "", elaboro: "", prioridad: "MEDIA", fechaEntrega: "" });
+  const [form, setForm] = useState({ numero: "", cliente: "", titulo: "", dirigidaA: "", elaboro: "", prioridad: "MEDIA", fechaEntrega: "", montoMxn: "", montoUsd: "" });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [clientes, setClientes] = useState<string[]>([]);
@@ -403,6 +494,8 @@ function NuevaCotizacion({
           elaboro: form.elaboro,
           prioridad: form.prioridad,
           fechaEntrega: form.fechaEntrega || undefined,
+          montoMxn: form.montoMxn || null,
+          montoUsd: form.montoUsd || null,
         }),
       });
       const data = await res.json();
@@ -446,6 +539,11 @@ function NuevaCotizacion({
         <p className="font-mono text-[9px] text-white/40 uppercase tracking-widest mb-1">Fecha compromiso de entrega</p>
         <input type="date" className={input} value={form.fechaEntrega} onChange={set("fechaEntrega")} />
       </div>
+      <CamposMonto
+        mxn={form.montoMxn}
+        usd={form.montoUsd}
+        onChange={(campo, valor) => setForm((p) => ({ ...p, [campo]: valor }))}
+      />
       {error && <p className="font-mono text-xs text-red-400">{error}</p>}
       <div className="flex items-center justify-between">
         <p className="font-mono text-[10px] text-white/30">Se creará la carpeta en Drive con las plantillas</p>
@@ -463,6 +561,7 @@ function EditarForm({ cot, catalogos, onDone }: { cot: Cot; catalogos: Catalogos
   const [form, setForm] = useState({
     titulo: cot.titulo, dirigidaA: cot.dirigida_a, prioridad: cot.prioridad,
     fechaEntrega: cot.fecha_entrega?.slice(0, 10) ?? "", estatus: "",
+    montoMxn: cot.monto_mxn ?? "", montoUsd: cot.monto_usd ?? "",
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -475,6 +574,9 @@ function EditarForm({ cot, catalogos, onDone }: { cot: Cot; catalogos: Catalogos
       const body: Record<string, unknown> = {
         titulo: form.titulo, dirigidaA: form.dirigidaA, prioridad: form.prioridad,
         fechaEntrega: form.fechaEntrega || null,
+        // null vacía el importe; el servidor nunca lo interpreta como cero
+        montoMxn: form.montoMxn || null,
+        montoUsd: form.montoUsd || null,
       };
       if (form.estatus) body.estatus = form.estatus;
       const res = await fetch(`/api/erp/cotizaciones/${key(cot)}`, {
@@ -502,6 +604,11 @@ function EditarForm({ cot, catalogos, onDone }: { cot: Cot; catalogos: Catalogos
         </select>
         <input type="date" className={input} value={form.fechaEntrega} onChange={(e) => setForm((p) => ({ ...p, fechaEntrega: e.target.value }))} />
       </div>
+      <CamposMonto
+        mxn={form.montoMxn}
+        usd={form.montoUsd}
+        onChange={(campo, valor) => setForm((p) => ({ ...p, [campo]: valor }))}
+      />
       <div>
         <p className="font-mono text-[9px] text-white/40 uppercase tracking-widest mb-1">Cambio de estatus manual (opcional)</p>
         <select className={input} value={form.estatus} onChange={(e) => setForm((p) => ({ ...p, estatus: e.target.value }))}>
@@ -723,9 +830,24 @@ function EnviarForm({ cot, onDone }: { cot: Cot; onDone: (msg: string) => void }
   );
 }
 
-// ── Ingreso de OC ─────────────────────────────────────────────────────────────
+// ── Generación de OT (con orden de compra o sin ella) ─────────────────────────
 
-function OcForm({ cot, catalogos, onDone }: { cot: Cot; catalogos: Catalogos | null; onDone: (msg: string) => void }) {
+/**
+ * Mismo formulario para las dos vías: cambian el campo de OC, el adjunto y el
+ * endpoint. Responsable y áreas se piden igual porque la OT los necesita venga
+ * de donde venga.
+ */
+function OcForm({
+  cot,
+  catalogos,
+  onDone,
+  sinOc = false,
+}: {
+  cot: Cot;
+  catalogos: Catalogos | null;
+  onDone: (msg: string) => void;
+  sinOc?: boolean;
+}) {
   const [oc, setOc] = useState("");
   const [responsable, setResponsable] = useState("");
   const [areas, setAreas] = useState<Set<string>>(new Set());
@@ -758,14 +880,13 @@ function OcForm({ cot, catalogos, onDone }: { cot: Cot; catalogos: Catalogos | n
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`/api/erp/cotizaciones/${key(cot)}/oc`, {
+      const res = await fetch(`/api/erp/cotizaciones/${key(cot)}/${sinOc ? "ot" : "oc"}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          ordenCompra: oc,
           responsableCorreo: responsable,
           areas: [...areas],
-          adjunto: adjunto ?? undefined,
+          ...(sinOc ? {} : { ordenCompra: oc, adjunto: adjunto ?? undefined }),
         }),
       });
       const data = await res.json();
@@ -784,7 +905,14 @@ function OcForm({ cot, catalogos, onDone }: { cot: Cot; catalogos: Catalogos | n
       <p className="font-mono text-[10px] text-white/40">
         Folio OT que se generará: <span className="text-white font-bold">OT{String(cot.numero).padStart(3, "0")}{String(cot.anio % 100).padStart(2, "0")}{cot.version}</span>
       </p>
-      <input className={input} placeholder="No. de Orden de Compra *" value={oc} onChange={(e) => setOc(e.target.value)} />
+      {sinOc ? (
+        <p className="font-mono text-[10px] text-amber-300/80 bg-amber-400/10 border border-amber-400/20 rounded-lg px-3 py-2">
+          Se generará la OT sin orden de compra. La cotización queda ASIGNADA y la OC puede
+          capturarse después, cuando el cliente la emita.
+        </p>
+      ) : (
+        <input className={input} placeholder="No. de Orden de Compra *" value={oc} onChange={(e) => setOc(e.target.value)} />
+      )}
 
       <div>
         <p className="font-mono text-[9px] text-white/40 uppercase tracking-widest mb-1">Responsable de la actividad *</p>
@@ -820,15 +948,21 @@ function OcForm({ cot, catalogos, onDone }: { cot: Cot; catalogos: Catalogos | n
         </div>
       </div>
 
-      <div>
-        <p className="font-mono text-[9px] text-white/40 uppercase tracking-widest mb-1">Archivo de la OC (PDF/imagen, máx 15MB)</p>
-        <input type="file" accept="application/pdf,image/*" onChange={onFile} className="font-mono text-xs text-white/60" />
-      </div>
+      {!sinOc && (
+        <div>
+          <p className="font-mono text-[9px] text-white/40 uppercase tracking-widest mb-1">Archivo de la OC (PDF/imagen, máx 15MB)</p>
+          <input type="file" accept="application/pdf,image/*" onChange={onFile} className="font-mono text-xs text-white/60" />
+        </div>
+      )}
 
       {error && <p className="font-mono text-xs text-red-400">{error}</p>}
       <div className="flex justify-end">
-        <button onClick={submit} disabled={saving || !oc.trim() || !responsable || areas.size === 0} className={btnPrimary}>
-          {saving ? "Generando…" : "Generar OT"}
+        <button
+          onClick={submit}
+          disabled={saving || (!sinOc && !oc.trim()) || !responsable || areas.size === 0}
+          className={btnPrimary}
+        >
+          {saving ? "Generando…" : sinOc ? "Generar OT sin OC" : "Generar OT"}
         </button>
       </div>
     </div>

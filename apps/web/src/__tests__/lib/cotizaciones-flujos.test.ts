@@ -34,7 +34,7 @@ vi.mock("@/src/lib/ot", () => ({
 vi.mock("@/src/lib/users", () => ({ listUsers: vi.fn() }));
 vi.mock("@/src/lib/config-erp", () => ({ getConfigErp: vi.fn() }));
 
-import { cambiarEstatus, getVigente, puedeEnviarseAlCliente, registrarAprobacion } from "@/src/lib/cotizaciones";
+import { cambiarEstatus, getVigente, puedeEnviarseAlCliente, registrarAprobacion, updateCotizacion } from "@/src/lib/cotizaciones";
 import { buscarPdfCotizacion } from "@/src/lib/drive-erp";
 import { enviarCorreo } from "@/src/lib/correo";
 import { createOT } from "@/src/lib/ot";
@@ -45,6 +45,7 @@ import {
   solicitarCorreccion,
   enviarAlCliente,
   ingresarOrdenCompra,
+  generarOTSinOrdenCompra,
 } from "@/src/lib/cotizaciones-flujos";
 
 const vigente = {
@@ -158,6 +159,60 @@ describe("enviarAlCliente", () => {
     expect(llamada.adjuntos?.[0].filename).toBe("PCOTOP-001-2026.pdf");
     expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "ENVIADA");
   });
+
+  // El estatus ENVIADA afirma que el cliente recibió la cotización. Si el correo
+  // no salió, la afirmación es falsa: el flujo tiene que abortar antes de tocar
+  // el estatus y la fecha de envío, no degradar en silencio.
+  describe("si el correo no salió, la cotización no se marca como enviada", () => {
+    beforeEach(() => {
+      vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({ puede: true, cotizacion: vigente as any });
+      vi.mocked(buscarPdfCotizacion).mockResolvedValue({
+        filename: "PCOTOP-001-2026.pdf", contenido: Buffer.from("pdf"),
+      });
+    });
+
+    const enviar = () =>
+      enviarAlCliente({
+        numero: 1, anio: 2026, destinatarios: ["cliente@aceros.mx"],
+        remitente: { email: "maria@proyinstelec.mx", nombre: "María" },
+      });
+
+    it("CORREO_DESHABILITADO=true: nombra la variable y no cambia nada", async () => {
+      vi.mocked(enviarCorreo).mockResolvedValueOnce({ enviado: false, motivo: "deshabilitado" });
+
+      await expect(enviar()).rejects.toThrow("CORREO_DESHABILITADO");
+
+      expect(cambiarEstatus).not.toHaveBeenCalled();
+      expect(updateCotizacion).not.toHaveBeenCalled();
+    });
+
+    it("modo demo: tampoco sella el envío", async () => {
+      vi.mocked(enviarCorreo).mockResolvedValueOnce({ enviado: false, motivo: "demo" });
+
+      await expect(enviar()).rejects.toThrow("demo");
+
+      expect(cambiarEstatus).not.toHaveBeenCalled();
+      expect(updateCotizacion).not.toHaveBeenCalled();
+    });
+
+    it("sin destinatarios válidos: aborta", async () => {
+      vi.mocked(enviarCorreo).mockResolvedValueOnce({ enviado: false, motivo: "sin_destinatarios" });
+
+      await expect(enviar()).rejects.toThrow("destinatario");
+
+      expect(cambiarEstatus).not.toHaveBeenCalled();
+      expect(updateCotizacion).not.toHaveBeenCalled();
+    });
+
+    it("error del proveedor de correo: sigue abortando", async () => {
+      vi.mocked(enviarCorreo).mockResolvedValueOnce({ enviado: false, motivo: "error" });
+
+      await expect(enviar()).rejects.toThrow("bitácora");
+
+      expect(cambiarEstatus).not.toHaveBeenCalled();
+      expect(updateCotizacion).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe("ingresarOrdenCompra", () => {
@@ -200,5 +255,85 @@ describe("ingresarOrdenCompra", () => {
     expect(aviso![0].para).toEqual(["protecciones@proyinstelec.mx"]);
     expect(aviso![0].cc).toContain("gerencia@proyinstelec.mx");
     expect(aviso![0].cc).toContain("eduardo@proyinstelec.mx");
+  });
+
+  it("la orden de compra es obligatoria por esta vía", async () => {
+    vi.mocked(getVigente).mockResolvedValue({ ...vigente, estatus: "ENVIADA" } as any);
+    await expect(
+      ingresarOrdenCompra({
+        numero: 1, anio: 2026, ordenCompra: "   ",
+        responsableCorreo: "eduardo@proyinstelec.mx", areas: ["PROTECCIONES"], usuario: "x@x.mx",
+      }),
+    ).rejects.toThrow("orden de compra es obligatoria");
+  });
+
+  it("imprime los dos importes por separado en el aviso, sin totalizarlos", async () => {
+    vi.mocked(getVigente).mockResolvedValue({
+      ...vigente, estatus: "ENVIADA", monto_mxn: "50000.00", monto_usd: "3000.00",
+    } as any);
+    vi.mocked(cambiarEstatus).mockResolvedValue({} as any);
+
+    await ingresarOrdenCompra({
+      numero: 1, anio: 2026, ordenCompra: "OC-77",
+      responsableCorreo: "eduardo@proyinstelec.mx", areas: ["PROTECCIONES"], usuario: "x@x.mx",
+    });
+
+    const aviso = vi.mocked(enviarCorreo).mock.calls.find((c) => c[0].asunto?.includes("Nueva OT"))!;
+    expect(aviso[0].html).toContain("$50,000.00 MXN");
+    expect(aviso[0].html).toContain("$3,000.00 USD");
+    expect(aviso[0].html).not.toContain("53,000"); // jamás una suma de monedas
+  });
+});
+
+describe("generarOTSinOrdenCompra", () => {
+  it("crea la OT con ordenCompra null y deja la cotización ASIGNADA", async () => {
+    vi.mocked(getVigente).mockResolvedValue({ ...vigente, estatus: "ENVIADA" } as any);
+    vi.mocked(cambiarEstatus).mockResolvedValue({} as any);
+
+    const r = await generarOTSinOrdenCompra({
+      numero: 1, anio: 2026,
+      responsableCorreo: "eduardo@proyinstelec.mx", areas: ["PROTECCIONES"], usuario: "maria@proyinstelec.mx",
+    });
+
+    expect(r.folioOt).toBe("OT001260");
+    expect(createOT).toHaveBeenCalledWith(expect.objectContaining({ ordenCompra: null }));
+    expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "ASIGNADA");
+  });
+
+  it("no escribe una OC vacía en la cotización", async () => {
+    vi.mocked(getVigente).mockResolvedValue({ ...vigente, estatus: "ENVIADA" } as any);
+    vi.mocked(cambiarEstatus).mockResolvedValue({} as any);
+
+    await generarOTSinOrdenCompra({
+      numero: 1, anio: 2026,
+      responsableCorreo: "eduardo@proyinstelec.mx", areas: ["PROTECCIONES"], usuario: "x@x.mx",
+    });
+
+    const cambios = vi.mocked(updateCotizacion).mock.calls.at(-1)![2];
+    expect(cambios.folioOt).toBe("OT001260");
+    expect("ordenCompra" in cambios).toBe(false);
+  });
+
+  it("el aviso dice explícitamente que no hay orden de compra", async () => {
+    vi.mocked(getVigente).mockResolvedValue({ ...vigente, estatus: "ENVIADA" } as any);
+    vi.mocked(cambiarEstatus).mockResolvedValue({} as any);
+
+    await generarOTSinOrdenCompra({
+      numero: 1, anio: 2026,
+      responsableCorreo: "eduardo@proyinstelec.mx", areas: ["PROTECCIONES"], usuario: "x@x.mx",
+    });
+
+    const aviso = vi.mocked(enviarCorreo).mock.calls.find((c) => c[0].asunto?.includes("Nueva OT"))!;
+    expect(aviso[0].html).toContain("Sin orden de compra");
+  });
+
+  it("exige el mismo estatus ENVIADA que la vía con OC", async () => {
+    vi.mocked(getVigente).mockResolvedValue({ ...vigente, estatus: "REVISION" } as any);
+    await expect(
+      generarOTSinOrdenCompra({
+        numero: 1, anio: 2026,
+        responsableCorreo: "eduardo@proyinstelec.mx", areas: ["PROTECCIONES"], usuario: "x@x.mx",
+      }),
+    ).rejects.toThrow("ENVIADA");
   });
 });

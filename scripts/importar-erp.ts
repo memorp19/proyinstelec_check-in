@@ -21,6 +21,7 @@ import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
 import { sql } from "drizzle-orm";
 import * as schema from "../apps/web/src/db/schema";
+import { asegurarContadorMinimo } from "../apps/web/src/lib/folios";
 
 config({ path: "apps/web/.env.local" });
 
@@ -321,6 +322,33 @@ async function importarAprobaciones(sheetId: string) {
   console.log(`  ✅  Aprobaciones: ${registros.length}${DRY ? " (dry-run)" : ""}`);
 }
 
+// ── Contador de folios ────────────────────────────────────────────────────────
+
+/**
+ * Deja el contador de folios del año en el número más alto importado, para que
+ * la numeración nunca vuelva a arrancar en 1 sobre datos ya existentes.
+ *
+ * Ojo con el alcance real: hoy el número que la app sugiere al crear una
+ * cotización sale de `siguienteNumeroCotizacion` (MAX(numero)+1 sobre la tabla
+ * `cotizaciones`), no de este contador — nadie llama todavía a
+ * `siguienteNumero`. Se siembra de todas formas porque es la precondición para
+ * mover la numeración al contador atómico, que es lo que manda AGENTS.md §6.
+ */
+async function sembrarContadorCotizaciones(filas: Fila[]) {
+  const delAnio = filas.filter((f) => f.anio === ANIO);
+  if (delAnio.length === 0) {
+    console.log(`  🔢  Contador cotizacion-${ANIO}: sin filas del año, se deja como está`);
+    return;
+  }
+  const maximo = Math.max(...delAnio.map((f) => f.numero));
+  if (!DRY) {
+    await asegurarContadorMinimo(`cotizacion-${ANIO}`, maximo);
+  }
+  console.log(
+    `  🔢  Contador cotizacion-${ANIO} = ${maximo} (el más alto importado)${DRY ? " (dry-run)" : ""}`,
+  );
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -333,6 +361,7 @@ async function main() {
   const cotizacionesLeidas = await importarCotizaciones(cotId);
   await importarClientes(cliId);
   await importarAprobaciones(cliId);
+  await sembrarContadorCotizaciones(cotizacionesLeidas);
 
   // Las iniciales son la llave con la que el ERP identifica personas: si un
   // elaborador no las tiene capturadas en su perfil, no cruzará con nada.
