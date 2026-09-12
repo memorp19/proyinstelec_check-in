@@ -444,7 +444,37 @@ pnpm db:seed          # carga datos de prueba
 # Importación desde el sistema anterior
 pnpm import:erp                 # trae datos de las hojas de cálculo
 DRY_RUN=true pnpm import:erp    # solo reporta lo que haría, sin escribir
+
+# Administración: reconectar cotizaciones importadas con su carpeta de Drive
+pnpm backfill:carpetas          # reporte, NO escribe nada
+pnpm backfill:carpetas --aplicar
 ```
+
+### `backfill:carpetas`
+
+El importador no guarda `drive_folder_id`, así que las cotizaciones importadas
+lo tienen en NULL. La app sabe resolver la carpeta sola, pero mientras el dato
+esté vacío la vuelve a buscar en cada versión nueva, y si resuelve mal el PDF
+queda fuera de vista y el envío al cliente falla —el PDF es obligatorio—.
+
+Este script busca la carpeta de cada una y, con `--aplicar`, guarda el id.
+**Sin `--aplicar` no escribe nada.** Lo corre quien administra Neon.
+
+El reporte sale en tres grupos:
+
+1. **Se resolverían** — las que encontró en su año o colgando de la raíz. Marca
+   con `⚠️` las carpetas que no contienen ningún archivo que empiece con el
+   folio: suelen ser carpetas vacías creadas por error y **no se escriben ni
+   con `--aplicar`**.
+2. **No aparecen en ningún nivel** — hay que buscarlas a mano.
+3. **Aparecen en un año distinto** — el dato y el archivo no coinciden. Nunca
+   se escriben: decide una persona.
+
+Usa la misma cuenta de servicio que la app, a propósito. Correrlo con una
+cuenta personal con más permisos encontraría carpetas que la app no ve, y
+guardaría ids que en producción dan 404.
+
+Acepta `--anio 2026` para acotar.
 
 ---
 

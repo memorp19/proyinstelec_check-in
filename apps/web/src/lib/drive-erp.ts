@@ -1,14 +1,25 @@
 import type { drive_v3 } from "googleapis";
-import { getDriveClient, getOrCreateFolder } from "./drive";
+import {
+  getDriveClient,
+  getOrCreateFolder,
+  getOrCreateFolderAlias,
+  getOrCreateFolderPorPrefijo,
+  buscarCarpetaAlias,
+  ESCRIBIR_TODAS_LAS_UNIDADES,
+  LISTAR_TODAS_LAS_UNIDADES,
+} from "./drive";
 import { pad } from "./folios";
 
 // ── Config (carpetas raíz y plantillas del ERP) ───────────────────────────────
 
 interface ErpDriveConfig {
-  cotizacionesRootId: string; // carpeta raíz de cotizaciones (subcarpetas "NNN - AAAA")
+  /** Raíz de cotizaciones. El código crea dentro el nivel del año: {raíz}/{año}/{NNN-AAAA}. */
+  cotizacionesRootId: string;
   otRootId: string; // carpeta raíz de OT por año
-  plantillaDocId: string; // Google Doc base de cotización
-  plantillaSheetId: string; // Google Sheet base de cotización
+  /** Plantilla base de la cotización: es un .docx de Office, no un Google Doc. */
+  plantillaDocId: string;
+  /** Plantilla base de la cotización: es un .xlsx de Office, no un Google Sheet. */
+  plantillaSheetId: string;
 }
 
 let _cachedConfig: ErpDriveConfig | null = null;
@@ -19,7 +30,7 @@ async function getErpDriveConfig(): Promise<ErpDriveConfig> {
   const cotizacionesRootId = process.env.ERP_COTIZACIONES_FOLDER_ID;
   if (!cotizacionesRootId) {
     throw new Error(
-      "Falta ERP_COTIZACIONES_FOLDER_ID — carpeta raíz de cotizaciones en Drive",
+      "Falta ERP_COTIZACIONES_FOLDER_ID — raíz de cotizaciones en Drive (la que contiene las carpetas por año, no la del año)",
     );
   }
   _cachedConfig = {
@@ -37,11 +48,28 @@ export function _resetErpDriveConfigCache() {
 
 const folderUrl = (id: string) => `https://drive.google.com/drive/folders/${id}`;
 
-// ── Carpeta de cotización: "NNN - AAAA" ───────────────────────────────────────
+// ── Carpeta de cotización: {raíz}/{año}/{NNN-AAAA} ────────────────────────────
 
 /**
- * Busca/crea la carpeta `NNN - AAAA` de una cotización (compartida por todas
- * sus versiones, convención del legacy) y devuelve id + url.
+ * Nombres con los que puede estar guardada la carpeta de una cotización. En
+ * Drive conviven las dos escrituras porque se crearon a mano; predomina la
+ * pegada ("242-2026"), así que es la que se usa al crear.
+ */
+export function nombresCarpetaCotizacion(numero: number, anio: number): string[] {
+  const n = pad(numero, 3);
+  return [`${n}-${anio}`, `${n} - ${anio}`];
+}
+
+/**
+ * Busca/crea la carpeta de una cotización (compartida por todas sus versiones,
+ * convención del legacy) y devuelve id + url. Reconoce las dos escrituras para
+ * no duplicar la carpeta que ya tiene los archivos históricos.
+ *
+ * El nivel del año lo crea el código, igual que `ensureCarpetaOT`: así el año
+ * sale del dato y no de la configuración —nadie tiene que cambiar
+ * `ERP_COTIZACIONES_FOLDER_ID` cada enero— y las cotizaciones de años
+ * anteriores siguen siendo alcanzables (una versión nueva de una de 2025
+ * encuentra su carpeta en `2025/`, con sus PDFs).
  */
 export async function ensureCarpetaCotizacion(
   numero: number,
@@ -49,9 +77,25 @@ export async function ensureCarpetaCotizacion(
 ): Promise<{ folderId: string; folderUrl: string }> {
   const config = await getErpDriveConfig();
   const drive = await getDriveClient();
-  const nombre = `${pad(numero, 3)} - ${anio}`;
-  const folderId = await getOrCreateFolder(drive, nombre, config.cotizacionesRootId);
-  return { folderId, folderUrl: folderUrl(folderId) };
+  const nombres = nombresCarpetaCotizacion(numero, anio);
+
+  // 1. Donde debe estar: {raíz}/{año}/{NNN-AAAA}.
+  const anioFolder = await getOrCreateFolder(drive, String(anio), config.cotizacionesRootId);
+  const enAnio = await buscarCarpetaAlias(drive, nombres, anioFolder);
+  if (enAnio) return { folderId: enAnio, folderUrl: folderUrl(enAnio) };
+
+  // 2. Si no está ahí, colgando directo de la raíz: es la disposición anterior
+  //    al nivel del año. Importa porque el importador nunca escribe
+  //    `drive_folder_id` —todas las cotizaciones importadas lo tienen en NULL—,
+  //    así que al versionar una se vuelve a resolver la carpeta desde cero. Sin
+  //    este fallback se crearía una vacía al lado de la histórica, el PDF
+  //    quedaría fuera de vista y el envío al cliente fallaría por PDF ausente.
+  const enRaiz = await buscarCarpetaAlias(drive, nombres, config.cotizacionesRootId);
+  if (enRaiz) return { folderId: enRaiz, folderUrl: folderUrl(enRaiz) };
+
+  // 3. No existe en ningún nivel: se crea donde toca a partir de ahora.
+  const creada = await getOrCreateFolderAlias(drive, nombres, anioFolder);
+  return { folderId: creada, folderUrl: folderUrl(creada) };
 }
 
 /**
@@ -89,6 +133,7 @@ export async function copiarPlantillasCotizacion(params: {
     await drive.files.copy({
       fileId,
       requestBody: { name: nombre, parents: [params.folderId] },
+      ...ESCRIBIR_TODAS_LAS_UNIDADES,
     });
   };
   await copiar(config.plantillaDocId);
@@ -112,6 +157,7 @@ export async function buscarPdfCotizacion(params: {
     q: `'${params.folderId}' in parents and mimeType='application/pdf' and trashed=false`,
     fields: "files(id, name)",
     pageSize: 50,
+    ...LISTAR_TODAS_LAS_UNIDADES,
   });
   const archivos = res.data.files ?? [];
   if (archivos.length === 0) return null;
@@ -127,16 +173,16 @@ export async function buscarPdfCotizacion(params: {
 
 async function descargarArchivo(drive: drive_v3.Drive, fileId: string): Promise<Buffer> {
   const res = await drive.files.get(
-    { fileId, alt: "media" },
+    { fileId, alt: "media", ...ESCRIBIR_TODAS_LAS_UNIDADES },
     { responseType: "arraybuffer" },
   );
   return Buffer.from(res.data as ArrayBuffer);
 }
 
-// ── Carpeta de OT: "<folio> - CLIENTE" bajo la carpeta del año ────────────────
+// ── Carpeta de OT: "<folio> - <cliente>" bajo la carpeta del año ─────────────
 
 /**
- * Crea la estructura de la OT: {raíz OT}/{año}/{folio - CLIENTE}/OC
+ * Crea la estructura de la OT: {raíz OT}/{año}/{folio - cliente}/OC
  * y devuelve los ids. Sube además el archivo de la OC si se proporciona
  * (también deja copia en la subcarpeta OC de la cotización, como el legacy).
  */
@@ -155,9 +201,14 @@ export async function ensureCarpetaOT(params: {
   const drive = await getDriveClient();
 
   const anioFolder = await getOrCreateFolder(drive, String(params.anio), config.otRootId);
-  const otFolder = await getOrCreateFolder(
+  // Se busca por folio, no por nombre completo: el cliente está escrito a mano
+  // en Drive con mayúsculas y puntuación variables. Y al crear se respeta el
+  // nombre tal como viene, sin forzar mayúsculas, para no introducir una
+  // tercera escritura del mismo cliente.
+  const otFolder = await getOrCreateFolderPorPrefijo(
     drive,
-    `${params.folioOt} - ${params.cliente.toUpperCase()}`,
+    params.folioOt,
+    `${params.folioOt} - ${params.cliente.trim()}`,
     anioFolder,
   );
   const ocFolder = await getOrCreateFolder(drive, "OC", otFolder);
@@ -177,6 +228,7 @@ export async function subirArchivoErp(params: {
     requestBody: { name: params.filename, parents: [params.folderId] },
     media: { mimeType: params.mimeType, body: Readable.from(params.contenido) },
     fields: "id, webViewLink",
+    ...ESCRIBIR_TODAS_LAS_UNIDADES,
   });
   const id = res.data.id!;
   return {

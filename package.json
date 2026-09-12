@@ -16,7 +16,8 @@
     "db:push": "pnpm --filter web db:push",
     "db:studio": "pnpm --filter web db:studio",
     "db:seed": "tsx scripts/seed.ts",
-    "import:erp": "tsx scripts/importar-erp.ts"
+    "import:erp": "tsx scripts/importar-erp.ts",
+    "backfill:carpetas": "tsx scripts/backfill-carpetas-cotizaciones.ts"
   },
   "devDependencies": {
     "dotenv": "^16.4.7",
