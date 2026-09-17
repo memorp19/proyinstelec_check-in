@@ -1,5 +1,6 @@
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -7,10 +8,12 @@ import {
   pgTable,
   primaryKey,
   real,
+  smallint,
   text,
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import type { AdapterAccountType } from "next-auth/adapters";
 
 /**
@@ -427,7 +430,12 @@ export const ordenesTrabajo = pgTable(
     cliente: text("cliente").notNull(),
     titulo: text("titulo").notNull(),
     dirigidaA: text("dirigida_a"),
-    estatus: text("estatus").notNull().default("PROCESO"),
+    /**
+     * Estatus de la OT: "" → Asignado → En Ejecución → Cerrado. Nace vacía.
+     * Antes tenía default "PROCESO", que es un estatus de COTIZACIÓN colado
+     * aquí: no existe en la operación real de las órdenes de trabajo.
+     */
+    estatus: text("estatus").notNull().default(""),
     areas: text("areas").array().notNull().default([]),
     driveFolderId: text("drive_folder_id"),
     driveFolderUrl: text("drive_folder_url"),
@@ -455,8 +463,23 @@ export const otResponsables = pgTable(
     fecha: timestamp("fecha", { withTimezone: true }).notNull().defaultNow(),
     /** El anterior queda inactivo pero se conserva como historial */
     activo: boolean("activo").notNull().default(true),
+    /**
+     * Posición 1-3 del responsable dentro de su OT. Existe para que el tope de
+     * tres lo imponga la BASE y no el código: contar antes de insertar no es
+     * seguro bajo READ COMMITTED (dos altas concurrentes ven 2 y dejan 4).
+     * El `default` solo sirve para poder rellenar las filas ya existentes al
+     * migrar; el código siempre escribe el slot explícitamente.
+     */
+    slot: smallint("slot").notNull().default(1),
   },
-  (t) => ({ folioIdx: index("ot_responsables_folio_idx").on(t.folioOt) }),
+  (t) => ({
+    folioIdx: index("ot_responsables_folio_idx").on(t.folioOt),
+    /** El tope de tres: solo se controlan los activos, el historial no ocupa slot. */
+    slotActivoUq: uniqueIndex("ot_responsables_slot_activo_uq")
+      .on(t.folioOt, t.slot)
+      .where(sql`${t.activo}`),
+    slotRango: check("ot_responsables_slot_rango", sql`${t.slot} between 1 and 3`),
+  }),
 );
 
 // ── ERP: infraestructura común ────────────────────────────────────────────────
