@@ -271,12 +271,21 @@ export async function setCarpetaDriveOT(
     .where(eq(ordenesTrabajo.folio, folio));
 }
 
-async function slotsOcupados(folioOt: string): Promise<number[]> {
-  const filas = await getDb()
-    .select({ slot: otResponsables.slot })
+async function activosDe(folioOt: string): Promise<Array<{ slot: number; correo: string }>> {
+  return getDb()
+    .select({ slot: otResponsables.slot, correo: otResponsables.correo })
     .from(otResponsables)
     .where(and(eq(otResponsables.folioOt, folioOt), eq(otResponsables.activo, true)));
-  return filas.map((f) => f.slot);
+}
+
+/** El índice único que provocó un 23505, cuando el driver lo deja ver. */
+function chocoContra(err: unknown, indice: string): boolean {
+  const e = err as { constraint?: string; message?: string; cause?: { constraint?: string } };
+  return (
+    e?.constraint === indice ||
+    e?.cause?.constraint === indice ||
+    (e?.message ?? "").includes(indice)
+  );
 }
 
 /**
@@ -297,14 +306,24 @@ export async function agregarResponsable(params: {
   area?: string;
   asignadoPor: string;
 }): Promise<ResponsableOT> {
+  const correo = params.correo.toLowerCase();
+
   for (let intento = 0; intento < MAX_RESPONSABLES; intento++) {
-    const ocupados = await slotsOcupados(params.folioOt);
-    if (ocupados.length >= MAX_RESPONSABLES) {
+    const activos = await activosDe(params.folioOt);
+
+    // La misma persona dos veces en la misma OT es un error de captura, no una
+    // segunda asignación. Se comprueba aquí para dar un mensaje útil; quien lo
+    // impide de verdad es el índice único parcial.
+    if (activos.some((a) => a.correo === correo)) {
+      throw new Error(`${correo} ya es responsable activo de la OT ${params.folioOt}`);
+    }
+    if (activos.length >= MAX_RESPONSABLES) {
       throw new Error(
         `La OT ${params.folioOt} ya tiene ${MAX_RESPONSABLES} responsables activos. ` +
           `Quita a uno antes de agregar otro.`,
       );
     }
+    const ocupados = activos.map((a) => a.slot);
     const libre = [1, 2, 3].find((s) => !ocupados.includes(s));
     if (!libre) continue;
 
@@ -313,7 +332,7 @@ export async function agregarResponsable(params: {
         .insert(otResponsables)
         .values({
           folioOt: params.folioOt,
-          correo: params.correo.toLowerCase(),
+          correo,
           rol: "Responsable de la actividad",
           area: params.area ?? null,
           asignadoPor: params.asignadoPor,
@@ -323,6 +342,11 @@ export async function agregarResponsable(params: {
       return aResponsable(fila);
     } catch (err) {
       if (!esDuplicado(err)) throw err;
+      // Reintentar solo tiene sentido si el choque fue por el slot. Si otro
+      // proceso dio de alta a la MISMA persona, ningún slot va a funcionar.
+      if (chocoContra(err, "ot_responsables_correo_activo_uq")) {
+        throw new Error(`${correo} ya es responsable activo de la OT ${params.folioOt}`);
+      }
       // Otro proceso ocupó ese slot entre la lectura y el insert: se reintenta.
     }
   }

@@ -478,6 +478,14 @@ export const otResponsables = pgTable(
     slotActivoUq: uniqueIndex("ot_responsables_slot_activo_uq")
       .on(t.folioOt, t.slot)
       .where(sql`${t.activo}`),
+    /**
+     * La misma persona no puede ocupar dos slots de la misma OT: es un error de
+     * captura real. Solo aplica a los activos — reasignar a alguien que ya lo
+     * fue antes es legítimo y su fila vieja sigue en el historial.
+     */
+    correoActivoUq: uniqueIndex("ot_responsables_correo_activo_uq")
+      .on(t.folioOt, t.correo)
+      .where(sql`${t.activo}`),
     slotRango: check("ot_responsables_slot_rango", sql`${t.slot} between 1 and 3`),
   }),
 );

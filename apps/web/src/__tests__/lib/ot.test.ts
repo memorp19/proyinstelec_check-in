@@ -215,7 +215,7 @@ describe("agregarResponsable", () => {
   };
 
   it("NO desactiva a los que ya estaban: una OT admite tres a la vez", async () => {
-    const db = usarDb([[{ slot: 1 }], [filaResponsable({ slot: 2 })]]);
+    const db = usarDb([[{ slot: 1, correo: "otra@x.mx" }], [filaResponsable({ slot: 2 })]]);
 
     await agregarResponsable(alta);
 
@@ -225,7 +225,13 @@ describe("agregarResponsable", () => {
   });
 
   it("ocupa el primer slot libre", async () => {
-    const db = usarDb([[{ slot: 1 }, { slot: 3 }], [filaResponsable({ slot: 2 })]]);
+    const db = usarDb([
+      [
+        { slot: 1, correo: "a@x.mx" },
+        { slot: 3, correo: "c@x.mx" },
+      ],
+      [filaResponsable({ slot: 2 })],
+    ]);
 
     const r = await agregarResponsable(alta);
 
@@ -247,20 +253,68 @@ describe("agregarResponsable", () => {
   });
 
   it("rechaza al cuarto responsable con un mensaje accionable", async () => {
-    usarDb([[{ slot: 1 }, { slot: 2 }, { slot: 3 }]]);
+    usarDb([
+      [
+        { slot: 1, correo: "a@x.mx" },
+        { slot: 2, correo: "b@x.mx" },
+        { slot: 3, correo: "c@x.mx" },
+      ],
+    ]);
 
     await expect(agregarResponsable(alta)).rejects.toThrow(
       `ya tiene ${MAX_RESPONSABLES} responsables activos`,
     );
   });
 
+  // Error de captura real: dar de alta dos veces a la misma persona.
+  it("rechaza a quien ya es responsable activo, sin ocupar un segundo slot", async () => {
+    const db = usarDb([[{ slot: 1, correo: "juan@proyinstelec.mx" }]]);
+
+    await expect(agregarResponsable(alta)).rejects.toThrow("ya es responsable activo");
+    expect(db.metodos()).not.toContain("insert");
+  });
+
+  it("compara el correo en minúsculas, como se guarda", async () => {
+    usarDb([[{ slot: 1, correo: "juan@proyinstelec.mx" }]]);
+
+    await expect(
+      agregarResponsable({ ...alta, correo: "Juan@Proyinstelec.MX" }),
+    ).rejects.toThrow("ya es responsable activo");
+  });
+
+  // Si el choque fue por persona duplicada, reintentar con otro slot no puede
+  // funcionar: ningún slot va a aceptar a alguien que ya está activo.
+  it("un 23505 del índice de correo no se reintenta: se traduce", async () => {
+    const db = usarDb([
+      [{ slot: 1, correo: "otra@x.mx" }],
+      { error: errorDuplicado("ot_responsables_correo_activo_uq") },
+    ]);
+
+    await expect(agregarResponsable(alta)).rejects.toThrow("ya es responsable activo");
+    // Un solo intento de insert, no tres
+    expect(db.llamadas.filter((l) => l.metodo === "values")).toHaveLength(1);
+  });
+
+  it("deja reasignar a alguien que fue responsable y ya no lo es", async () => {
+    // Su fila vieja está inactiva, así que no aparece entre los activos
+    const db = usarDb([[{ slot: 1, correo: "otra@x.mx" }], [filaResponsable({ slot: 2 })]]);
+
+    const r = await agregarResponsable(alta);
+
+    expect(r.slot).toBe(2);
+    expect(db.metodos()).toContain("insert");
+  });
+
   // El tope lo impone el índice único parcial, no el conteo previo: bajo
   // READ COMMITTED dos altas concurrentes ven 2 ocupados y elegirían el mismo.
   it("si otro proceso gana el slot (23505), reintenta con el siguiente libre", async () => {
     const db = usarDb([
-      [{ slot: 1 }],
-      { error: errorDuplicado() },
-      [{ slot: 1 }, { slot: 2 }],
+      [{ slot: 1, correo: "a@x.mx" }],
+      { error: errorDuplicado("ot_responsables_slot_activo_uq") },
+      [
+        { slot: 1, correo: "a@x.mx" },
+        { slot: 2, correo: "b@x.mx" },
+      ],
       [filaResponsable({ slot: 3 })],
     ]);
 
