@@ -41,7 +41,22 @@ const folioCotizacion = (o: OT) =>
 const fechaCorta = (iso: string) =>
   new Date(iso).toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric" });
 
-export function OTClient() {
+/**
+ * El flujo real de una OT es lineal, así que el siguiente estado se deduce del
+ * actual. Esto solo dibuja el botón: la transición la valida el servidor con
+ * `transicionValidaOT`, igual que cualquier otra regla.
+ */
+const FLUJO_ESTATUS = ["", "Asignado", "En Ejecución", "Cerrado"] as const;
+
+function siguienteEstatus(actual: string): string | null {
+  const i = FLUJO_ESTATUS.indexOf(actual as (typeof FLUJO_ESTATUS)[number]);
+  if (i < 0 || i === FLUJO_ESTATUS.length - 1) return null;
+  return FLUJO_ESTATUS[i + 1];
+}
+
+const MAX_RESPONSABLES = 3;
+
+export function OTClient({ puedeReasignar }: { puedeReasignar: boolean }) {
   const anioActual = new Date().getFullYear();
   const [anio, setAnio] = useState(anioActual);
   const [ordenes, setOrdenes] = useState<OT[]>([]);
@@ -49,6 +64,9 @@ export function OTClient() {
   const [historial, setHistorial] = useState<Record<string, Responsable[]>>({});
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** Folio en el que hay una mutación en vuelo, para no dejar hacer doble clic. */
+  const [ocupado, setOcupado] = useState<string | null>(null);
+  const [nuevoCorreo, setNuevoCorreo] = useState<Record<string, string>>({});
 
   const cargar = useCallback(async () => {
     setCargando(true);
@@ -84,6 +102,53 @@ export function OTClient() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error");
     }
+  }
+
+  /** Envuelve una mutación: bloquea la fila, limpia el error y refresca. */
+  async function mutar(folio: string, peticion: () => Promise<Response>) {
+    setOcupado(folio);
+    setError(null);
+    try {
+      const res = await peticion();
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Error");
+      if (data.responsables) setHistorial((h) => ({ ...h, [folio]: data.responsables }));
+      // El listado trae los activos de cada tarjeta: hay que volver a pedirlo.
+      await cargar();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error");
+    } finally {
+      setOcupado(null);
+    }
+  }
+
+  async function agregar(folio: string) {
+    const correo = (nuevoCorreo[folio] ?? "").trim();
+    if (!correo) return;
+    await mutar(folio, () =>
+      fetch(`/api/erp/ot/${folio}/responsables`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ correo }),
+      }),
+    );
+    setNuevoCorreo((c) => ({ ...c, [folio]: "" }));
+  }
+
+  async function quitar(folio: string, id: string) {
+    await mutar(folio, () =>
+      fetch(`/api/erp/ot/${folio}/responsables/${id}`, { method: "DELETE" }),
+    );
+  }
+
+  async function avanzar(folio: string, estatus: string) {
+    await mutar(folio, () =>
+      fetch(`/api/erp/ot/${folio}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ estatus }),
+      }),
+    );
   }
 
   const anios = [anioActual + 1, anioActual, anioActual - 1, anioActual - 2];
@@ -179,6 +244,16 @@ export function OTClient() {
                       Sin carpeta
                     </span>
                   )}
+                  {puedeReasignar && siguienteEstatus(o.estatus) && (
+                    <button
+                      onClick={() => avanzar(o.folio, siguienteEstatus(o.estatus)!)}
+                      disabled={ocupado === o.folio}
+                      className="font-mono text-[10px] text-blue-mid hover:text-white border border-blue/30 hover:border-blue/60 rounded-lg px-3 py-1.5 transition-colors disabled:opacity-40"
+                      title={`Mover a ${siguienteEstatus(o.estatus)}`}
+                    >
+                      → {siguienteEstatus(o.estatus)}
+                    </button>
+                  )}
                   <button onClick={() => alternar(o.folio)} className={btnGhost}>
                     {abierta === o.folio ? "Ocultar" : "Responsables"}
                   </button>
@@ -211,9 +286,50 @@ export function OTClient() {
                             {r.area ? `${r.area} · ` : ""}
                             {fechaCorta(r.fecha)} · asignó {r.asignado_por}
                           </span>
+                          {puedeReasignar && r.activo && (
+                            <button
+                              onClick={() => quitar(o.folio, r.id)}
+                              disabled={ocupado === o.folio}
+                              className="font-mono text-[9px] text-danger/70 hover:text-danger border border-danger/20 hover:border-danger/50 rounded-full px-2 py-0.5 transition-colors disabled:opacity-40"
+                              title="Darlo de baja; la fila se conserva en el historial"
+                            >
+                              Quitar
+                            </button>
+                          )}
                         </li>
                       ))}
                     </ul>
+                  )}
+
+                  {puedeReasignar && (
+                    <div className="mt-3 pt-3 border-t border-white/10">
+                      {o.responsables.length >= MAX_RESPONSABLES ? (
+                        <p className="font-mono text-[10px] text-amber/70">
+                          Esta OT ya tiene {MAX_RESPONSABLES} responsables. Quita a uno para agregar
+                          otro.
+                        </p>
+                      ) : (
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <input
+                            type="email"
+                            value={nuevoCorreo[o.folio] ?? ""}
+                            onChange={(e) =>
+                              setNuevoCorreo((c) => ({ ...c, [o.folio]: e.target.value }))
+                            }
+                            onKeyDown={(e) => e.key === "Enter" && agregar(o.folio)}
+                            placeholder="correo@proyinstelec.mx"
+                            className="font-mono text-[11px] bg-white/5 border border-white/10 focus:border-blue/40 rounded-lg px-3 min-h-tap flex-1 min-w-[220px] outline-none"
+                          />
+                          <button
+                            onClick={() => agregar(o.folio)}
+                            disabled={ocupado === o.folio || !(nuevoCorreo[o.folio] ?? "").trim()}
+                            className="font-mono text-[10px] text-green hover:text-white border border-green/30 hover:border-green/60 rounded-lg px-3 min-h-tap transition-colors disabled:opacity-40"
+                          >
+                            Agregar
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
               )}

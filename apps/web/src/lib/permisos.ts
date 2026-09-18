@@ -46,6 +46,13 @@ export const PERMISOS = [
 
   // OT / Control Operativo
   "ot.crear",
+  /**
+   * Reasignar responsables a mitad del proyecto. Separado de `ot.crear` a
+   * propósito: crear es comercial —lo tiene quien registra la orden de
+   * compra— y reasignar es operativo. Separarlos permite darle reasignación
+   * a jefes de área sin darles también el alta de OT.
+   */
+  "ot.reasignar",
   "ot.documentos",
   "control.operativo.crear",
 ] as const;
@@ -96,7 +103,7 @@ export const GRUPOS_PERMISOS: Array<{ titulo: string; permisos: Permiso[] }> = [
   },
   {
     titulo: "Órdenes de Trabajo",
-    permisos: ["ot.crear", "ot.documentos", "control.operativo.crear"],
+    permisos: ["ot.crear", "ot.reasignar", "ot.documentos", "control.operativo.crear"],
   },
 ];
 
