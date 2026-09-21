@@ -28,7 +28,7 @@ vi.mock("@/src/lib/drive-erp", () => ({
 }));
 vi.mock("@/src/lib/ot", () => ({
   createOT: vi.fn().mockResolvedValue({ folio: "OT001260" }),
-  registrarResponsable: vi.fn().mockResolvedValue({}),
+  agregarResponsable: vi.fn().mockResolvedValue({}),
   setCarpetaDriveOT: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("@/src/lib/users", () => ({ listUsers: vi.fn() }));

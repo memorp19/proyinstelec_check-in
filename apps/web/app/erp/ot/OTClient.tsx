@@ -10,6 +10,7 @@ interface Responsable {
   asignado_por: string;
   fecha: string;
   activo: boolean;
+  slot: number;
 }
 
 interface OT {
@@ -27,7 +28,8 @@ interface OT {
   tiene_control_operativo: boolean;
   created_by: string;
   created_at: string;
-  responsable: Responsable | null;
+  /** Hasta tres activos a la vez, ordenados por slot. */
+  responsables: Responsable[];
 }
 
 const btnGhost =
@@ -152,7 +154,10 @@ export function OTClient() {
                     OC: {o.orden_compra} · Origen: {folioCotizacion(o)} · {fechaCorta(o.created_at)}
                   </p>
                   <p className="font-mono text-[10px] text-white/35 mt-1">
-                    Responsable: {o.responsable ? o.responsable.correo : "— sin asignar —"}
+                    {o.responsables.length === 1 ? "Responsable: " : "Responsables: "}
+                    {o.responsables.length === 0
+                      ? "— sin asignar —"
+                      : o.responsables.map((r) => r.correo).join(", ")}
                     {o.areas.length > 0 && ` · Áreas: ${o.areas.join(", ")}`}
                   </p>
                 </div>

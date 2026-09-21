@@ -18,7 +18,7 @@ import {
   subirArchivoErp,
 } from "./drive-erp";
 import { folioOT } from "./folios";
-import { createOT, registrarResponsable, setCarpetaDriveOT } from "./ot";
+import { createOT, agregarResponsable, setCarpetaDriveOT } from "./ot";
 import { permisosEfectivos } from "./permisos";
 import { listUsers, type UserProfile } from "./users";
 
@@ -535,8 +535,8 @@ async function generarOT(params: {
     createdBy: params.usuario,
   });
 
-  // 2) Responsable (con historial)
-  await registrarResponsable({
+  // 2) Primer responsable (la OT admite hasta tres; los demás se agregan después)
+  await agregarResponsable({
     folioOt: folio,
     correo: responsable.email,
     area: areasValidas[0]?.nombre,

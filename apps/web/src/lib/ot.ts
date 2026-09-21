@@ -20,7 +20,8 @@ export interface OrdenTrabajo {
   cliente: string;
   titulo: string;
   dirigida_a?: string;
-  estatus: string; // PROCESO al crear
+  /** "" | "Asignado" | "En Ejecución" | "Cerrado" — nace vacía. */
+  estatus: string;
   areas: string[];
   drive_folder_id?: string;
   drive_folder_url?: string;
@@ -39,10 +40,58 @@ export interface ResponsableOT {
   asignado_por: string;
   fecha: string;
   activo: boolean;
+  /** Posición 1-3 dentro de su OT. */
+  slot: number;
+}
+
+/** Una OT puede tener hasta tres responsables a la vez. */
+export const MAX_RESPONSABLES = 3;
+
+// ── Estatus de la OT ──────────────────────────────────────────────────────────
+
+/**
+ * Los cuatro estatus reales de la operación. El legacy tenía siete valores
+ * observados (PROCESO, EN PROCESO, TERMINADO, FACTURADO...); los que se usan
+ * de verdad son estos, y la OT nace vacía.
+ */
+export const ESTATUS_OT = ["", "Asignado", "En Ejecución", "Cerrado"] as const;
+export type EstatusOT = (typeof ESTATUS_OT)[number];
+
+export function esEstatusOT(valor: string): valor is EstatusOT {
+  return (ESTATUS_OT as readonly string[]).includes(valor);
+}
+
+/**
+ * Transiciones permitidas. Lineal y sin vuelta atrás; no hay cancelación
+ * porque no aparece en la operación real (si hiciera falta, se agrega con su
+ * propia regla, no colando un valor nuevo).
+ */
+export function transicionValidaOT(de: string, a: string): boolean {
+  if (de === a) return false;
+  const mapa: Record<EstatusOT, EstatusOT[]> = {
+    "": ["Asignado"],
+    Asignado: ["En Ejecución"],
+    "En Ejecución": ["Cerrado"],
+    Cerrado: [],
+  };
+  // `de` se lee de la base, así que puede traer un valor fuera del catálogo
+  // (importaciones, datos viejos). Se rechaza en vez de reventar.
+  if (!esEstatusOT(de) || !esEstatusOT(a)) return false;
+  return mapa[de].includes(a);
 }
 
 type FilaOT = typeof ordenesTrabajo.$inferSelect;
 type FilaResponsable = typeof otResponsables.$inferSelect;
+
+/** Violación de llave única (23505), venga como venga envuelta por el driver. */
+function esDuplicado(err: unknown): boolean {
+  const e = err as { code?: string; message?: string; cause?: { code?: string } };
+  return (
+    e?.code === "23505" ||
+    e?.cause?.code === "23505" ||
+    /duplicate key|unique constraint/i.test(e?.message ?? "")
+  );
+}
 
 function aOT(f: FilaOT): OrdenTrabajo {
   return {
@@ -76,6 +125,7 @@ function aResponsable(f: FilaResponsable): ResponsableOT {
     asignado_por: f.asignadoPor,
     fecha: f.fecha.toISOString(),
     activo: f.activo,
+    slot: f.slot,
   };
 }
 
@@ -127,18 +177,29 @@ export async function listResponsables(folio: string): Promise<ResponsableOT[]> 
 }
 
 /**
- * Responsable activo de varias OT, indexado por folio. Una sola consulta para
- * todo el listado: sin esto la pantalla haría una por tarjeta.
+ * Responsables activos de varias OT, indexados por folio. Una sola consulta
+ * para todo el listado: sin esto la pantalla haría una por tarjeta.
+ *
+ * Devuelve una LISTA por folio. Antes devolvía uno solo y el índice se armaba
+ * con `Object.fromEntries`, que conserva únicamente la última fila de cada
+ * clave: con más de un responsable activo los demás se perdían en silencio, y
+ * cuál sobrevivía dependía del orden en que Postgres devolviera las filas.
  */
 export async function responsablesActivosPorFolio(
   folios: string[],
-): Promise<Record<string, ResponsableOT>> {
+): Promise<Record<string, ResponsableOT[]>> {
   if (folios.length === 0) return {};
   const filas = await getDb()
     .select()
     .from(otResponsables)
-    .where(and(inArray(otResponsables.folioOt, folios), eq(otResponsables.activo, true)));
-  return Object.fromEntries(filas.map((f) => [f.folioOt, aResponsable(f)]));
+    .where(and(inArray(otResponsables.folioOt, folios), eq(otResponsables.activo, true)))
+    .orderBy(otResponsables.slot);
+
+  const porFolio: Record<string, ResponsableOT[]> = {};
+  for (const f of filas) {
+    (porFolio[f.folioOt] ??= []).push(aResponsable(f));
+  }
+  return porFolio;
 }
 
 // ── Alta (desde el ingreso de OC) ─────────────────────────────────────────────
@@ -181,21 +242,16 @@ export async function createOT(params: {
         cliente: params.cliente,
         titulo: params.titulo,
         dirigidaA: params.dirigidaA ?? null,
-        estatus: "PROCESO",
+        // El estatus lo pone el default de la columna: la OT nace vacía y se
+        // mueve con `cambiarEstatusOT`. Antes se escribía "PROCESO", que es un
+        // estatus de cotización y no existe en la operación de las OT.
         areas: params.areas,
         createdBy: params.createdBy,
       })
       .returning();
     return aOT(fila);
   } catch (err) {
-    const e = err as { code?: string; message?: string; cause?: { code?: string } };
-    if (
-      e?.code === "23505" ||
-      e?.cause?.code === "23505" ||
-      /duplicate key|unique constraint/i.test(e?.message ?? "")
-    ) {
-      throw new Error(`La OT ${folio} ya existe`);
-    }
+    if (esDuplicado(err)) throw new Error(`La OT ${folio} ya existe`);
     throw err;
   }
 }
@@ -215,31 +271,129 @@ export async function setCarpetaDriveOT(
     .where(eq(ordenesTrabajo.folio, folio));
 }
 
+async function activosDe(folioOt: string): Promise<Array<{ slot: number; correo: string }>> {
+  return getDb()
+    .select({ slot: otResponsables.slot, correo: otResponsables.correo })
+    .from(otResponsables)
+    .where(and(eq(otResponsables.folioOt, folioOt), eq(otResponsables.activo, true)));
+}
+
+/** El índice único que provocó un 23505, cuando el driver lo deja ver. */
+function chocoContra(err: unknown, indice: string): boolean {
+  const e = err as { constraint?: string; message?: string; cause?: { constraint?: string } };
+  return (
+    e?.constraint === indice ||
+    e?.cause?.constraint === indice ||
+    (e?.message ?? "").includes(indice)
+  );
+}
+
 /**
- * Registra al responsable de la actividad. El anterior (si existe) pasa a
- * inactivo pero se conserva como historial (regla del legacy): un solo UPDATE
- * sobre los activos, sin leerlos antes.
+ * Agrega un responsable a la OT, hasta `MAX_RESPONSABLES` a la vez.
+ *
+ * Antes esta función desactivaba a TODOS los activos antes de insertar, así
+ * que era imposible tener más de uno. Ahora solo añade: para quitar a alguien
+ * está `desactivarResponsable`.
+ *
+ * El tope lo impone el índice único parcial `(folio_ot, slot) WHERE activo`,
+ * no este código: contar y luego insertar no es seguro bajo READ COMMITTED.
+ * Si dos altas eligen el mismo slot a la vez, la segunda revienta con 23505 y
+ * se reintenta con el siguiente libre — el mismo idioma que usa `createOT`.
  */
-export async function registrarResponsable(params: {
+export async function agregarResponsable(params: {
   folioOt: string;
   correo: string;
   area?: string;
   asignadoPor: string;
 }): Promise<ResponsableOT> {
-  await getDb()
+  const correo = params.correo.toLowerCase();
+
+  for (let intento = 0; intento < MAX_RESPONSABLES; intento++) {
+    const activos = await activosDe(params.folioOt);
+
+    // La misma persona dos veces en la misma OT es un error de captura, no una
+    // segunda asignación. Se comprueba aquí para dar un mensaje útil; quien lo
+    // impide de verdad es el índice único parcial.
+    if (activos.some((a) => a.correo === correo)) {
+      throw new Error(`${correo} ya es responsable activo de la OT ${params.folioOt}`);
+    }
+    if (activos.length >= MAX_RESPONSABLES) {
+      throw new Error(
+        `La OT ${params.folioOt} ya tiene ${MAX_RESPONSABLES} responsables activos. ` +
+          `Quita a uno antes de agregar otro.`,
+      );
+    }
+    const ocupados = activos.map((a) => a.slot);
+    const libre = [1, 2, 3].find((s) => !ocupados.includes(s));
+    if (!libre) continue;
+
+    try {
+      const [fila] = await getDb()
+        .insert(otResponsables)
+        .values({
+          folioOt: params.folioOt,
+          correo,
+          rol: "Responsable de la actividad",
+          area: params.area ?? null,
+          asignadoPor: params.asignadoPor,
+          slot: libre,
+        })
+        .returning();
+      return aResponsable(fila);
+    } catch (err) {
+      if (!esDuplicado(err)) throw err;
+      // Reintentar solo tiene sentido si el choque fue por el slot. Si otro
+      // proceso dio de alta a la MISMA persona, ningún slot va a funcionar.
+      if (chocoContra(err, "ot_responsables_correo_activo_uq")) {
+        throw new Error(`${correo} ya es responsable activo de la OT ${params.folioOt}`);
+      }
+      // Otro proceso ocupó ese slot entre la lectura y el insert: se reintenta.
+    }
+  }
+  throw new Error(
+    `No se pudo asignar responsable en la OT ${params.folioOt}: los ${MAX_RESPONSABLES} slots ` +
+      `se ocuparon durante el intento.`,
+  );
+}
+
+/**
+ * Da de baja a un responsable. La fila se conserva como historial (regla del
+ * legacy) y su slot queda libre para otro.
+ */
+export async function desactivarResponsable(id: string): Promise<void> {
+  const filas = await getDb()
     .update(otResponsables)
     .set({ activo: false })
-    .where(and(eq(otResponsables.folioOt, params.folioOt), eq(otResponsables.activo, true)));
+    .where(and(eq(otResponsables.id, id), eq(otResponsables.activo, true)))
+    .returning({ id: otResponsables.id });
+  if (filas.length === 0) {
+    throw new Error("El responsable no existe o ya estaba inactivo");
+  }
+}
+
+/**
+ * Cambia el estatus de la OT respetando la máquina de transiciones.
+ *
+ * El `WHERE estatus = <esperado>` hace el cambio atómico: si alguien lo movió
+ * entre la validación y la escritura, el UPDATE no toca nada en lugar de pisar
+ * un estado que ya no era el que se validó.
+ */
+export async function cambiarEstatusOT(folio: string, nuevo: EstatusOT): Promise<OrdenTrabajo> {
+  const actual = await getOT(folio);
+  if (!actual) throw new Error(`La OT ${folio} no existe`);
+  if (!transicionValidaOT(actual.estatus as EstatusOT, nuevo)) {
+    throw new Error(
+      `Transición no permitida: ${actual.estatus || "(vacío)"} → ${nuevo || "(vacío)"}`,
+    );
+  }
 
   const [fila] = await getDb()
-    .insert(otResponsables)
-    .values({
-      folioOt: params.folioOt,
-      correo: params.correo.toLowerCase(),
-      rol: "Responsable de la actividad",
-      area: params.area ?? null,
-      asignadoPor: params.asignadoPor,
-    })
+    .update(ordenesTrabajo)
+    .set({ estatus: nuevo, updatedAt: new Date() })
+    .where(and(eq(ordenesTrabajo.folio, folio), eq(ordenesTrabajo.estatus, actual.estatus)))
     .returning();
-  return aResponsable(fila);
+  if (!fila) {
+    throw new Error(`El estatus de la OT ${folio} cambió mientras se guardaba; vuelve a intentar`);
+  }
+  return aOT(fila);
 }

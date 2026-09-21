@@ -4,8 +4,8 @@ import { exigirPermiso } from "@/src/lib/permisos";
 import { listOTDeAnio, responsablesActivosPorFolio } from "@/src/lib/ot";
 
 /**
- * Listado de órdenes de trabajo de un año, con el responsable vigente de cada
- * una resuelto en una sola consulta extra.
+ * Listado de órdenes de trabajo de un año, con los responsables activos de
+ * cada una (hasta tres) resueltos en una sola consulta extra.
  */
 export async function GET(req: NextRequest) {
   const session = await auth();
@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
     const ordenes = await listOTDeAnio(anio);
     const responsables = await responsablesActivosPorFolio(ordenes.map((o) => o.folio));
     return NextResponse.json({
-      ordenes: ordenes.map((o) => ({ ...o, responsable: responsables[o.folio] ?? null })),
+      ordenes: ordenes.map((o) => ({ ...o, responsables: responsables[o.folio] ?? [] })),
     });
   } catch (err) {
     console.error("[erp/ot GET]", err);
