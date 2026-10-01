@@ -17,7 +17,7 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
   const key = parseCotKey(params.key);
   if (!key) return NextResponse.json({ error: "Llave inválida" }, { status: 400 });
 
-  let body: { responsableCorreo?: string; areas?: string[] };
+  let body: { responsableCorreo?: string; areas?: string[]; version?: number };
   try {
     body = await req.json();
   } catch {
@@ -35,6 +35,7 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
     const { folioOt, avisos } = await generarOTSinOrdenCompra({
       numero: key.numero,
       anio: key.anio,
+      version: body.version,
       responsableCorreo: body.responsableCorreo,
       areas: body.areas,
       usuario: session!.user.email ?? "",

@@ -854,6 +854,29 @@ function OcForm({
   const [adjunto, setAdjunto] = useState<{ filename: string; mimeType: string; base64: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * El cliente no siempre acepta la última versión: puede haberse mandado una
+   * v1 posterior que no tomó. Se listan las que están en ENVIADA para poder
+   * registrar la OC en la correcta.
+   */
+  const [enviadas, setEnviadas] = useState<Cot[] | null>(null);
+  const [version, setVersion] = useState<number>(cot.version);
+
+  useEffect(() => {
+    fetch(`/api/erp/cotizaciones/${key(cot)}`)
+      .then((r) => r.json())
+      .then((d) => {
+        const todas: Cot[] = d.versiones ?? [];
+        const candidatas = todas.filter((v) => v.estatus === "ENVIADA");
+        setEnviadas(candidatas);
+        // La vigente si está ENVIADA; si no, la más alta que sí lo esté.
+        const preferida = candidatas.find((v) => v.version === cot.version) ?? candidatas[0];
+        if (preferida) setVersion(preferida.version);
+      })
+      .catch(() => setEnviadas([]));
+  }, [cot]);
+
+  const elegida = enviadas?.find((v) => v.version === version);
 
   function toggleArea(clave: string) {
     setAreas((prev) => {
@@ -886,6 +909,7 @@ function OcForm({
         body: JSON.stringify({
           responsableCorreo: responsable,
           areas: [...areas],
+          version,
           ...(sinOc ? {} : { ordenCompra: oc, adjunto: adjunto ?? undefined }),
         }),
       });
@@ -902,9 +926,44 @@ function OcForm({
 
   return (
     <div className="space-y-3">
+      {enviadas && enviadas.length > 1 && (
+        <div>
+          <p className="font-mono text-[9px] text-white/40 uppercase tracking-widest mb-1">
+            Versión que aceptó el cliente *
+          </p>
+          <select
+            className={input}
+            value={version}
+            onChange={(e) => setVersion(Number(e.target.value))}
+          >
+            {enviadas.map((v) => (
+              <option key={v.version} value={v.version} className="bg-navy">
+                v{v.version} · {v.folio} · {fmtFecha(v.fecha_solicitud)}
+                {v.version === cot.version ? " (vigente)" : ""}
+              </option>
+            ))}
+          </select>
+          <p className="font-mono text-[9px] text-white/30 mt-1">
+            Las demás se quedan en ENVIADA; no se cancelan.
+          </p>
+        </div>
+      )}
+
       <p className="font-mono text-[10px] text-white/40">
-        Folio OT que se generará: <span className="text-white font-bold">OT{String(cot.numero).padStart(3, "0")}{String(cot.anio % 100).padStart(2, "0")}{cot.version}</span>
+        Folio OT que se generará: <span className="text-white font-bold">OT{String(cot.numero).padStart(3, "0")}{String(cot.anio % 100).padStart(2, "0")}{version}</span>
       </p>
+
+      {enviadas && enviadas.length === 0 && (
+        <p className="font-mono text-[10px] text-amber-300/80 bg-amber-400/10 border border-amber-400/20 rounded-lg px-3 py-2">
+          Ninguna versión de esta cotización está en ENVIADA, así que no se puede generar la OT.
+        </p>
+      )}
+
+      {elegida && elegida.version !== cot.version && (
+        <p className="font-mono text-[10px] text-blue-mid bg-blue/10 border border-blue/20 rounded-lg px-3 py-2">
+          Se registrará sobre la v{elegida.version}, que no es la vigente (v{cot.version}).
+        </p>
+      )}
       {sinOc ? (
         <p className="font-mono text-[10px] text-amber-300/80 bg-amber-400/10 border border-amber-400/20 rounded-lg px-3 py-2">
           Se generará la OT sin orden de compra. La cotización queda ASIGNADA y la OC puede
@@ -959,7 +1018,13 @@ function OcForm({
       <div className="flex justify-end">
         <button
           onClick={submit}
-          disabled={saving || (!sinOc && !oc.trim()) || !responsable || areas.size === 0}
+          disabled={
+            saving ||
+            (!sinOc && !oc.trim()) ||
+            !responsable ||
+            areas.size === 0 ||
+            enviadas?.length === 0
+          }
           className={btnPrimary}
         >
           {saving ? "Generando…" : sinOc ? "Generar OT sin OC" : "Generar OT"}

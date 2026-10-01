@@ -153,6 +153,26 @@ export async function getVersiones(numero: number, anio: number): Promise<Cotiza
   return filas.map(aCotizacion);
 }
 
+/** Una versión concreta, o null si no existe. */
+export async function getVersion(
+  numero: number,
+  anio: number,
+  version: number,
+): Promise<Cotizacion | null> {
+  const [fila] = await getDb()
+    .select()
+    .from(cotizaciones)
+    .where(
+      and(
+        eq(cotizaciones.numero, numero),
+        eq(cotizaciones.anio, anio),
+        eq(cotizaciones.version, version),
+      ),
+    )
+    .limit(1);
+  return fila ? aCotizacion(fila) : null;
+}
+
 /** La versión vigente (la de mayor número de versión) o null si no existe. */
 export async function getVigente(numero: number, anio: number): Promise<Cotizacion | null> {
   const [fila] = await getDb()
@@ -420,6 +440,8 @@ export async function updateCotizacion(
     driveFolderUrl?: string;
     clienteId?: string;
   },
+  /** Versión a tocar. Sin esto se escribe sobre la vigente, como siempre. */
+  version?: number,
 ): Promise<void> {
   const cambios: Partial<typeof cotizaciones.$inferInsert> = { updatedAt: new Date() };
   if (data.titulo !== undefined) cambios.titulo = data.titulo.trim();
@@ -441,7 +463,15 @@ export async function updateCotizacion(
   const filas = await getDb()
     .update(cotizaciones)
     .set(cambios)
-    .where(esVigente(numero, anio))
+    .where(
+      version === undefined
+        ? esVigente(numero, anio)
+        : and(
+            eq(cotizaciones.numero, numero),
+            eq(cotizaciones.anio, anio),
+            eq(cotizaciones.version, version),
+          )!,
+    )
     .returning({ numero: cotizaciones.numero });
   if (filas.length === 0) throw new Error("Cotización no encontrada");
 }
@@ -469,11 +499,15 @@ export async function cambiarEstatus(
   numero: number,
   anio: number,
   nuevo: EstatusCotizacion,
+  version?: number,
 ): Promise<Cotizacion> {
-  const vigente = await getVigente(numero, anio);
-  if (!vigente) throw new Error("Cotización no encontrada");
-  if (!transicionValida(vigente.estatus, nuevo)) {
-    throw new Error(`Transición no permitida: ${vigente.estatus} → ${nuevo}`);
+  const actual =
+    version === undefined
+      ? await getVigente(numero, anio)
+      : await getVersion(numero, anio, version);
+  if (!actual) throw new Error("Cotización no encontrada");
+  if (!transicionValida(actual.estatus, nuevo)) {
+    throw new Error(`Transición no permitida: ${actual.estatus} → ${nuevo}`);
   }
 
   await getDb()
@@ -483,15 +517,15 @@ export async function cambiarEstatus(
       and(
         eq(cotizaciones.numero, numero),
         eq(cotizaciones.anio, anio),
-        eq(cotizaciones.version, vigente.version),
+        eq(cotizaciones.version, actual.version),
       ),
     );
 
   if (nuevo === "REVISION") {
-    await eliminarAprobacion(numero, anio, vigente.version);
+    await eliminarAprobacion(numero, anio, actual.version);
   }
 
-  return { ...vigente, estatus: nuevo };
+  return { ...actual, estatus: nuevo };
 }
 
 // ── Aprobaciones (por versión exacta, fuera del estatus — legacy) ─────────────

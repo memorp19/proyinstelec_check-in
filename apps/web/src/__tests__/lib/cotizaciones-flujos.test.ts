@@ -11,6 +11,7 @@ vi.mock("@/src/lib/cotizaciones", () => ({
   cotPk: (numero: number, anio: number) => `COT#${String(numero).padStart(3, "0")}-${anio}`,
   cambiarEstatus: vi.fn(),
   getVigente: vi.fn(),
+  getVersion: vi.fn(),
   puedeEnviarseAlCliente: vi.fn(),
   registrarAprobacion: vi.fn().mockResolvedValue({}),
   updateCotizacion: vi.fn().mockResolvedValue(undefined),
@@ -34,7 +35,14 @@ vi.mock("@/src/lib/ot", () => ({
 vi.mock("@/src/lib/users", () => ({ listUsers: vi.fn() }));
 vi.mock("@/src/lib/config-erp", () => ({ getConfigErp: vi.fn() }));
 
-import { cambiarEstatus, getVigente, puedeEnviarseAlCliente, registrarAprobacion, updateCotizacion } from "@/src/lib/cotizaciones";
+import {
+  cambiarEstatus,
+  getVigente,
+  getVersion,
+  puedeEnviarseAlCliente,
+  registrarAprobacion,
+  updateCotizacion,
+} from "@/src/lib/cotizaciones";
 import { buscarPdfCotizacion } from "@/src/lib/drive-erp";
 import { enviarCorreo } from "@/src/lib/correo";
 import { createOT } from "@/src/lib/ot";
@@ -247,7 +255,8 @@ describe("ingresarOrdenCompra", () => {
 
     expect(r.folioOt).toBe("OT001260");
     expect(createOT).toHaveBeenCalledWith(expect.objectContaining({ ordenCompra: "OC-77" }));
-    expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "ASIGNADA");
+    // Lleva la versión: se escribe sobre la elegida, no sobre "la vigente" implícita
+    expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "ASIGNADA", 0);
 
     // Aviso: To = área seleccionada; CC incluye cc_aviso_ot y al responsable
     const aviso = vi.mocked(enviarCorreo).mock.calls.find((c) => c[0].asunto?.includes("Nueva OT"));
@@ -297,7 +306,8 @@ describe("generarOTSinOrdenCompra", () => {
 
     expect(r.folioOt).toBe("OT001260");
     expect(createOT).toHaveBeenCalledWith(expect.objectContaining({ ordenCompra: null }));
-    expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "ASIGNADA");
+    // Lleva la versión: se escribe sobre la elegida, no sobre "la vigente" implícita
+    expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "ASIGNADA", 0);
   });
 
   it("no escribe una OC vacía en la cotización", async () => {
@@ -335,5 +345,102 @@ describe("generarOTSinOrdenCompra", () => {
         responsableCorreo: "eduardo@proyinstelec.mx", areas: ["PROTECCIONES"], usuario: "x@x.mx",
       }),
     ).rejects.toThrow("ENVIADA");
+  });
+});
+
+// La OC se registra en la versión que el cliente aceptó, que no siempre es la
+// vigente. Caso real: la 002-2026 tiene la v0 ASIGNADA con OC y OT, y una v1
+// posterior en ENVIADA que el cliente nunca tomó.
+describe("ingresarOrdenCompra — elegir versión", () => {
+  const alta = {
+    numero: 2,
+    anio: 2026,
+    ordenCompra: "OC-900",
+    responsableCorreo: "eduardo@proyinstelec.mx",
+    areas: ["PROTECCIONES"],
+    usuario: "ana@proyinstelec.mx",
+  };
+
+  it("sin versión sigue usando la vigente, como antes", async () => {
+    vi.mocked(getVigente).mockResolvedValue({ ...vigente, version: 1, estatus: "ENVIADA" } as any);
+
+    await ingresarOrdenCompra(alta);
+
+    expect(getVersion).not.toHaveBeenCalled();
+    expect(createOT).toHaveBeenCalledWith(expect.objectContaining({ version: 1 }));
+  });
+
+  it("con versión lee ESA y no la vigente", async () => {
+    vi.mocked(getVersion).mockResolvedValue({ ...vigente, version: 0, estatus: "ENVIADA" } as any);
+
+    await ingresarOrdenCompra({ ...alta, version: 0 });
+
+    expect(getVersion).toHaveBeenCalledWith(2, 2026, 0);
+    expect(getVigente).not.toHaveBeenCalled();
+    expect(createOT).toHaveBeenCalledWith(expect.objectContaining({ version: 0 }));
+  });
+
+  // Lo que se rompía si se escribía sobre la vigente: asignar la v0 habría
+  // movido el estatus de la v1 y escrito la OC en la cotización equivocada.
+  it("escribe la OC y el estatus sobre la versión elegida, no sobre la vigente", async () => {
+    vi.mocked(getVersion).mockResolvedValue({ ...vigente, version: 0, estatus: "ENVIADA" } as any);
+
+    await ingresarOrdenCompra({ ...alta, version: 0 });
+
+    expect(updateCotizacion).toHaveBeenCalledWith(
+      2,
+      2026,
+      expect.objectContaining({ ordenCompra: "OC-900" }),
+      0,
+    );
+    expect(cambiarEstatus).toHaveBeenCalledWith(2, 2026, "ASIGNADA", 0);
+  });
+
+  it("el folio de la OT sale de la versión elegida", async () => {
+    vi.mocked(getVersion).mockResolvedValue({ ...vigente, version: 0, estatus: "ENVIADA" } as any);
+
+    const r = await ingresarOrdenCompra({ ...alta, version: 0 });
+
+    expect(r.folioOt).toBe("OT002260");
+  });
+
+  it("rechaza una versión que no está en ENVIADA", async () => {
+    vi.mocked(getVersion).mockResolvedValue({ ...vigente, version: 0, estatus: "ASIGNADA" } as any);
+
+    await expect(ingresarOrdenCompra({ ...alta, version: 0 })).rejects.toThrow("ENVIADA");
+    expect(createOT).not.toHaveBeenCalled();
+  });
+
+  it("avisa si la versión no existe", async () => {
+    vi.mocked(getVersion).mockResolvedValue(null);
+
+    await expect(ingresarOrdenCompra({ ...alta, version: 7 })).rejects.toThrow("versión 7");
+  });
+
+  // Una cotización, una OT: sigue aplicando aunque se intente con otra versión.
+  it("si la cotización ya tiene OT, la rechaza aunque se pida otra versión", async () => {
+    vi.mocked(getVersion).mockResolvedValue({ ...vigente, version: 1, estatus: "ENVIADA" } as any);
+    vi.mocked(createOT).mockRejectedValueOnce(
+      new Error("La cotización 002-2026 ya tiene la OT OT002260."),
+    );
+
+    await expect(ingresarOrdenCompra({ ...alta, version: 1 })).rejects.toThrow("ya tiene la OT");
+    expect(cambiarEstatus).not.toHaveBeenCalled();
+  });
+
+  it("la vía sin OC también acepta versión", async () => {
+    vi.mocked(getVersion).mockResolvedValue({ ...vigente, version: 0, estatus: "ENVIADA" } as any);
+
+    await generarOTSinOrdenCompra({
+      numero: 2,
+      anio: 2026,
+      version: 0,
+      responsableCorreo: "eduardo@proyinstelec.mx",
+      areas: ["PROTECCIONES"],
+      usuario: "ana@proyinstelec.mx",
+    });
+
+    expect(getVersion).toHaveBeenCalledWith(2, 2026, 0);
+    expect(cambiarEstatus).toHaveBeenCalledWith(2, 2026, "ASIGNADA", 0);
   });
 });

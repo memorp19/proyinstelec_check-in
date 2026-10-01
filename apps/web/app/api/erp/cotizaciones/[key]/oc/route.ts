@@ -14,6 +14,7 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
 
   let body: {
     ordenCompra?: string;
+    version?: number;
     responsableCorreo?: string;
     areas?: string[];
     adjunto?: { filename: string; mimeType: string; base64: string };
@@ -36,6 +37,7 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
       numero: key.numero,
       anio: key.anio,
       ordenCompra: body.ordenCompra,
+      version: body.version,
       responsableCorreo: body.responsableCorreo,
       areas: body.areas,
       adjunto: body.adjunto,

@@ -3,6 +3,7 @@ import { getConfigErp } from "./config-erp";
 import {
   cambiarEstatus,
   cotPk,
+  getVersion,
   getVigente,
   puedeEnviarseAlCliente,
   registrarAprobacion,
@@ -489,6 +490,8 @@ async function generarOT(params: {
   anio: number;
   /** null = el cliente aceptó sin emitir OC. */
   ordenCompra: string | null;
+  /** Versión aceptada. Sin esto se usa la vigente. */
+  version?: number;
   responsableCorreo: string;
   areas: string[]; // claves del catálogo de áreas
   adjunto?: { filename: string; mimeType: string; base64: string };
@@ -497,8 +500,20 @@ async function generarOT(params: {
   const avisos: string[] = [];
   const ordenCompra = params.ordenCompra?.trim() || null;
 
-  const vigente = await getVigente(params.numero, params.anio);
-  if (!vigente) throw new Error("Cotización no encontrada");
+  // La OC se registra en la versión que el cliente aceptó, que no siempre es la
+  // vigente: puede haberse mandado una v1 posterior que el cliente no tomó.
+  // Sin `version` se mantiene el comportamiento de antes (la vigente).
+  const vigente =
+    params.version === undefined
+      ? await getVigente(params.numero, params.anio)
+      : await getVersion(params.numero, params.anio, params.version);
+  if (!vigente) {
+    throw new Error(
+      params.version === undefined
+        ? "Cotización no encontrada"
+        : `La cotización no tiene versión ${params.version}`,
+    );
+  }
   if (vigente.estatus !== "ENVIADA") {
     throw new Error(`Solo se puede generar OT con estatus ENVIADA (actual: ${vigente.estatus})`);
   }
@@ -544,11 +559,16 @@ async function generarOT(params: {
   });
 
   // 3) Cotización: OC (si la hay) + folio OT + estatus ASIGNADA
-  await updateCotizacion(params.numero, params.anio, {
-    ...(ordenCompra ? { ordenCompra } : {}),
-    folioOt: folio,
-  });
-  await cambiarEstatus(params.numero, params.anio, "ASIGNADA");
+  // Sobre la versión elegida, no sobre la vigente: si no, asignar una v0 movería
+  // el estatus de la v1 y la OC quedaría escrita en la cotización equivocada.
+  // Las demás versiones se quedan como estaban, en ENVIADA; no se cancelan.
+  await updateCotizacion(
+    params.numero,
+    params.anio,
+    { ...(ordenCompra ? { ordenCompra } : {}), folioOt: folio },
+    vigente.version,
+  );
+  await cambiarEstatus(params.numero, params.anio, "ASIGNADA", vigente.version);
 
   // 4) Drive: carpeta de la OT + adjunto de la OC (errores no abortan — legacy)
   let carpetaUrl: string | undefined;
@@ -628,6 +648,8 @@ export async function ingresarOrdenCompra(params: {
   numero: number;
   anio: number;
   ordenCompra: string;
+  /** Versión aceptada por el cliente. Sin esto se usa la vigente. */
+  version?: number;
   responsableCorreo: string;
   areas: string[];
   adjunto?: { filename: string; mimeType: string; base64: string };
@@ -644,6 +666,8 @@ export async function ingresarOrdenCompra(params: {
 export async function generarOTSinOrdenCompra(params: {
   numero: number;
   anio: number;
+  /** Versión aceptada por el cliente. Sin esto se usa la vigente. */
+  version?: number;
   responsableCorreo: string;
   areas: string[];
   usuario: string;

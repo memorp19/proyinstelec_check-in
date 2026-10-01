@@ -13,6 +13,7 @@ import {
   normalizarMonto,
   updateCotizacion,
   cambiarEstatus,
+  getVersion,
   puedeEnviarseAlCliente,
   buscarCotizaciones,
 } from "@/src/lib/cotizaciones";
@@ -329,5 +330,77 @@ describe("updateCotizacion — montos", () => {
 
     const set = db.llamadas.find((l) => l.metodo === "set")!.args[0] as Record<string, unknown>;
     expect(set.montoMxn).toBe("72500.00");
+  });
+});
+
+// La OC puede registrarse en una versión que no es la vigente, así que las
+// escrituras tienen que poder apuntar a una concreta. Si no, asignar la v0
+// movería el estatus de la v1.
+/**
+ * Texto crudo del WHERE. Drizzle guarda los literales de `sql` en StringChunk;
+ * `JSON.stringify` no sirve porque el árbol referencia la tabla y es circular.
+ */
+function textoDelWhere(db: ReturnType<typeof usarDb>): string {
+  const where = db.llamadas.find((l) => l.metodo === "where")!.args[0] as {
+    queryChunks?: Array<{ value?: string[] }>;
+  };
+  return (where.queryChunks ?? []).flatMap((c) => c.value ?? []).join(" ");
+}
+
+describe("escribir sobre una versión concreta", () => {
+  it("getVersion filtra por (numero, anio, version)", async () => {
+    usarDb([[fila({ version: 0 })]]);
+
+    const cot = await getVersion(1, 2026, 0);
+
+    expect(cot?.version).toBe(0);
+  });
+
+  it("getVersion devuelve null si esa versión no existe", async () => {
+    usarDb([[]]);
+    expect(await getVersion(1, 2026, 7)).toBeNull();
+  });
+
+  it("updateCotizacion sin versión sigue apuntando a la vigente", async () => {
+    const db = usarDb([[{ numero: 1 }]]);
+
+    await updateCotizacion(1, 2026, { folioOt: "OT001260" });
+
+    // El WHERE de la vigente lleva la subconsulta MAX(version)
+    expect(textoDelWhere(db)).toContain("MAX");
+  });
+
+  it("updateCotizacion con versión NO usa el WHERE de la vigente", async () => {
+    const db = usarDb([[{ numero: 1 }]]);
+
+    await updateCotizacion(1, 2026, { folioOt: "OT002260" }, 0);
+
+    // Sin MAX: apunta a la fila exacta, no a "la más alta"
+    expect(textoDelWhere(db)).not.toContain("MAX");
+  });
+
+  it("cambiarEstatus con versión lee ESA y valida su transición", async () => {
+    // 1ª consulta: getVersion. La vigente no se toca.
+    usarDb([[fila({ version: 0, estatus: "ENVIADA" })], []]);
+
+    const cot = await cambiarEstatus(1, 2026, "ASIGNADA", 0);
+
+    expect(cot.version).toBe(0);
+    expect(cot.estatus).toBe("ASIGNADA");
+  });
+
+  it("cambiarEstatus con versión rechaza la transición inválida de ESA versión", async () => {
+    usarDb([[fila({ version: 0, estatus: "PROCESO" })]]);
+
+    await expect(cambiarEstatus(1, 2026, "ASIGNADA", 0)).rejects.toThrow(
+      "Transición no permitida",
+    );
+  });
+
+  it("cambiarEstatus avisa si la versión pedida no existe", async () => {
+    usarDb([[]]);
+    await expect(cambiarEstatus(1, 2026, "ASIGNADA", 9)).rejects.toThrow(
+      "Cotización no encontrada",
+    );
   });
 });
