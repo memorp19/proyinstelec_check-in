@@ -687,7 +687,8 @@ function Versiones({ cot }: { cot: Cot }) {
       {versiones.map((v) => (
         <div key={v.version} className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 flex items-center justify-between gap-2">
           <div className="min-w-0">
-            <p className="font-mono text-xs text-white font-bold">{v.folio} <span className="text-white/40">v{v.version}</span></p>
+            {/* Sin etiqueta de versión: el folio ya la lleva (PCOTOP-245-2026-2) */}
+            <p className="font-mono text-xs text-white font-bold">{v.folio}</p>
             <p className="font-mono text-[10px] text-white/40 truncate">
               {v.estatus} · Elaboró {v.elaboro} · {fmtFecha(v.fecha_solicitud)}
             </p>
