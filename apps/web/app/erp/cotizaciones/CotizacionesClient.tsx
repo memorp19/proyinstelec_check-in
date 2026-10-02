@@ -937,10 +937,10 @@ function OcForm({
             value={version}
             onChange={(e) => setVersion(Number(e.target.value))}
           >
+            {/* Sin prefijo de versión: el folio ya termina en ella */}
             {enviadas.map((v) => (
               <option key={v.version} value={v.version} className="bg-navy">
-                v{v.version} · {v.folio} · {fmtFecha(v.fecha_solicitud)}
-                {v.version === cot.version ? " (vigente)" : ""}
+                {v.folio} · {fmtFecha(v.fecha_solicitud)}
               </option>
             ))}
           </select>
