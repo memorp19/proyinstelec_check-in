@@ -2,6 +2,7 @@ import { and, desc, eq, ilike, max, ne, sql, type SQL } from "drizzle-orm";
 import { getDb } from "../db";
 import { aprobaciones, cotizaciones } from "../db/schema";
 import { folioCotizacion, pad } from "./folios";
+import { registrarBitacora } from "./bitacora";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -160,18 +161,43 @@ export async function getVersiones(numero: number, anio: number): Promise<Cotiza
 }
 
 /**
- * Orden que define la VIGENTE: primero las que no están NO ASIGNADA y, entre
+ * Estados que NO representan a la cotización: una versión así nunca debe ser
+ * la vigente mientras exista otra que sí cuente.
+ *
+ * CANCELADA entra por el camino que motiva toda esta función: se manda la v1,
+ * el cliente dice que no, se cancela, y después acepta la v0. Si la vigente
+ * fuera la v1 cancelada, el listado mostraría esa y los filtros por OC y OT
+ * no encontrarían nada.
+ */
+const ESTATUS_DESCARTADOS = ["NO ASIGNADA", "CANCELADA"] as const;
+
+/**
+ * Orden que define la VIGENTE: primero las que no están descartadas y, entre
  * esas, la de versión más alta.
  *
- * No basta con `MAX(version)`. Al asignar una versión anterior, las demás
- * pasan a NO ASIGNADA, y la de número más alto sería justo una descartada: el
- * listado mostraría esa, y los filtros por OC y OT no encontrarían nada
- * porque esos datos viven en la versión que sí se asignó.
+ * Ojo: esto define cuál REPRESENTA a la cotización, no cuál es la última. Para
+ * numerar una versión nueva se usa `ultimaVersion`, que sí mira el máximo de
+ * todas — si no, al asignar una versión anterior la siguiente se numeraría
+ * encima de una que ya existe.
  */
 const ORDEN_VIGENTE = [
-  sql`(${cotizaciones.estatus} = 'NO ASIGNADA')`,
+  sql`(${cotizaciones.estatus} IN ('NO ASIGNADA', 'CANCELADA'))`,
   desc(cotizaciones.version),
 ];
+
+/**
+ * El número de versión más alto de una cotización, mire el estatus que mire.
+ * Es lo que hay que usar para NUMERAR una versión nueva: la vigente puede ser
+ * una anterior (ver ORDEN_VIGENTE), y numerar a partir de ella produciría un
+ * folio que ya existe y un choque con la llave primaria.
+ */
+export async function ultimaVersion(numero: number, anio: number): Promise<number | null> {
+  const [fila] = await getDb()
+    .select({ maximo: max(cotizaciones.version) })
+    .from(cotizaciones)
+    .where(and(eq(cotizaciones.numero, numero), eq(cotizaciones.anio, anio)));
+  return fila?.maximo ?? null;
+}
 
 /** Una versión concreta, o null si no existe. */
 export async function getVersion(
@@ -393,7 +419,12 @@ export async function crearNuevaVersion(params: {
   const vigente = await getVigente(params.numero, params.anio);
   if (!vigente) throw new Error(`La cotización ${pad(params.numero, 3)}-${params.anio} no existe`);
 
-  const version = vigente.version + 1;
+  // El número sale del máximo de TODAS las versiones, no de la vigente: si se
+  // asignó una anterior, la vigente es esa y `vigente.version + 1` apuntaría a
+  // una versión que ya existe. Los datos sí se heredan de la vigente, que es
+  // la que representa a la cotización.
+  const maximo = await ultimaVersion(params.numero, params.anio);
+  const version = (maximo ?? vigente.version) + 1;
   try {
     const [fila] = await getDb()
       .insert(cotizaciones)
@@ -435,9 +466,17 @@ function esVigente(numero: number, anio: number): SQL {
   return sql`${cotizaciones.numero} = ${numero} AND ${cotizaciones.anio} = ${anio} AND ${cotizaciones.version} = (
     SELECT v.version FROM cotizaciones v
      WHERE v.numero = ${numero} AND v.anio = ${anio}
-     ORDER BY (v.estatus = 'NO ASIGNADA'), v.version DESC
+     ORDER BY (v.estatus IN ('NO ASIGNADA', 'CANCELADA')), v.version DESC
      LIMIT 1
   )`;
+}
+
+/**
+ * WHERE de una versión exacta. Devuelve `SQL` y no `SQL | undefined` como
+ * `and()`, así que el llamador no necesita una aserción no-nula.
+ */
+function esVersion(numero: number, anio: number, version: number): SQL {
+  return sql`${cotizaciones.numero} = ${numero} AND ${cotizaciones.anio} = ${anio} AND ${cotizaciones.version} = ${version}`;
 }
 
 /**
@@ -486,15 +525,7 @@ export async function updateCotizacion(
   const filas = await getDb()
     .update(cotizaciones)
     .set(cambios)
-    .where(
-      version === undefined
-        ? esVigente(numero, anio)
-        : and(
-            eq(cotizaciones.numero, numero),
-            eq(cotizaciones.anio, anio),
-            eq(cotizaciones.version, version),
-          )!,
-    )
+    .where(version === undefined ? esVigente(numero, anio) : esVersion(numero, anio, version))
     .returning({ numero: cotizaciones.numero });
   if (filas.length === 0) throw new Error("Cotización no encontrada");
 }
@@ -510,6 +541,7 @@ export async function marcarNoAsignadas(
   numero: number,
   anio: number,
   versionAsignada: number,
+  usuario: string,
 ): Promise<number> {
   const filas = await getDb()
     .update(cotizaciones)
@@ -523,6 +555,19 @@ export async function marcarNoAsignadas(
       ),
     )
     .returning({ version: cotizaciones.version });
+
+  // Descartar versiones es irreversible — NO ASIGNADA es terminal —, así que
+  // tiene que quedar en la bitácora quién lo provocó y cuáles cayeron.
+  if (filas.length > 0) {
+    await registrarBitacora({
+      accion: "COTIZACION_VERSIONES_DESCARTADAS",
+      usuario,
+      referencia: cotPk(numero, anio),
+      detalle: `Se asignó la v${versionAsignada}; quedaron NO ASIGNADA: ${filas
+        .map((f) => `v${f.version}`)
+        .join(", ")}`,
+    });
+  }
   return filas.length;
 }
 

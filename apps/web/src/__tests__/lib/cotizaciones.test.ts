@@ -1,9 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@/src/db", () => ({ getDb: vi.fn() }));
+vi.mock("@/src/lib/bitacora", () => ({
+  registrarBitacora: vi.fn().mockResolvedValue(undefined),
+}));
 
 import { getDb } from "@/src/db";
 import { dbFalso, errorDuplicado } from "../helpers/db-falso";
+import { registrarBitacora } from "@/src/lib/bitacora";
 import {
   parseCotKey,
   cotPk,
@@ -17,6 +21,7 @@ import {
   getVersion,
   marcarNoAsignadas,
   getVigente,
+  ultimaVersion,
   puedeEnviarseAlCliente,
   buscarCotizaciones,
 } from "@/src/lib/cotizaciones";
@@ -132,6 +137,7 @@ describe("crearNuevaVersion", () => {
     });
     const db = usarDb([
       [vigente], // getVigente
+      [{ maximo: 0 }], // ultimaVersion
       [fila({ version: 1, folio: "PCOTOP-001-2026-1" })], // insert ... returning
     ]);
 
@@ -305,7 +311,11 @@ describe("crearNuevaVersion — montos", () => {
 
   it("la versión nueva hereda los importes de la vigente", async () => {
     const vigente = fila({ montoMxn: "50000.00", montoUsd: "3000.00" });
-    const db = usarDb([[vigente], [fila({ version: 1, montoMxn: "50000.00", montoUsd: "3000.00" })]]);
+    const db = usarDb([
+      [vigente],
+      [{ maximo: 0 }], // ultimaVersion
+      [fila({ version: 1, montoMxn: "50000.00", montoUsd: "3000.00" })],
+    ]);
 
     await crearNuevaVersion({ numero: 1, anio: 2026, createdBy: "x@x.mx" });
 
@@ -461,7 +471,7 @@ describe("NO ASIGNADA", () => {
   it("marcarNoAsignadas toca solo las ENVIADA distintas de la asignada", async () => {
     const db = usarDb([[{ version: 1 }, { version: 2 }]]);
 
-    const n = await marcarNoAsignadas(1, 2026, 0);
+    const n = await marcarNoAsignadas(1, 2026, 0, "ana@x.mx");
 
     expect(n).toBe(2);
     const set = db.llamadas.find((l) => l.metodo === "set")!.args[0] as Record<string, unknown>;
@@ -474,7 +484,7 @@ describe("NO ASIGNADA", () => {
 
   it("devuelve 0 cuando no había otras en ENVIADA", async () => {
     usarDb([[]]);
-    expect(await marcarNoAsignadas(1, 2026, 0)).toBe(0);
+    expect(await marcarNoAsignadas(1, 2026, 0, "ana@x.mx")).toBe(0);
   });
 });
 
@@ -500,5 +510,112 @@ describe("la vigente salta las NO ASIGNADA", () => {
     const texto = textoDelWhere(db);
     expect(texto).toContain("NO ASIGNADA");
     expect(texto).not.toContain("MAX");
+  });
+});
+
+// Regresión encontrada en revisión: al redefinir la vigente, crearNuevaVersion
+// numeraba a partir de ella. Con la v0 asignada y la v1 descartada, la vigente
+// es la v0 y la "nueva" se numeraba 1 — que ya existe. Choque con la PK, y
+// alcanzable con un clic porque el botón no tiene guarda de estatus.
+describe("numerar una versión nueva", () => {
+  it("ultimaVersion mira TODAS las versiones, sin filtrar por estatus", async () => {
+    const db = usarDb([[{ maximo: 3 }]]);
+
+    expect(await ultimaVersion(1, 2026)).toBe(3);
+
+    // El WHERE es solo (numero, anio): si filtrara por estatus, volvería el bug
+    const columnas = columnasDelWhere(db.llamadas.find((l) => l.metodo === "where")!.args[0]);
+    expect(columnas).toContain("numero");
+    expect(columnas).toContain("anio");
+    expect(columnas).not.toContain("estatus");
+  });
+
+  it("devuelve null si la cotización no tiene ninguna versión", async () => {
+    usarDb([[{ maximo: null }]]);
+    expect(await ultimaVersion(9, 2026)).toBeNull();
+  });
+
+  it("la versión nueva se numera sobre el máximo, no sobre la vigente", async () => {
+    const db = usarDb([
+      [fila({ version: 0, estatus: "ASIGNADA" })], // getVigente → la v0 asignada
+      [{ maximo: 1 }], // ultimaVersion → existe una v1 descartada
+      [fila({ version: 2 })], // el insert
+    ]);
+
+    await crearNuevaVersion({ numero: 1, anio: 2026, createdBy: "ana@x.mx" });
+
+    const valores = db.llamadas.find((l) => l.metodo === "values")!.args[0] as Record<
+      string,
+      unknown
+    >;
+    // vigente.version + 1 habría dado 1, que ya existe
+    expect(valores.version).toBe(2);
+    expect(valores.folio).toBe("PCOTOP-001-2026-2");
+  });
+
+  it("hereda los datos de la vigente aunque numere desde el máximo", async () => {
+    const db = usarDb([
+      [fila({ version: 0, estatus: "ASIGNADA", titulo: "El bueno" })],
+      [{ maximo: 1 }],
+      [fila({ version: 2 })],
+    ]);
+
+    await crearNuevaVersion({ numero: 1, anio: 2026, createdBy: "ana@x.mx" });
+
+    const valores = db.llamadas.find((l) => l.metodo === "values")!.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(valores.titulo).toBe("El bueno");
+  });
+});
+
+// Segundo hallazgo de la misma revisión: saltar solo NO ASIGNADA no basta.
+// Camino real: se manda la v1, el cliente dice que no, se cancela, y después
+// acepta la v0. Si la vigente fuera la v1 cancelada, el listado mostraría esa.
+describe("la vigente salta también las CANCELADA", () => {
+  it("el orden descarta NO ASIGNADA y CANCELADA", async () => {
+    const db = usarDb([[fila({ version: 0, estatus: "ASIGNADA" })]]);
+
+    await getVigente(1, 2026);
+
+    const orden = db.llamadas.find((l) => l.metodo === "orderBy")!.args;
+    const texto = textoDeSql(orden[0]);
+    expect(texto).toContain("NO ASIGNADA");
+    expect(texto).toContain("CANCELADA");
+  });
+
+  it("el WHERE de la vigente descarta los dos estados", async () => {
+    const db = usarDb([[{ numero: 1 }]]);
+
+    await updateCotizacion(1, 2026, { folioOt: "OT001260" });
+
+    const texto = textoDelWhere(db);
+    expect(texto).toContain("NO ASIGNADA");
+    expect(texto).toContain("CANCELADA");
+  });
+});
+
+describe("marcarNoAsignadas deja rastro", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("registra en bitácora qué versiones cayeron y por cuál", async () => {
+    usarDb([[{ version: 1 }, { version: 3 }]]);
+
+    await marcarNoAsignadas(2, 2026, 0, "ana@proyinstelec.mx");
+
+    const evento = vi.mocked(registrarBitacora).mock.calls[0][0];
+    expect(evento.usuario).toBe("ana@proyinstelec.mx");
+    expect(evento.detalle).toContain("v1");
+    expect(evento.detalle).toContain("v3");
+    expect(evento.detalle).toContain("v0");
+  });
+
+  it("no registra nada si no descartó ninguna", async () => {
+    usarDb([[]]);
+
+    await marcarNoAsignadas(2, 2026, 0, "ana@proyinstelec.mx");
+
+    expect(registrarBitacora).not.toHaveBeenCalled();
   });
 });

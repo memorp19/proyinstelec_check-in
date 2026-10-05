@@ -574,7 +574,12 @@ async function generarOT(params: {
   // Las demás que seguían en ENVIADA quedan descartadas: el cliente tomó esta.
   // NO ASIGNADA es terminal — si cambia de opinión, se levanta una cotización
   // nueva, igual que con los cambios y excedentes.
-  const descartadas = await marcarNoAsignadas(params.numero, params.anio, vigente.version);
+  const descartadas = await marcarNoAsignadas(
+    params.numero,
+    params.anio,
+    vigente.version,
+    params.usuario,
+  );
   if (descartadas > 0) {
     avisos.push(
       `${descartadas} ${descartadas === 1 ? "versión quedó" : "versiones quedaron"} como NO ASIGNADA`,

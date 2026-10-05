@@ -453,7 +453,7 @@ describe("ingresarOrdenCompra — elegir versión", () => {
 
     const r = await ingresarOrdenCompra({ ...alta, version: 0 });
 
-    expect(marcarNoAsignadas).toHaveBeenCalledWith(2, 2026, 0);
+    expect(marcarNoAsignadas).toHaveBeenCalledWith(2, 2026, 0, "ana@proyinstelec.mx");
     expect(r.avisos.join(" ")).toContain("NO ASIGNADA");
   });
 

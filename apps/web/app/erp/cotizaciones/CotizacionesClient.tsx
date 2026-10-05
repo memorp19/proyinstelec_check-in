@@ -50,6 +50,9 @@ const BADGE: Record<string, string> = {
   REVISION: "bg-blue/20 border-blue/30 text-blue-mid",
   ENVIADA: "bg-purple-500/20 border-purple-400/30 text-purple-300",
   ASIGNADA: "bg-green/20 border-green/30 text-green",
+  // Descartada porque se asignó otra versión: apagada, no de alarma — no es un
+  // error, es el curso normal cuando el cliente elige una de las versiones.
+  "NO ASIGNADA": "bg-white/5 border-white/20 text-white/40",
   CANCELADA: "bg-red-500/20 border-red-400/30 text-red-400",
 };
 const badge = (e: string) => BADGE[e] ?? "bg-white/10 border-white/20 text-white/50";
