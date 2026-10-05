@@ -8,12 +8,15 @@ import {
   parseCotKey,
   cotPk,
   transicionValida,
+  ESTATUS_COTIZACION,
   createCotizacion,
   crearNuevaVersion,
   normalizarMonto,
   updateCotizacion,
   cambiarEstatus,
   getVersion,
+  marcarNoAsignadas,
+  getVigente,
   puedeEnviarseAlCliente,
   buscarCotizaciones,
 } from "@/src/lib/cotizaciones";
@@ -337,23 +340,51 @@ describe("updateCotizacion — montos", () => {
 // escrituras tienen que poder apuntar a una concreta. Si no, asignar la v0
 // movería el estatus de la v1.
 /**
+ * Nombres de columna que aparecen en un WHERE de Drizzle. Se recorre el árbol
+ * a mano porque `JSON.stringify` revienta: los nodos referencian la tabla y la
+ * estructura es circular.
+ */
+function columnasDelWhere(where: unknown): string[] {
+  const nombres: string[] = [];
+  const vistos = new Set<unknown>();
+  const recorrer = (nodo: unknown) => {
+    if (!nodo || typeof nodo !== "object" || vistos.has(nodo)) return;
+    vistos.add(nodo);
+    const n = nodo as { name?: unknown; queryChunks?: unknown[] };
+    if (typeof n.name === "string") nombres.push(n.name);
+    for (const hijo of n.queryChunks ?? []) recorrer(hijo);
+  };
+  recorrer(where);
+  return nombres;
+}
+
+/**
  * Texto crudo del WHERE. Drizzle guarda los literales de `sql` en StringChunk;
  * `JSON.stringify` no sirve porque el árbol referencia la tabla y es circular.
  */
+function textoDeSql(nodo: unknown): string {
+  const n = nodo as { queryChunks?: Array<{ value?: string[] }> };
+  return (n?.queryChunks ?? []).flatMap((c) => c.value ?? []).join(" ");
+}
+
 function textoDelWhere(db: ReturnType<typeof usarDb>): string {
-  const where = db.llamadas.find((l) => l.metodo === "where")!.args[0] as {
-    queryChunks?: Array<{ value?: string[] }>;
-  };
-  return (where.queryChunks ?? []).flatMap((c) => c.value ?? []).join(" ");
+  return textoDeSql(db.llamadas.find((l) => l.metodo === "where")!.args[0]);
 }
 
 describe("escribir sobre una versión concreta", () => {
-  it("getVersion filtra por (numero, anio, version)", async () => {
-    usarDb([[fila({ version: 0 })]]);
+  // El fixture devuelve version 0 pase lo que pase, así que comprobar
+  // `cot.version === 0` pasaba igual si la consulta ignoraba la versión.
+  // Lo que hay que mirar es el WHERE que se construyó.
+  it("getVersion filtra por las tres columnas, no solo por (numero, anio)", async () => {
+    const db = usarDb([[fila({ version: 2 })]]);
 
-    const cot = await getVersion(1, 2026, 0);
+    await getVersion(1, 2026, 2);
 
-    expect(cot?.version).toBe(0);
+    const where = db.llamadas.find((l) => l.metodo === "where")!.args[0];
+    const columnas = columnasDelWhere(where);
+    expect(columnas).toContain("numero");
+    expect(columnas).toContain("anio");
+    expect(columnas).toContain("version");
   });
 
   it("getVersion devuelve null si esa versión no existe", async () => {
@@ -366,8 +397,8 @@ describe("escribir sobre una versión concreta", () => {
 
     await updateCotizacion(1, 2026, { folioOt: "OT001260" });
 
-    // El WHERE de la vigente lleva la subconsulta MAX(version)
-    expect(textoDelWhere(db)).toContain("MAX");
+    // La vigente se resuelve con una subconsulta ordenada, no con MAX a secas
+    expect(textoDelWhere(db)).toContain("ORDER BY");
   });
 
   it("updateCotizacion con versión NO usa el WHERE de la vigente", async () => {
@@ -379,14 +410,18 @@ describe("escribir sobre una versión concreta", () => {
     expect(textoDelWhere(db)).not.toContain("MAX");
   });
 
-  it("cambiarEstatus con versión lee ESA y valida su transición", async () => {
-    // 1ª consulta: getVersion. La vigente no se toca.
-    usarDb([[fila({ version: 0, estatus: "ENVIADA" })], []]);
+  // Igual que el anterior: el fixture decide la versión devuelta, así que la
+  // aserción no distinguía getVersion de getVigente. Se mira la LECTURA.
+  it("cambiarEstatus con versión lee esa versión, no la vigente", async () => {
+    const db = usarDb([[fila({ version: 2, estatus: "ENVIADA" })], []]);
 
-    const cot = await cambiarEstatus(1, 2026, "ASIGNADA", 0);
+    await cambiarEstatus(1, 2026, "ASIGNADA", 2);
 
-    expect(cot.version).toBe(0);
-    expect(cot.estatus).toBe("ASIGNADA");
+    // La lectura es la del `select`: su WHERE tiene que mencionar la versión
+    const whereLectura = db.llamadas.filter((l) => l.metodo === "where")[0].args[0];
+    expect(columnasDelWhere(whereLectura)).toContain("version");
+    // Y getVigente ordena por estatus+version; esa lectura no debe ocurrir
+    expect(db.metodos()).not.toContain("orderBy");
   });
 
   it("cambiarEstatus con versión rechaza la transición inválida de ESA versión", async () => {
@@ -402,5 +437,68 @@ describe("escribir sobre una versión concreta", () => {
     await expect(cambiarEstatus(1, 2026, "ASIGNADA", 9)).rejects.toThrow(
       "Cotización no encontrada",
     );
+  });
+});
+
+// Al asignar una versión, las demás que seguían en ENVIADA quedan descartadas.
+// NO ASIGNADA es terminal: si el cliente cambia de opinión, cotización nueva.
+describe("NO ASIGNADA", () => {
+  it("ENVIADA puede pasar a NO ASIGNADA", () => {
+    expect(transicionValida("ENVIADA", "NO ASIGNADA")).toBe(true);
+  });
+
+  it("es terminal: no se revive a ningún estado", () => {
+    for (const destino of ESTATUS_COTIZACION) {
+      expect(transicionValida("NO ASIGNADA", destino)).toBe(false);
+    }
+  });
+
+  it("no se llega desde PROCESO ni desde REVISION", () => {
+    expect(transicionValida("PROCESO", "NO ASIGNADA")).toBe(false);
+    expect(transicionValida("REVISION", "NO ASIGNADA")).toBe(false);
+  });
+
+  it("marcarNoAsignadas toca solo las ENVIADA distintas de la asignada", async () => {
+    const db = usarDb([[{ version: 1 }, { version: 2 }]]);
+
+    const n = await marcarNoAsignadas(1, 2026, 0);
+
+    expect(n).toBe(2);
+    const set = db.llamadas.find((l) => l.metodo === "set")!.args[0] as Record<string, unknown>;
+    expect(set.estatus).toBe("NO ASIGNADA");
+    // El WHERE menciona version (para excluir la asignada) y estatus
+    const columnas = columnasDelWhere(db.llamadas.find((l) => l.metodo === "where")!.args[0]);
+    expect(columnas).toContain("version");
+    expect(columnas).toContain("estatus");
+  });
+
+  it("devuelve 0 cuando no había otras en ENVIADA", async () => {
+    usarDb([[]]);
+    expect(await marcarNoAsignadas(1, 2026, 0)).toBe(0);
+  });
+});
+
+// La vigente no puede ser "la de versión más alta" a secas: al asignar una
+// versión anterior, la más alta es justo una descartada, y el listado y los
+// filtros por OC y OT mirarían la fila equivocada.
+describe("la vigente salta las NO ASIGNADA", () => {
+  it("getVigente ordena por estatus antes que por versión", async () => {
+    const db = usarDb([[fila({ version: 0, estatus: "ASIGNADA" })]]);
+
+    await getVigente(1, 2026);
+
+    const orden = db.llamadas.find((l) => l.metodo === "orderBy")!.args;
+    // El primer criterio es el estatus, no la versión
+    expect(textoDeSql(orden[0])).toContain("NO ASIGNADA");
+  });
+
+  it("el WHERE de la vigente ya no usa MAX(version) a secas", async () => {
+    const db = usarDb([[{ numero: 1 }]]);
+
+    await updateCotizacion(1, 2026, { folioOt: "OT001260" });
+
+    const texto = textoDelWhere(db);
+    expect(texto).toContain("NO ASIGNADA");
+    expect(texto).not.toContain("MAX");
   });
 });

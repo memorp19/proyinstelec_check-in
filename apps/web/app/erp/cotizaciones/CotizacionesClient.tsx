@@ -861,12 +861,26 @@ function OcForm({
    * registrar la OC en la correcta.
    */
   const [enviadas, setEnviadas] = useState<Cot[] | null>(null);
+  /**
+   * Un fallo al cargar NO es lo mismo que "ninguna versión está en ENVIADA":
+   * lo primero se reintenta, lo segundo significa que no hay nada que asignar.
+   * Confundirlos dejaba un mensaje de negocio ante un problema de red.
+   */
+  const [errorVersiones, setErrorVersiones] = useState<string | null>(null);
   const [version, setVersion] = useState<number>(cot.version);
 
   useEffect(() => {
+    let vigente = true;
+    setEnviadas(null);
+    setErrorVersiones(null);
     fetch(`/api/erp/cotizaciones/${key(cot)}`)
-      .then((r) => r.json())
+      .then(async (r) => {
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error ?? "No se pudieron cargar las versiones");
+        return d;
+      })
       .then((d) => {
+        if (!vigente) return;
         const todas: Cot[] = d.versiones ?? [];
         const candidatas = todas.filter((v) => v.estatus === "ENVIADA");
         setEnviadas(candidatas);
@@ -874,10 +888,17 @@ function OcForm({
         const preferida = candidatas.find((v) => v.version === cot.version) ?? candidatas[0];
         if (preferida) setVersion(preferida.version);
       })
-      .catch(() => setEnviadas([]));
+      .catch((err) => {
+        if (!vigente) return;
+        setErrorVersiones(err instanceof Error ? err.message : "Error de red");
+      });
+    return () => {
+      vigente = false;
+    };
   }, [cot]);
 
   const elegida = enviadas?.find((v) => v.version === version);
+  const cargandoVersiones = enviadas === null && !errorVersiones;
 
   function toggleArea(clave: string) {
     setAreas((prev) => {
@@ -954,6 +975,16 @@ function OcForm({
         Folio OT que se generará: <span className="text-white font-bold">OT{String(cot.numero).padStart(3, "0")}{String(cot.anio % 100).padStart(2, "0")}{version}</span>
       </p>
 
+      {cargandoVersiones && (
+        <p className="font-mono text-[10px] text-white/40">Cargando versiones…</p>
+      )}
+
+      {errorVersiones && (
+        <p className="font-mono text-[10px] text-red-400 bg-danger/10 border border-danger/20 rounded-lg px-3 py-2">
+          {errorVersiones}. Cierra y vuelve a abrir para reintentar.
+        </p>
+      )}
+
       {enviadas && enviadas.length === 0 && (
         <p className="font-mono text-[10px] text-amber-300/80 bg-amber-400/10 border border-amber-400/20 rounded-lg px-3 py-2">
           Ninguna versión de esta cotización está en ENVIADA, así que no se puede generar la OT.
@@ -1024,6 +1055,8 @@ function OcForm({
             (!sinOc && !oc.trim()) ||
             !responsable ||
             areas.size === 0 ||
+            cargandoVersiones ||
+            !!errorVersiones ||
             enviadas?.length === 0
           }
           className={btnPrimary}

@@ -25,6 +25,18 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
     return NextResponse.json({ error: "Body inválido" }, { status: 400 });
   }
 
+  // `version` llega del cliente: un valor basura entraría a la consulta y el
+  // fallo saldría como 500. Se valida aquí; ausente = la vigente, como antes.
+  if (
+    body.version !== undefined &&
+    (!Number.isInteger(body.version) || body.version < 0)
+  ) {
+    return NextResponse.json(
+      { error: "La versión debe ser un entero mayor o igual a 0" },
+      { status: 400 },
+    );
+  }
+
   if (!body.ordenCompra?.trim() || !body.responsableCorreo || !Array.isArray(body.areas)) {
     return NextResponse.json(
       { error: "Faltan campos requeridos: orden de compra, responsable y áreas" },
@@ -55,6 +67,7 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
       e.message.includes("obligatoria") ||
       e.message.includes("iniciales") ||
       e.message.includes("no existe") ||
+      e.message.includes("no tiene versión") ||
       e.message.includes("al menos un")
     ) {
       return NextResponse.json({ error: e.message }, { status: 422 });

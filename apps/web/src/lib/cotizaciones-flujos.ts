@@ -5,6 +5,7 @@ import {
   cotPk,
   getVersion,
   getVigente,
+  marcarNoAsignadas,
   puedeEnviarseAlCliente,
   registrarAprobacion,
   updateCotizacion,
@@ -569,6 +570,16 @@ async function generarOT(params: {
     vigente.version,
   );
   await cambiarEstatus(params.numero, params.anio, "ASIGNADA", vigente.version);
+
+  // Las demás que seguían en ENVIADA quedan descartadas: el cliente tomó esta.
+  // NO ASIGNADA es terminal — si cambia de opinión, se levanta una cotización
+  // nueva, igual que con los cambios y excedentes.
+  const descartadas = await marcarNoAsignadas(params.numero, params.anio, vigente.version);
+  if (descartadas > 0) {
+    avisos.push(
+      `${descartadas} ${descartadas === 1 ? "versión quedó" : "versiones quedaron"} como NO ASIGNADA`,
+    );
+  }
 
   // 4) Drive: carpeta de la OT + adjunto de la OC (errores no abortan — legacy)
   let carpetaUrl: string | undefined;

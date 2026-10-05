@@ -12,6 +12,7 @@ vi.mock("@/src/lib/cotizaciones", () => ({
   cambiarEstatus: vi.fn(),
   getVigente: vi.fn(),
   getVersion: vi.fn(),
+  marcarNoAsignadas: vi.fn().mockResolvedValue(0),
   puedeEnviarseAlCliente: vi.fn(),
   registrarAprobacion: vi.fn().mockResolvedValue({}),
   updateCotizacion: vi.fn().mockResolvedValue(undefined),
@@ -39,6 +40,7 @@ import {
   cambiarEstatus,
   getVigente,
   getVersion,
+  marcarNoAsignadas,
   puedeEnviarseAlCliente,
   registrarAprobacion,
   updateCotizacion,
@@ -442,5 +444,25 @@ describe("ingresarOrdenCompra — elegir versión", () => {
 
     expect(getVersion).toHaveBeenCalledWith(2, 2026, 0);
     expect(cambiarEstatus).toHaveBeenCalledWith(2, 2026, "ASIGNADA", 0);
+  });
+
+  // Al asignar una versión, las demás que seguían en ENVIADA se descartan.
+  it("descarta las demás versiones en ENVIADA y lo reporta", async () => {
+    vi.mocked(getVersion).mockResolvedValue({ ...vigente, version: 0, estatus: "ENVIADA" } as any);
+    vi.mocked(marcarNoAsignadas).mockResolvedValueOnce(2);
+
+    const r = await ingresarOrdenCompra({ ...alta, version: 0 });
+
+    expect(marcarNoAsignadas).toHaveBeenCalledWith(2, 2026, 0);
+    expect(r.avisos.join(" ")).toContain("NO ASIGNADA");
+  });
+
+  it("si no había otras en ENVIADA no inventa un aviso", async () => {
+    vi.mocked(getVersion).mockResolvedValue({ ...vigente, version: 0, estatus: "ENVIADA" } as any);
+    vi.mocked(marcarNoAsignadas).mockResolvedValueOnce(0);
+
+    const r = await ingresarOrdenCompra({ ...alta, version: 0 });
+
+    expect(r.avisos.join(" ")).not.toContain("NO ASIGNADA");
   });
 });

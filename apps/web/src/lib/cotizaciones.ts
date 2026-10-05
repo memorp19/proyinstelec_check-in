@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, max, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, ilike, max, ne, sql, type SQL } from "drizzle-orm";
 import { getDb } from "../db";
 import { aprobaciones, cotizaciones } from "../db/schema";
 import { folioCotizacion, pad } from "./folios";
@@ -10,6 +10,12 @@ export const ESTATUS_COTIZACION = [
   "REVISION",
   "ENVIADA",
   "ASIGNADA",
+  /**
+   * El cliente aceptó OTRA versión de esta cotización. Es TERMINAL: esta
+   * versión ya no puede asignarse. Si el cliente cambia de opinión se levanta
+   * una cotización nueva, igual que con los cambios y excedentes.
+   */
+  "NO ASIGNADA",
   "DEPENDIENTE PROVEEDOR",
   "DEPENDIENTE CLIENTE",
   "CANCELADA",
@@ -153,6 +159,20 @@ export async function getVersiones(numero: number, anio: number): Promise<Cotiza
   return filas.map(aCotizacion);
 }
 
+/**
+ * Orden que define la VIGENTE: primero las que no están NO ASIGNADA y, entre
+ * esas, la de versión más alta.
+ *
+ * No basta con `MAX(version)`. Al asignar una versión anterior, las demás
+ * pasan a NO ASIGNADA, y la de número más alto sería justo una descartada: el
+ * listado mostraría esa, y los filtros por OC y OT no encontrarían nada
+ * porque esos datos viven en la versión que sí se asignó.
+ */
+const ORDEN_VIGENTE = [
+  sql`(${cotizaciones.estatus} = 'NO ASIGNADA')`,
+  desc(cotizaciones.version),
+];
+
 /** Una versión concreta, o null si no existe. */
 export async function getVersion(
   numero: number,
@@ -179,7 +199,7 @@ export async function getVigente(numero: number, anio: number): Promise<Cotizaci
     .select()
     .from(cotizaciones)
     .where(and(eq(cotizaciones.numero, numero), eq(cotizaciones.anio, anio)))
-    .orderBy(desc(cotizaciones.version))
+    .orderBy(...ORDEN_VIGENTE)
     .limit(1);
   return fila ? aCotizacion(fila) : null;
 }
@@ -194,7 +214,7 @@ function vigentesDeAnio(anio: number) {
     .selectDistinctOn([cotizaciones.numero, cotizaciones.anio])
     .from(cotizaciones)
     .where(eq(cotizaciones.anio, anio))
-    .orderBy(cotizaciones.numero, cotizaciones.anio, desc(cotizaciones.version))
+    .orderBy(cotizaciones.numero, cotizaciones.anio, ...ORDEN_VIGENTE)
     .as("vigentes");
 }
 
@@ -413,7 +433,10 @@ export async function crearNuevaVersion(params: {
 /** WHERE que apunta a la versión vigente sin leerla antes (una sola sentencia). */
 function esVigente(numero: number, anio: number): SQL {
   return sql`${cotizaciones.numero} = ${numero} AND ${cotizaciones.anio} = ${anio} AND ${cotizaciones.version} = (
-    SELECT MAX(v.version) FROM cotizaciones v WHERE v.numero = ${numero} AND v.anio = ${anio}
+    SELECT v.version FROM cotizaciones v
+     WHERE v.numero = ${numero} AND v.anio = ${anio}
+     ORDER BY (v.estatus = 'NO ASIGNADA'), v.version DESC
+     LIMIT 1
   )`;
 }
 
@@ -476,14 +499,44 @@ export async function updateCotizacion(
   if (filas.length === 0) throw new Error("Cotización no encontrada");
 }
 
+/**
+ * Marca como NO ASIGNADA las demás versiones que seguían en ENVIADA, al
+ * asignar una. Una sola sentencia: no hace falta leerlas antes, y el
+ * `WHERE estatus = 'ENVIADA'` deja intactas las que ya estaban en otro estado.
+ *
+ * Devuelve cuántas se descartaron, para poder reportarlo al usuario.
+ */
+export async function marcarNoAsignadas(
+  numero: number,
+  anio: number,
+  versionAsignada: number,
+): Promise<number> {
+  const filas = await getDb()
+    .update(cotizaciones)
+    .set({ estatus: "NO ASIGNADA", updatedAt: new Date() })
+    .where(
+      and(
+        eq(cotizaciones.numero, numero),
+        eq(cotizaciones.anio, anio),
+        ne(cotizaciones.version, versionAsignada),
+        eq(cotizaciones.estatus, "ENVIADA"),
+      ),
+    )
+    .returning({ version: cotizaciones.version });
+  return filas.length;
+}
+
 /** Transiciones permitidas (reglas del legacy). */
 export function transicionValida(de: EstatusCotizacion, a: EstatusCotizacion): boolean {
   if (de === a) return false;
   const mapa: Record<EstatusCotizacion, EstatusCotizacion[]> = {
     PROCESO: ["REVISION", "DEPENDIENTE PROVEEDOR", "DEPENDIENTE CLIENTE", "CANCELADA"],
     REVISION: ["PROCESO", "ENVIADA", "CANCELADA"], // PROCESO = corrección; ENVIADA requiere aprobación
-    ENVIADA: ["ASIGNADA", "CANCELADA"],
+    // NO ASIGNADA: el cliente tomó otra versión de esta misma cotización
+    ENVIADA: ["ASIGNADA", "NO ASIGNADA", "CANCELADA"],
     ASIGNADA: ["CANCELADA"],
+    // Terminal: no se revive. Si el cliente cambia de opinión, cotización nueva.
+    "NO ASIGNADA": [],
     "DEPENDIENTE PROVEEDOR": ["PROCESO", "REVISION", "CANCELADA"],
     "DEPENDIENTE CLIENTE": ["PROCESO", "REVISION", "CANCELADA"],
     CANCELADA: [],
