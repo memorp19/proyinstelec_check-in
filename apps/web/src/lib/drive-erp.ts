@@ -100,15 +100,16 @@ export async function ensureCarpetaCotizacion(
 
 /**
  * Copia las plantillas base (Doc + Sheet) a la carpeta de la cotización con
- * el nombre estándar: `PCOTOP-NNN-AAAA[-v] <titulo>` (convención con la que
- * después se localiza el PDF).
+ * el nombre estándar: `PCOTOP-NNN-AAAA[-{version}] <titulo>`, p. ej.
+ * `PCOTOP-002-2026 Subestación` y `PCOTOP-002-2026-1 Subestación` (convención
+ * con la que después se localiza el PDF).
  *
  * Falla si alguna plantilla no está configurada: sin ellas la cotización no
  * sirve para nada.
  */
 export async function copiarPlantillasCotizacion(params: {
   folderId: string;
-  folio: string; // PCOTOP-NNN-AAAA[-v]
+  folio: string; // PCOTOP-002-2026 (v0) · PCOTOP-002-2026-1 (v1)
   titulo: string;
 }): Promise<void> {
   const config = await getErpDriveConfig();
@@ -143,10 +144,34 @@ export async function copiarPlantillasCotizacion(params: {
 // ── PDF de la cotización ──────────────────────────────────────────────────────
 
 /**
+ * `<folio> <titulo>.pdf` — así nombra `copiarPlantillasCotizacion` las copias.
+ *
+ * El espacio es lo que evita la ambigüedad: el folio de la v0 es prefijo del de
+ * todas sus versiones ("PCOTOP-002-2026" empieza igual que
+ * "PCOTOP-002-2026-1"), y la carpeta la comparten todas.
+ */
+export function esPdfConTitulo(nombre: string | null | undefined, folio: string): boolean {
+  return (nombre ?? "").toUpperCase().startsWith(`${folio.toUpperCase()} `);
+}
+
+/**
+ * `<folio>.pdf` a secas, sin título. Igualdad exacta: como prefijo volvería la
+ * ambigüedad, porque "PCOTOP-002-2026.PDF" sería prefijo de
+ * "PCOTOP-002-2026-1.PDF".
+ */
+export function esPdfSoloFolio(nombre: string | null | undefined, folio: string): boolean {
+  return (nombre ?? "").toUpperCase() === `${folio.toUpperCase()}.PDF`;
+}
+
+/**
  * Localiza el PDF de la cotización en su carpeta (el PDF lo genera el equipo
- * manualmente; se busca por prefijo del folio, como el legacy) y lo descarga
- * para adjuntarlo a un correo. Null si no existe — el envío al cliente es
- * obligatorio con PDF.
+ * manualmente) y lo descarga para adjuntarlo a un correo. Null si no existe —
+ * el envío al cliente es obligatorio con PDF.
+ *
+ * Acepta dos formas, en este orden: `<folio> <titulo>.pdf`, que es como se
+ * nombran las copias de las plantillas, y `<folio>.pdf` a secas. Ya NO vale
+ * "el único PDF de la carpeta": la carpeta la comparten todas las versiones,
+ * así que ese comodín podía adjuntarle al cliente el PDF de otra versión.
  */
 export async function buscarPdfCotizacion(params: {
   folderId: string;
@@ -162,9 +187,19 @@ export async function buscarPdfCotizacion(params: {
   const archivos = res.data.files ?? [];
   if (archivos.length === 0) return null;
 
-  // Prefiere el PDF cuyo nombre empieza con el folio exacto; si no, el único PDF
-  const porFolio = archivos.find((f) => (f.name ?? "").toUpperCase().startsWith(params.folio.toUpperCase()));
-  const elegido = porFolio ?? (archivos.length === 1 ? archivos[0] : null);
+  // El folio de la v0 es prefijo del de todas sus versiones: "PCOTOP-002-2026"
+  // empieza igual que "PCOTOP-002-2026-1". Comparar por prefijo a secas hacía
+  // que buscar la v0 devolviera el PDF de otra versión — y ese PDF se adjunta
+  // al correo del cliente. La carpeta la comparten todas las versiones, así que
+  // el caso es el normal, no el raro.
+  //
+  // Los archivos se nombran `${folio} ${titulo}` (ver copiarPlantillasCotizacion),
+  // de modo que exigir el espacio separa "PCOTOP-002-2026 " de
+  // "PCOTOP-002-2026-1 " sin ambigüedad.
+  const elegido =
+    archivos.find((f) => esPdfConTitulo(f.name, params.folio)) ??
+    archivos.find((f) => esPdfSoloFolio(f.name, params.folio)) ??
+    null;
   if (!elegido?.id) return null;
 
   const contenido = await descargarArchivo(drive, elegido.id);
