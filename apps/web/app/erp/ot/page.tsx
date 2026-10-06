@@ -8,5 +8,6 @@ export default async function OTPage() {
   if (!session || !tienePermiso(session.user, "modulo.ot")) {
     redirect("/acceso-denegado");
   }
-  return <OTClient />;
+  // La UI solo esconde; quien autoriza de verdad es `exigirPermiso` en la ruta.
+  return <OTClient puedeReasignar={tienePermiso(session.user, "ot.reasignar")} />;
 }

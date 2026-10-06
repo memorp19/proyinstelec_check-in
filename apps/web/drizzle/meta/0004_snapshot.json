@@ -1,6 +1,6 @@
 {
-  "id": "45a9baa7-07ae-400e-9e02-c2b3543ad142",
-  "prevId": "e91e1516-7e90-4bcf-a5bd-faa818818e21",
+  "id": "be4fef93-5399-4396-b166-2664acf2f16c",
+  "prevId": "45a9baa7-07ae-400e-9e02-c2b3543ad142",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1412,6 +1412,28 @@
             },
             {
               "expression": "slot",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"ot_responsables\".\"activo\"",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ot_responsables_correo_activo_uq": {
+          "name": "ot_responsables_correo_activo_uq",
+          "columns": [
+            {
+              "expression": "folio_ot",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "correo",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

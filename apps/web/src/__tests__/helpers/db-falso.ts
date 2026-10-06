@@ -45,8 +45,14 @@ export function dbFalso(resultados: ResultadoFalso[] = []): DbFalso {
 }
 
 /** Error de violación de unicidad tal como lo reporta Postgres. */
-export function errorDuplicado(): Error & { code: string } {
-  return Object.assign(new Error('duplicate key value violates unique constraint'), {
+export function errorDuplicado(constraint?: string): Error & { code: string } {
+  // Postgres nombra el índice en el mensaje y en `constraint`; algunas libs
+  // solo dejan ver uno de los dos, así que el doble trae ambos.
+  const mensaje = constraint
+    ? `duplicate key value violates unique constraint "${constraint}"`
+    : "duplicate key value violates unique constraint";
+  return Object.assign(new Error(mensaje), {
     code: "23505",
+    ...(constraint ? { constraint } : {}),
   });
 }

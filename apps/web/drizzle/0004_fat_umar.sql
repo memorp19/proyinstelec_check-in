@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "ot_responsables_correo_activo_uq" ON "ot_responsables" USING btree ("folio_ot","correo") WHERE "ot_responsables"."activo";
