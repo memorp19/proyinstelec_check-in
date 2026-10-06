@@ -46,7 +46,14 @@ const fechaCorta = (iso: string) =>
  * actual. Esto solo dibuja el botón: la transición la valida el servidor con
  * `transicionValidaOT`, igual que cualquier otra regla.
  */
-const FLUJO_ESTATUS = ["", "Asignado", "En Ejecución", "Cerrado"] as const;
+const FLUJO_ESTATUS = [
+  "",
+  "Asignado",
+  "En Proceso",
+  "En Ejecución",
+  "Revisión",
+  "Cerrado",
+] as const;
 
 function siguienteEstatus(actual: string): string | null {
   const i = FLUJO_ESTATUS.indexOf(actual as (typeof FLUJO_ESTATUS)[number]);

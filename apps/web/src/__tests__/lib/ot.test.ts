@@ -15,6 +15,8 @@ import {
   responsablesActivosPorFolio,
   setCarpetaDriveOT,
   transicionValidaOT,
+  esEstatusOT,
+  ESTATUS_OT,
   cambiarEstatusOT,
   MAX_RESPONSABLES,
 } from "@/src/lib/ot";
@@ -346,21 +348,50 @@ describe("desactivarResponsable", () => {
 });
 
 describe("transicionValidaOT", () => {
-  it("flujo real: (vacío) → Asignado → En Ejecución → Cerrado", () => {
+  // Los seis estatus reales, en orden. El catálogo anterior tenía cuatro y
+  // dejaba fuera "En Proceso" y "Revisión", donde están 42 de las 93 OT de 2026.
+  it("recorre la cadena completa de seis estatus", () => {
     expect(transicionValidaOT("", "Asignado")).toBe(true);
-    expect(transicionValidaOT("Asignado", "En Ejecución")).toBe(true);
-    expect(transicionValidaOT("En Ejecución", "Cerrado")).toBe(true);
+    expect(transicionValidaOT("Asignado", "En Proceso")).toBe(true);
+    expect(transicionValidaOT("En Proceso", "En Ejecución")).toBe(true);
+    expect(transicionValidaOT("En Ejecución", "Revisión")).toBe(true);
+    expect(transicionValidaOT("Revisión", "Cerrado")).toBe(true);
+  });
+
+  // Donde está la mayor parte del padrón: 36 OT en "En Proceso" y 6 en
+  // "Revisión" estaban bloqueadas porque el código no reconocía su estatus.
+  it("una OT en 'En Proceso' puede avanzar", () => {
+    expect(esEstatusOT("En Proceso")).toBe(true);
+    expect(transicionValidaOT("En Proceso", "En Ejecución")).toBe(true);
+  });
+
+  it("una OT en 'Revisión' puede avanzar", () => {
+    expect(esEstatusOT("Revisión")).toBe(true);
+    expect(transicionValidaOT("Revisión", "Cerrado")).toBe(true);
+  });
+
+  // Las cadenas van con acento tal como están guardadas; sin él no son el
+  // mismo valor y la OT volvería a quedar fuera del catálogo.
+  it("exige el acento de 'En Ejecución' y 'Revisión'", () => {
+    expect(esEstatusOT("Revision")).toBe(false);
+    expect(esEstatusOT("En Ejecucion")).toBe(false);
+    expect(transicionValidaOT("En Ejecucion", "Revisión")).toBe(false);
   });
 
   it("no se salta pasos ni vuelve atrás", () => {
     expect(transicionValidaOT("", "En Ejecución")).toBe(false);
     expect(transicionValidaOT("", "Cerrado")).toBe(false);
+    expect(transicionValidaOT("Asignado", "En Ejecución")).toBe(false);
+    expect(transicionValidaOT("En Proceso", "Revisión")).toBe(false);
     expect(transicionValidaOT("En Ejecución", "Asignado")).toBe(false);
+    expect(transicionValidaOT("Revisión", "En Proceso")).toBe(false);
     expect(transicionValidaOT("Cerrado", "En Ejecución")).toBe(false);
   });
 
-  it("Cerrado es terminal y no hay cancelación", () => {
-    expect(transicionValidaOT("Cerrado", "")).toBe(false);
+  it("Cerrado es terminal: no sale hacia ningún estatus del catálogo", () => {
+    for (const destino of ESTATUS_OT) {
+      expect(transicionValidaOT("Cerrado", destino)).toBe(false);
+    }
     expect(transicionValidaOT("Asignado", "CANCELADO")).toBe(false);
   });
 

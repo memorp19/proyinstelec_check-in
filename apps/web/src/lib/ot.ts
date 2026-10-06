@@ -50,11 +50,22 @@ export const MAX_RESPONSABLES = 3;
 // ── Estatus de la OT ──────────────────────────────────────────────────────────
 
 /**
- * Los cuatro estatus reales de la operación. El legacy tenía siete valores
- * observados (PROCESO, EN PROCESO, TERMINADO, FACTURADO...); los que se usan
- * de verdad son estos, y la OT nace vacía.
+ * Los seis estatus reales de la operación, en orden. Salieron de los datos de
+ * 2026: de 93 OT, 51 están en Cerrado, 36 en "En Proceso" y 6 en "Revisión".
+ * Las dos de en medio faltaban en el catálogo, así que 42 OT activas tenían un
+ * estatus que el código rechazaba. La OT nace vacía.
+ *
+ * Las cadenas van tal cual están en los datos, con acento en "En Ejecución" y
+ * "Revisión": el valor guardado es el que se compara.
  */
-export const ESTATUS_OT = ["", "Asignado", "En Ejecución", "Cerrado"] as const;
+export const ESTATUS_OT = [
+  "",
+  "Asignado",
+  "En Proceso",
+  "En Ejecución",
+  "Revisión",
+  "Cerrado",
+] as const;
 export type EstatusOT = (typeof ESTATUS_OT)[number];
 
 export function esEstatusOT(valor: string): valor is EstatusOT {
@@ -70,8 +81,10 @@ export function transicionValidaOT(de: string, a: string): boolean {
   if (de === a) return false;
   const mapa: Record<EstatusOT, EstatusOT[]> = {
     "": ["Asignado"],
-    Asignado: ["En Ejecución"],
-    "En Ejecución": ["Cerrado"],
+    Asignado: ["En Proceso"],
+    "En Proceso": ["En Ejecución"],
+    "En Ejecución": ["Revisión"],
+    "Revisión": ["Cerrado"],
     Cerrado: [],
   };
   // `de` se lee de la base, así que puede traer un valor fuera del catálogo
