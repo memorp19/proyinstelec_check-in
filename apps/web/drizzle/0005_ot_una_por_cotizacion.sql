@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "ot_cotizacion_uq" ON "ordenes_trabajo" USING btree ("numero_cotizacion","anio");

@@ -1,7 +1,8 @@
-import { and, desc, eq, ilike, max, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, ilike, max, ne, sql, type SQL } from "drizzle-orm";
 import { getDb } from "../db";
 import { aprobaciones, cotizaciones } from "../db/schema";
 import { folioCotizacion, pad } from "./folios";
+import { registrarBitacora } from "./bitacora";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -10,6 +11,12 @@ export const ESTATUS_COTIZACION = [
   "REVISION",
   "ENVIADA",
   "ASIGNADA",
+  /**
+   * El cliente aceptó OTRA versión de esta cotización. Es TERMINAL: esta
+   * versión ya no puede asignarse. Si el cliente cambia de opinión se levanta
+   * una cotización nueva, igual que con los cambios y excedentes.
+   */
+  "NO ASIGNADA",
   "DEPENDIENTE PROVEEDOR",
   "DEPENDIENTE CLIENTE",
   "CANCELADA",
@@ -153,13 +160,72 @@ export async function getVersiones(numero: number, anio: number): Promise<Cotiza
   return filas.map(aCotizacion);
 }
 
+/**
+ * Estados que NO representan a la cotización: una versión así nunca debe ser
+ * la vigente mientras exista otra que sí cuente.
+ *
+ * CANCELADA entra por el camino que motiva toda esta función: se manda la v1,
+ * el cliente dice que no, se cancela, y después acepta la v0. Si la vigente
+ * fuera la v1 cancelada, el listado mostraría esa y los filtros por OC y OT
+ * no encontrarían nada.
+ */
+const ESTATUS_DESCARTADOS = ["NO ASIGNADA", "CANCELADA"] as const;
+
+/**
+ * Orden que define la VIGENTE: primero las que no están descartadas y, entre
+ * esas, la de versión más alta.
+ *
+ * Ojo: esto define cuál REPRESENTA a la cotización, no cuál es la última. Para
+ * numerar una versión nueva se usa `ultimaVersion`, que sí mira el máximo de
+ * todas — si no, al asignar una versión anterior la siguiente se numeraría
+ * encima de una que ya existe.
+ */
+const ORDEN_VIGENTE = [
+  sql`(${cotizaciones.estatus} IN ('NO ASIGNADA', 'CANCELADA'))`,
+  desc(cotizaciones.version),
+];
+
+/**
+ * El número de versión más alto de una cotización, mire el estatus que mire.
+ * Es lo que hay que usar para NUMERAR una versión nueva: la vigente puede ser
+ * una anterior (ver ORDEN_VIGENTE), y numerar a partir de ella produciría un
+ * folio que ya existe y un choque con la llave primaria.
+ */
+export async function ultimaVersion(numero: number, anio: number): Promise<number | null> {
+  const [fila] = await getDb()
+    .select({ maximo: max(cotizaciones.version) })
+    .from(cotizaciones)
+    .where(and(eq(cotizaciones.numero, numero), eq(cotizaciones.anio, anio)));
+  return fila?.maximo ?? null;
+}
+
+/** Una versión concreta, o null si no existe. */
+export async function getVersion(
+  numero: number,
+  anio: number,
+  version: number,
+): Promise<Cotizacion | null> {
+  const [fila] = await getDb()
+    .select()
+    .from(cotizaciones)
+    .where(
+      and(
+        eq(cotizaciones.numero, numero),
+        eq(cotizaciones.anio, anio),
+        eq(cotizaciones.version, version),
+      ),
+    )
+    .limit(1);
+  return fila ? aCotizacion(fila) : null;
+}
+
 /** La versión vigente (la de mayor número de versión) o null si no existe. */
 export async function getVigente(numero: number, anio: number): Promise<Cotizacion | null> {
   const [fila] = await getDb()
     .select()
     .from(cotizaciones)
     .where(and(eq(cotizaciones.numero, numero), eq(cotizaciones.anio, anio)))
-    .orderBy(desc(cotizaciones.version))
+    .orderBy(...ORDEN_VIGENTE)
     .limit(1);
   return fila ? aCotizacion(fila) : null;
 }
@@ -174,7 +240,7 @@ function vigentesDeAnio(anio: number) {
     .selectDistinctOn([cotizaciones.numero, cotizaciones.anio])
     .from(cotizaciones)
     .where(eq(cotizaciones.anio, anio))
-    .orderBy(cotizaciones.numero, cotizaciones.anio, desc(cotizaciones.version))
+    .orderBy(cotizaciones.numero, cotizaciones.anio, ...ORDEN_VIGENTE)
     .as("vigentes");
 }
 
@@ -353,7 +419,12 @@ export async function crearNuevaVersion(params: {
   const vigente = await getVigente(params.numero, params.anio);
   if (!vigente) throw new Error(`La cotización ${pad(params.numero, 3)}-${params.anio} no existe`);
 
-  const version = vigente.version + 1;
+  // El número sale del máximo de TODAS las versiones, no de la vigente: si se
+  // asignó una anterior, la vigente es esa y `vigente.version + 1` apuntaría a
+  // una versión que ya existe. Los datos sí se heredan de la vigente, que es
+  // la que representa a la cotización.
+  const maximo = await ultimaVersion(params.numero, params.anio);
+  const version = (maximo ?? vigente.version) + 1;
   try {
     const [fila] = await getDb()
       .insert(cotizaciones)
@@ -393,8 +464,19 @@ export async function crearNuevaVersion(params: {
 /** WHERE que apunta a la versión vigente sin leerla antes (una sola sentencia). */
 function esVigente(numero: number, anio: number): SQL {
   return sql`${cotizaciones.numero} = ${numero} AND ${cotizaciones.anio} = ${anio} AND ${cotizaciones.version} = (
-    SELECT MAX(v.version) FROM cotizaciones v WHERE v.numero = ${numero} AND v.anio = ${anio}
+    SELECT v.version FROM cotizaciones v
+     WHERE v.numero = ${numero} AND v.anio = ${anio}
+     ORDER BY (v.estatus IN ('NO ASIGNADA', 'CANCELADA')), v.version DESC
+     LIMIT 1
   )`;
+}
+
+/**
+ * WHERE de una versión exacta. Devuelve `SQL` y no `SQL | undefined` como
+ * `and()`, así que el llamador no necesita una aserción no-nula.
+ */
+function esVersion(numero: number, anio: number, version: number): SQL {
+  return sql`${cotizaciones.numero} = ${numero} AND ${cotizaciones.anio} = ${anio} AND ${cotizaciones.version} = ${version}`;
 }
 
 /**
@@ -420,6 +502,8 @@ export async function updateCotizacion(
     driveFolderUrl?: string;
     clienteId?: string;
   },
+  /** Versión a tocar. Sin esto se escribe sobre la vigente, como siempre. */
+  version?: number,
 ): Promise<void> {
   const cambios: Partial<typeof cotizaciones.$inferInsert> = { updatedAt: new Date() };
   if (data.titulo !== undefined) cambios.titulo = data.titulo.trim();
@@ -441,9 +525,50 @@ export async function updateCotizacion(
   const filas = await getDb()
     .update(cotizaciones)
     .set(cambios)
-    .where(esVigente(numero, anio))
+    .where(version === undefined ? esVigente(numero, anio) : esVersion(numero, anio, version))
     .returning({ numero: cotizaciones.numero });
   if (filas.length === 0) throw new Error("Cotización no encontrada");
+}
+
+/**
+ * Marca como NO ASIGNADA las demás versiones que seguían en ENVIADA, al
+ * asignar una. Una sola sentencia: no hace falta leerlas antes, y el
+ * `WHERE estatus = 'ENVIADA'` deja intactas las que ya estaban en otro estado.
+ *
+ * Devuelve cuántas se descartaron, para poder reportarlo al usuario.
+ */
+export async function marcarNoAsignadas(
+  numero: number,
+  anio: number,
+  versionAsignada: number,
+  usuario: string,
+): Promise<number> {
+  const filas = await getDb()
+    .update(cotizaciones)
+    .set({ estatus: "NO ASIGNADA", updatedAt: new Date() })
+    .where(
+      and(
+        eq(cotizaciones.numero, numero),
+        eq(cotizaciones.anio, anio),
+        ne(cotizaciones.version, versionAsignada),
+        eq(cotizaciones.estatus, "ENVIADA"),
+      ),
+    )
+    .returning({ version: cotizaciones.version });
+
+  // Descartar versiones es irreversible — NO ASIGNADA es terminal —, así que
+  // tiene que quedar en la bitácora quién lo provocó y cuáles cayeron.
+  if (filas.length > 0) {
+    await registrarBitacora({
+      accion: "COTIZACION_VERSIONES_DESCARTADAS",
+      usuario,
+      referencia: cotPk(numero, anio),
+      detalle: `Se asignó la v${versionAsignada}; quedaron NO ASIGNADA: ${filas
+        .map((f) => `v${f.version}`)
+        .join(", ")}`,
+    });
+  }
+  return filas.length;
 }
 
 /** Transiciones permitidas (reglas del legacy). */
@@ -452,8 +577,11 @@ export function transicionValida(de: EstatusCotizacion, a: EstatusCotizacion): b
   const mapa: Record<EstatusCotizacion, EstatusCotizacion[]> = {
     PROCESO: ["REVISION", "DEPENDIENTE PROVEEDOR", "DEPENDIENTE CLIENTE", "CANCELADA"],
     REVISION: ["PROCESO", "ENVIADA", "CANCELADA"], // PROCESO = corrección; ENVIADA requiere aprobación
-    ENVIADA: ["ASIGNADA", "CANCELADA"],
+    // NO ASIGNADA: el cliente tomó otra versión de esta misma cotización
+    ENVIADA: ["ASIGNADA", "NO ASIGNADA", "CANCELADA"],
     ASIGNADA: ["CANCELADA"],
+    // Terminal: no se revive. Si el cliente cambia de opinión, cotización nueva.
+    "NO ASIGNADA": [],
     "DEPENDIENTE PROVEEDOR": ["PROCESO", "REVISION", "CANCELADA"],
     "DEPENDIENTE CLIENTE": ["PROCESO", "REVISION", "CANCELADA"],
     CANCELADA: [],
@@ -469,11 +597,15 @@ export async function cambiarEstatus(
   numero: number,
   anio: number,
   nuevo: EstatusCotizacion,
+  version?: number,
 ): Promise<Cotizacion> {
-  const vigente = await getVigente(numero, anio);
-  if (!vigente) throw new Error("Cotización no encontrada");
-  if (!transicionValida(vigente.estatus, nuevo)) {
-    throw new Error(`Transición no permitida: ${vigente.estatus} → ${nuevo}`);
+  const actual =
+    version === undefined
+      ? await getVigente(numero, anio)
+      : await getVersion(numero, anio, version);
+  if (!actual) throw new Error("Cotización no encontrada");
+  if (!transicionValida(actual.estatus, nuevo)) {
+    throw new Error(`Transición no permitida: ${actual.estatus} → ${nuevo}`);
   }
 
   await getDb()
@@ -483,15 +615,15 @@ export async function cambiarEstatus(
       and(
         eq(cotizaciones.numero, numero),
         eq(cotizaciones.anio, anio),
-        eq(cotizaciones.version, vigente.version),
+        eq(cotizaciones.version, actual.version),
       ),
     );
 
   if (nuevo === "REVISION") {
-    await eliminarAprobacion(numero, anio, vigente.version);
+    await eliminarAprobacion(numero, anio, actual.version);
   }
 
-  return { ...vigente, estatus: nuevo };
+  return { ...actual, estatus: nuevo };
 }
 
 // ── Aprobaciones (por versión exacta, fuera del estatus — legacy) ─────────────

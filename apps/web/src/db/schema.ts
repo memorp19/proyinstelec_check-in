@@ -338,6 +338,8 @@ export const cotizaciones = pgTable(
         "REVISION",
         "ENVIADA",
         "ASIGNADA",
+        /** El cliente tomó otra versión de esta cotización. Terminal. */
+        "NO ASIGNADA",
         "DEPENDIENTE PROVEEDOR",
         "DEPENDIENTE CLIENTE",
         "CANCELADA",
@@ -444,7 +446,17 @@ export const ordenesTrabajo = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => ({ anioIdx: index("ot_anio_idx").on(t.anio) }),
+  (t) => ({
+    anioIdx: index("ot_anio_idx").on(t.anio),
+    /**
+     * Una cotización, una OT. `createOT` ya lo comprueba antes de insertar,
+     * pero esa comprobación es leer-y-luego-escribir: dos altas simultáneas de
+     * versiones distintas pasan las dos. El folio no lo impide porque lleva la
+     * versión dentro, así que son folios distintos. Aquí se cierra de verdad;
+     * el catch del 23505 ya existe.
+     */
+    cotizacionUq: uniqueIndex("ot_cotizacion_uq").on(t.numeroCotizacion, t.anio),
+  }),
 );
 
 export const otResponsables = pgTable(

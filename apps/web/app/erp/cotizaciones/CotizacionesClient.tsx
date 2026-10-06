@@ -50,6 +50,9 @@ const BADGE: Record<string, string> = {
   REVISION: "bg-blue/20 border-blue/30 text-blue-mid",
   ENVIADA: "bg-purple-500/20 border-purple-400/30 text-purple-300",
   ASIGNADA: "bg-green/20 border-green/30 text-green",
+  // Descartada porque se asignó otra versión: apagada, no de alarma — no es un
+  // error, es el curso normal cuando el cliente elige una de las versiones.
+  "NO ASIGNADA": "bg-white/5 border-white/20 text-white/40",
   CANCELADA: "bg-red-500/20 border-red-400/30 text-red-400",
 };
 const badge = (e: string) => BADGE[e] ?? "bg-white/10 border-white/20 text-white/50";
@@ -687,7 +690,8 @@ function Versiones({ cot }: { cot: Cot }) {
       {versiones.map((v) => (
         <div key={v.version} className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 flex items-center justify-between gap-2">
           <div className="min-w-0">
-            <p className="font-mono text-xs text-white font-bold">{v.folio} <span className="text-white/40">v{v.version}</span></p>
+            {/* Sin etiqueta de versión: el folio ya la lleva (PCOTOP-245-2026-2) */}
+            <p className="font-mono text-xs text-white font-bold">{v.folio}</p>
             <p className="font-mono text-[10px] text-white/40 truncate">
               {v.estatus} · Elaboró {v.elaboro} · {fmtFecha(v.fecha_solicitud)}
             </p>
@@ -854,6 +858,50 @@ function OcForm({
   const [adjunto, setAdjunto] = useState<{ filename: string; mimeType: string; base64: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * El cliente no siempre acepta la última versión: puede haberse mandado una
+   * v1 posterior que no tomó. Se listan las que están en ENVIADA para poder
+   * registrar la OC en la correcta.
+   */
+  const [enviadas, setEnviadas] = useState<Cot[] | null>(null);
+  /**
+   * Un fallo al cargar NO es lo mismo que "ninguna versión está en ENVIADA":
+   * lo primero se reintenta, lo segundo significa que no hay nada que asignar.
+   * Confundirlos dejaba un mensaje de negocio ante un problema de red.
+   */
+  const [errorVersiones, setErrorVersiones] = useState<string | null>(null);
+  const [version, setVersion] = useState<number>(cot.version);
+
+  useEffect(() => {
+    let vigente = true;
+    setEnviadas(null);
+    setErrorVersiones(null);
+    fetch(`/api/erp/cotizaciones/${key(cot)}`)
+      .then(async (r) => {
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error ?? "No se pudieron cargar las versiones");
+        return d;
+      })
+      .then((d) => {
+        if (!vigente) return;
+        const todas: Cot[] = d.versiones ?? [];
+        const candidatas = todas.filter((v) => v.estatus === "ENVIADA");
+        setEnviadas(candidatas);
+        // La vigente si está ENVIADA; si no, la más alta que sí lo esté.
+        const preferida = candidatas.find((v) => v.version === cot.version) ?? candidatas[0];
+        if (preferida) setVersion(preferida.version);
+      })
+      .catch((err) => {
+        if (!vigente) return;
+        setErrorVersiones(err instanceof Error ? err.message : "Error de red");
+      });
+    return () => {
+      vigente = false;
+    };
+  }, [cot]);
+
+  const elegida = enviadas?.find((v) => v.version === version);
+  const cargandoVersiones = enviadas === null && !errorVersiones;
 
   function toggleArea(clave: string) {
     setAreas((prev) => {
@@ -886,6 +934,7 @@ function OcForm({
         body: JSON.stringify({
           responsableCorreo: responsable,
           areas: [...areas],
+          version,
           ...(sinOc ? {} : { ordenCompra: oc, adjunto: adjunto ?? undefined }),
         }),
       });
@@ -902,9 +951,54 @@ function OcForm({
 
   return (
     <div className="space-y-3">
+      {enviadas && enviadas.length > 1 && (
+        <div>
+          <p className="font-mono text-[9px] text-white/40 uppercase tracking-widest mb-1">
+            Versión que aceptó el cliente *
+          </p>
+          <select
+            className={input}
+            value={version}
+            onChange={(e) => setVersion(Number(e.target.value))}
+          >
+            {/* Sin prefijo de versión: el folio ya termina en ella */}
+            {enviadas.map((v) => (
+              <option key={v.version} value={v.version} className="bg-navy">
+                {v.folio} · {fmtFecha(v.fecha_solicitud)}
+              </option>
+            ))}
+          </select>
+          <p className="font-mono text-[9px] text-white/30 mt-1">
+            Las demás se quedan en ENVIADA; no se cancelan.
+          </p>
+        </div>
+      )}
+
       <p className="font-mono text-[10px] text-white/40">
-        Folio OT que se generará: <span className="text-white font-bold">OT{String(cot.numero).padStart(3, "0")}{String(cot.anio % 100).padStart(2, "0")}{cot.version}</span>
+        Folio OT que se generará: <span className="text-white font-bold">OT{String(cot.numero).padStart(3, "0")}{String(cot.anio % 100).padStart(2, "0")}{version}</span>
       </p>
+
+      {cargandoVersiones && (
+        <p className="font-mono text-[10px] text-white/40">Cargando versiones…</p>
+      )}
+
+      {errorVersiones && (
+        <p className="font-mono text-[10px] text-red-400 bg-danger/10 border border-danger/20 rounded-lg px-3 py-2">
+          {errorVersiones}. Cierra y vuelve a abrir para reintentar.
+        </p>
+      )}
+
+      {enviadas && enviadas.length === 0 && (
+        <p className="font-mono text-[10px] text-amber-300/80 bg-amber-400/10 border border-amber-400/20 rounded-lg px-3 py-2">
+          Ninguna versión de esta cotización está en ENVIADA, así que no se puede generar la OT.
+        </p>
+      )}
+
+      {elegida && elegida.version !== cot.version && (
+        <p className="font-mono text-[10px] text-blue-mid bg-blue/10 border border-blue/20 rounded-lg px-3 py-2">
+          Se registrará sobre la v{elegida.version}, que no es la vigente (v{cot.version}).
+        </p>
+      )}
       {sinOc ? (
         <p className="font-mono text-[10px] text-amber-300/80 bg-amber-400/10 border border-amber-400/20 rounded-lg px-3 py-2">
           Se generará la OT sin orden de compra. La cotización queda ASIGNADA y la OC puede
@@ -959,7 +1053,15 @@ function OcForm({
       <div className="flex justify-end">
         <button
           onClick={submit}
-          disabled={saving || (!sinOc && !oc.trim()) || !responsable || areas.size === 0}
+          disabled={
+            saving ||
+            (!sinOc && !oc.trim()) ||
+            !responsable ||
+            areas.size === 0 ||
+            cargandoVersiones ||
+            !!errorVersiones ||
+            enviadas?.length === 0
+          }
           className={btnPrimary}
         >
           {saving ? "Generando…" : sinOc ? "Generar OT sin OC" : "Generar OT"}
