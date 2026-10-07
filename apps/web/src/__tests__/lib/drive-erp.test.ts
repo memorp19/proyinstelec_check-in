@@ -34,7 +34,6 @@ import {
   nombresCarpetaCotizacion,
   buscarPdfCotizacion,
   copiarPlantillasCotizacion,
-  buscarPdfCotizacion,
   _resetErpDriveConfigCache,
 } from "@/src/lib/drive-erp";
 
@@ -283,7 +282,7 @@ describe("buscarPdfCotizacion — no confundir versiones", () => {
     getDriveClient.mockResolvedValue({ files: { list, get } });
 
     const r = await buscarPdfCotizacion({ folderId: "carpeta-002", folio });
-    return r?.filename ?? null;
+    return r.pdf?.filename ?? null;
   }
 
   const CARPETA = [
@@ -341,5 +340,42 @@ describe("buscarPdfCotizacion — no confundir versiones", () => {
 
   it("carpeta vacía devuelve null", async () => {
     expect(await elegir("PCOTOP-002-2026", [])).toBeNull();
+  });
+
+  // La regla exige `<folio> ` con espacio exacto y los PDF los nombra el equipo
+  // a mano. Sin saber qué había en la carpeta, un no-match es indiagnosticable.
+  describe("qué había en la carpeta", () => {
+    async function buscar(folio: string, nombres: string[]) {
+      const list = vi.fn().mockResolvedValue({
+        data: { files: nombres.map((name, i) => ({ id: `f${i}`, name })) },
+      });
+      const get = vi.fn().mockResolvedValue({ data: new ArrayBuffer(8) });
+      getDriveClient.mockResolvedValue({ files: { list, get } });
+      return buscarPdfCotizacion({ folderId: "carpeta-002", folio });
+    }
+
+    it("sin match devuelve los nombres que sí estaban", async () => {
+      const r = await buscar("PCOTOP-002-2026", [
+        "PCOTOP-002-2026_Subestación.pdf",
+        "Cotización PCOTOP-002-2026.pdf",
+      ]);
+
+      expect(r.pdf).toBeNull();
+      expect(r.nombresEnCarpeta).toEqual([
+        "PCOTOP-002-2026_Subestación.pdf",
+        "Cotización PCOTOP-002-2026.pdf",
+      ]);
+    });
+
+    it("con match también los devuelve", async () => {
+      const r = await buscar("PCOTOP-002-2026", ["PCOTOP-002-2026 Subestación.pdf"]);
+
+      expect(r.pdf?.filename).toBe("PCOTOP-002-2026 Subestación.pdf");
+      expect(r.nombresEnCarpeta).toEqual(["PCOTOP-002-2026 Subestación.pdf"]);
+    });
+
+    it("la carpeta vacía se distingue de la que tiene PDF ajenos", async () => {
+      expect((await buscar("PCOTOP-002-2026", [])).nombresEnCarpeta).toEqual([]);
+    });
   });
 });

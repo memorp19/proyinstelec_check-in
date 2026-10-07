@@ -12,6 +12,10 @@
  * Idempotente: el WHERE solo alcanza folios con el sufijo malo, así que una
  * segunda corrida no encuentra nada y no cambia nada.
  *
+ * Cada corrida deja un corregir-folios-<fecha>.json con el detalle completo:
+ * las dudosas son cola de trabajo humano y en una corrida única contra
+ * producción no pueden depender del scrollback.
+ *
  * Uso, desde la raíz del repo:
  *   pnpm corregir:folios              # reporte, no escribe
  *   pnpm corregir:folios --aplicar    # aplica la corrección
@@ -19,6 +23,7 @@
  * Variables: DATABASE_URL (apps/web/.env.local o el entorno).
  */
 import { config } from "dotenv";
+import { writeFileSync } from "node:fs";
 import { neon } from "@neondatabase/serverless";
 
 config({ path: "apps/web/.env.local" });
@@ -32,20 +37,55 @@ if (!process.env.DATABASE_URL) {
 
 const sql = neon(process.env.DATABASE_URL);
 
+// Las tres expresiones se usan dentro de una subconsulta correlacionada, donde
+// una columna sin calificar se resolvería contra la tabla de dentro. Por eso
+// todas van con el alias `c` y la tabla se aliasa siempre igual.
+
 /**
  * El folio canónico, calculado desde (numero, anio, version). Es la misma regla
  * que `folioCotizacion` en src/lib/folios.ts, escrita en SQL para poder
  * compararla fila por fila dentro de la propia sentencia.
  */
 const FOLIO_CANONICO = `
-  'PCOTOP-' || lpad(numero::text, 3, '0') || '-' || anio ||
-  CASE WHEN version > 0 THEN '-' || version ELSE '' END`;
+  'PCOTOP-' || lpad(c.numero::text, 3, '0') || '-' || c.anio ||
+  CASE WHEN c.version > 0 THEN '-' || c.version ELSE '' END`;
 
 /** El sufijo malo: "-v1", "-V12". Se acepta la V mayúscula por si acaso. */
-const SUFIJO_MALO = `folio ~ '-[vV][0-9]+$'`;
+const SUFIJO_MALO = `c.folio ~ '-[vV][0-9]+$'`;
 
 /** Lo que quedaría tras quitar la "v". */
-const FOLIO_CORREGIDO = `regexp_replace(folio, '-[vV]([0-9]+)$', '-\\1')`;
+const FOLIO_CORREGIDO = `regexp_replace(c.folio, '-[vV]([0-9]+)$', '-\\1')`;
+
+/**
+ * ¿Hay ya OTRA fila con el folio que esta corrección produciría?
+ *
+ * `cotizaciones` no tiene índice único en `folio` —la PK es
+ * (numero, anio, version)—, así que Postgres aceptaría sin protestar dos filas
+ * con el mismo folio. Es el escenario de una carga mixta: una fila sana que ya
+ * trae `PCOTOP-002-2026-1` y otra que trae `PCOTOP-002-2026-v1`. Corregir la
+ * segunda crearía el duplicado en silencio, y a partir de ahí cualquier
+ * búsqueda por folio devuelve dos cotizaciones distintas.
+ */
+const COLISIONA = `EXISTS (
+  SELECT 1 FROM cotizaciones o
+   WHERE o.folio = ${FOLIO_CORREGIDO}
+     AND (o.numero, o.anio, o.version) IS DISTINCT FROM (c.numero, c.anio, c.version)
+)`;
+
+interface Fila {
+  numero: number;
+  anio: number;
+  version: number;
+  folio: string;
+  corregido: string;
+  canonico: string;
+  colisiona: boolean;
+}
+
+/** Una fila que no se toca, con el porqué en texto para el reporte. */
+interface Dudosa extends Fila {
+  motivo: string;
+}
 
 async function main() {
   console.log(
@@ -54,31 +94,41 @@ async function main() {
 
   // ── 1. Qué hay ──────────────────────────────────────────────────────────────
   const candidatas = (await sql(`
-    SELECT numero, anio, version, folio,
+    SELECT c.numero, c.anio, c.version, c.folio,
            ${FOLIO_CORREGIDO} AS corregido,
-           ${FOLIO_CANONICO}  AS canonico
-      FROM cotizaciones
+           ${FOLIO_CANONICO}  AS canonico,
+           ${COLISIONA}       AS colisiona
+      FROM cotizaciones c
      WHERE ${SUFIJO_MALO}
-     ORDER BY anio, numero, version
-  `)) as Array<{
-    numero: number;
-    anio: number;
-    version: number;
-    folio: string;
-    corregido: string;
-    canonico: string;
-  }>;
+     ORDER BY c.anio, c.numero, c.version
+  `)) as Fila[];
 
   if (candidatas.length === 0) {
-    console.log("✅  No hay folios con el sufijo \"-vN\". Nada que hacer.\n");
+    console.log('✅  No hay folios con el sufijo "-vN". Nada que hacer.\n');
     return;
   }
 
   // Solo se tocan las filas donde quitar la "v" produce EXACTAMENTE el folio
-  // canónico. Si no coincide, el folio tiene algún otro problema y lo decide
-  // una persona: corregirlo a ciegas escribiría un folio inventado.
-  const seguras = candidatas.filter((c) => c.corregido === c.canonico);
-  const dudosas = candidatas.filter((c) => c.corregido !== c.canonico);
+  // canónico y además nadie ocupa ya ese folio. Si no, lo decide una persona:
+  // corregir a ciegas escribiría un folio inventado o un duplicado.
+  const seguras: Fila[] = [];
+  const dudosas: Dudosa[] = [];
+
+  for (const c of candidatas) {
+    if (c.corregido !== c.canonico) {
+      dudosas.push({
+        ...c,
+        motivo: `quitar la "v" daría ${c.corregido}, pero por (${c.numero}, ${c.anio}, v${c.version}) el folio debería ser ${c.canonico}`,
+      });
+    } else if (c.colisiona) {
+      dudosas.push({
+        ...c,
+        motivo: `otra fila ya tiene el folio ${c.corregido}; corregir esta crearía un duplicado`,
+      });
+    } else {
+      seguras.push(c);
+    }
+  }
 
   console.log(`── Se corregirían (${seguras.length}) ──`);
   for (const c of seguras) {
@@ -86,13 +136,11 @@ async function main() {
   }
 
   if (dudosas.length > 0) {
-    console.log(`\n── ⚠️  NO se tocan: quitar la "v" no da el folio canónico (${dudosas.length}) ──`);
+    console.log(`\n── ⚠️  NO se tocan (${dudosas.length}) ──`);
     for (const d of dudosas) {
-      console.log(
-        `  ${d.folio}  →  quedaría ${d.corregido}, pero por (${d.numero}, ${d.anio}, v${d.version}) debería ser ${d.canonico}`,
-      );
+      console.log(`  ${d.folio}  →  ${d.motivo}`);
     }
-    console.log("\n      Revísalas a mano: el folio no solo tiene la 'v' de más.");
+    console.log("\n      Revísalas a mano antes de volver a correr el script.");
   }
 
   // ── 2. Rastro en bitácora, solo informativo ─────────────────────────────────
@@ -109,46 +157,101 @@ async function main() {
   }
 
   // ── 3. Aplicar ──────────────────────────────────────────────────────────────
+  let actualizadas: Array<{ folio: string }> = [];
+  let verificacion: { quedanConV: number; desalineados: number } | null = null;
+
+  if (APLICAR && seguras.length > 0) {
+    // El driver HTTP de Neon no tiene transacciones interactivas, pero sí acepta
+    // un lote de sentencias que se ejecuta como una sola transacción. Aquí basta
+    // con una, así que el UPDATE ya es atómico por sí mismo; el lote deja el
+    // patrón listo si mañana hay que tocar más de una tabla.
+    //
+    // Las tres condiciones del WHERE repiten la clasificación de arriba: el
+    // script no le pasa a la base una lista de filas, sino la regla, así que lo
+    // que se escribe no puede desviarse de lo que se reportó.
+    const resultado = await sql.transaction([
+      sql(`
+        UPDATE cotizaciones c
+           SET folio = ${FOLIO_CORREGIDO}
+         WHERE ${SUFIJO_MALO}
+           AND ${FOLIO_CORREGIDO} = ${FOLIO_CANONICO}
+           AND NOT ${COLISIONA}
+        RETURNING c.numero, c.anio, c.version, c.folio
+      `),
+    ]);
+
+    actualizadas = (resultado[0] ?? []) as Array<{ folio: string }>;
+    console.log(`\n✅  ${actualizadas.length} folios corregidos.`);
+
+    // ── 4. Verificación ───────────────────────────────────────────────────────
+    const [{ quedan }] = (await sql(`
+      SELECT count(*)::int AS quedan FROM cotizaciones c WHERE ${SUFIJO_MALO}
+    `)) as Array<{ quedan: number }>;
+    const [{ desalineados }] = (await sql(`
+      SELECT count(*)::int AS desalineados
+        FROM cotizaciones c WHERE c.folio <> ${FOLIO_CANONICO}
+    `)) as Array<{ desalineados: number }>;
+
+    verificacion = { quedanConV: quedan, desalineados };
+    console.log(`    Quedan con "-v": ${quedan}${quedan > 0 ? "  ← las dudosas de arriba" : ""}`);
+    console.log(`    Folios que no coinciden con su forma canónica: ${desalineados}`);
+  }
+
+  // ── 5. Reporte a archivo ────────────────────────────────────────────────────
+  // Las dudosas son cola de trabajo humano, y una corrida contra producción se
+  // hace una sola vez: no pueden quedarse solo en el scrollback.
+  const archivo = `corregir-folios-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+  writeFileSync(
+    archivo,
+    JSON.stringify(
+      {
+        corrida: new Date().toISOString(),
+        modo: APLICAR ? "aplicar" : "reporte",
+        totales: {
+          candidatas: candidatas.length,
+          seguras: seguras.length,
+          dudosas: dudosas.length,
+          corregidas: actualizadas.length,
+        },
+        seguras: seguras.map((c) => ({
+          numero: c.numero,
+          anio: c.anio,
+          version: c.version,
+          folio: c.folio,
+          corregido: c.corregido,
+        })),
+        dudosas: dudosas.map((d) => ({
+          numero: d.numero,
+          anio: d.anio,
+          version: d.version,
+          folio: d.folio,
+          corregido: d.corregido,
+          canonico: d.canonico,
+          colisiona: d.colisiona,
+          motivo: d.motivo,
+        })),
+        corregidas: actualizadas.map((a) => a.folio),
+        rastroEnBitacora: rastro,
+        verificacion,
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  console.log(`\n📄  Reporte completo: ${archivo}`);
+
   if (!APLICAR) {
     console.log(
       `\n📋  Reporte, no se escribió nada. Con --aplicar se corregirían ${seguras.length} folios.\n`,
     );
     return;
   }
-
   if (seguras.length === 0) {
-    console.log("\n⚠️   No hay ninguna fila segura que corregir. No se escribe nada.\n");
+    console.log("\n⚠️   No hay ninguna fila segura que corregir. No se escribió nada.\n");
     return;
   }
-
-  // El driver HTTP de Neon no tiene transacciones interactivas, pero sí acepta
-  // un lote de sentencias que se ejecuta como una sola transacción. Aquí basta
-  // con una, así que el UPDATE ya es atómico por sí mismo; el lote deja el
-  // patrón listo si mañana hay que tocar más de una tabla.
-  const resultado = await sql.transaction([
-    sql(`
-      UPDATE cotizaciones
-         SET folio = ${FOLIO_CORREGIDO}
-       WHERE ${SUFIJO_MALO}
-         AND ${FOLIO_CORREGIDO} = ${FOLIO_CANONICO}
-      RETURNING numero, anio, version, folio
-    `),
-  ]);
-
-  const actualizadas = (resultado[0] ?? []) as Array<{ folio: string }>;
-  console.log(`\n✅  ${actualizadas.length} folios corregidos.`);
-
-  // ── 4. Verificación ─────────────────────────────────────────────────────────
-  const [{ quedan }] = (await sql(`
-    SELECT count(*)::int AS quedan FROM cotizaciones WHERE ${SUFIJO_MALO}
-  `)) as Array<{ quedan: number }>;
-  const [{ desalineados }] = (await sql(`
-    SELECT count(*)::int AS desalineados
-      FROM cotizaciones WHERE folio <> ${FOLIO_CANONICO}
-  `)) as Array<{ desalineados: number }>;
-
-  console.log(`    Quedan con "-v": ${quedan}${quedan > 0 ? "  ← las dudosas de arriba" : ""}`);
-  console.log(`    Folios que no coinciden con su forma canónica: ${desalineados}\n`);
+  console.log();
 }
 
 main().catch((err) => {

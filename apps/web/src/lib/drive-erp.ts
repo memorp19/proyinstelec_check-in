@@ -163,20 +163,37 @@ export function esPdfSoloFolio(nombre: string | null | undefined, folio: string)
   return (nombre ?? "").toUpperCase() === `${folio.toUpperCase()}.PDF`;
 }
 
+export interface ResultadoPdfCotizacion {
+  /** Null si ninguno de los PDF de la carpeta corresponde a este folio. */
+  pdf: { filename: string; contenido: Buffer } | null;
+  /**
+   * Los PDF que había en la carpeta, haya habido match o no.
+   *
+   * Sin esto, un no-match es indiagnosticable: la regla exige `<folio> ` con
+   * espacio exacto, y los PDF los nombra el equipo a mano, así que un
+   * `PCOTOP-002-2026_Titulo.pdf` o un `Cotización PCOTOP-002-2026.pdf` quedan
+   * fuera sin que nadie pueda ver por qué. Quien recibe el error necesita leer
+   * qué había realmente en la carpeta.
+   */
+  nombresEnCarpeta: string[];
+}
+
 /**
  * Localiza el PDF de la cotización en su carpeta (el PDF lo genera el equipo
- * manualmente) y lo descarga para adjuntarlo a un correo. Null si no existe —
- * el envío al cliente es obligatorio con PDF.
+ * manualmente) y lo descarga para adjuntarlo a un correo. `pdf: null` si no
+ * existe — el envío al cliente es obligatorio con PDF.
  *
  * Acepta dos formas, en este orden: `<folio> <titulo>.pdf`, que es como se
  * nombran las copias de las plantillas, y `<folio>.pdf` a secas. Ya NO vale
  * "el único PDF de la carpeta": la carpeta la comparten todas las versiones,
  * así que ese comodín podía adjuntarle al cliente el PDF de otra versión.
+ *
+ * Devuelve siempre los nombres encontrados, para que el fallo se pueda explicar.
  */
 export async function buscarPdfCotizacion(params: {
   folderId: string;
   folio: string;
-}): Promise<{ filename: string; contenido: Buffer } | null> {
+}): Promise<ResultadoPdfCotizacion> {
   const drive = await getDriveClient();
   const res = await drive.files.list({
     q: `'${params.folderId}' in parents and mimeType='application/pdf' and trashed=false`,
@@ -185,7 +202,8 @@ export async function buscarPdfCotizacion(params: {
     ...LISTAR_TODAS_LAS_UNIDADES,
   });
   const archivos = res.data.files ?? [];
-  if (archivos.length === 0) return null;
+  const nombresEnCarpeta = archivos.map((f) => f.name ?? "(sin nombre)");
+  if (archivos.length === 0) return { pdf: null, nombresEnCarpeta };
 
   // El folio de la v0 es prefijo del de todas sus versiones: "PCOTOP-002-2026"
   // empieza igual que "PCOTOP-002-2026-1". Comparar por prefijo a secas hacía
@@ -200,10 +218,13 @@ export async function buscarPdfCotizacion(params: {
     archivos.find((f) => esPdfConTitulo(f.name, params.folio)) ??
     archivos.find((f) => esPdfSoloFolio(f.name, params.folio)) ??
     null;
-  if (!elegido?.id) return null;
+  if (!elegido?.id) return { pdf: null, nombresEnCarpeta };
 
   const contenido = await descargarArchivo(drive, elegido.id);
-  return { filename: elegido.name ?? `${params.folio}.pdf`, contenido };
+  return {
+    pdf: { filename: elegido.name ?? `${params.folio}.pdf`, contenido },
+    nombresEnCarpeta,
+  };
 }
 
 async function descargarArchivo(drive: drive_v3.Drive, fileId: string): Promise<Buffer> {
