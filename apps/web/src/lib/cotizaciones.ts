@@ -571,6 +571,53 @@ export async function marcarNoAsignadas(
   return filas.length;
 }
 
+export interface ClasificacionImportada {
+  /** Normalmente una. Si hay varias, la cotización viola "una cotización, una OT". */
+  asignadas: Cotizacion[];
+  /** ENVIADA con versión mayor que la asignada: estas son las que tapan. */
+  enviadasMayores: Cotizacion[];
+  /** ENVIADA con versión menor que la asignada. */
+  enviadasMenores: Cotizacion[];
+}
+
+/**
+ * Clasifica las versiones de UNA cotización para la corrección de los datos
+ * importados: los que entraron por el importador nunca pasaron por
+ * `marcarNoAsignadas`, así que conservan en ENVIADA versiones que deberían
+ * estar descartadas.
+ *
+ * Solo decide qué reportar. Quién cambia el estatus sigue siendo
+ * `marcarNoAsignadas`, para que la regla viva en un solo sitio.
+ *
+ * La separación entre mayores y menores no cambia el trato —las dos se
+ * descartan— pero sí lo que significan: una ENVIADA con número MAYOR que la
+ * asignada es la que hoy tapa a la asignada en el listado, porque
+ * `ORDEN_VIGENTE` prefiere la versión más alta que no esté descartada. Una
+ * menor es ruido histórico y no afecta a lo que se ve.
+ */
+export function clasificarImportadas(versiones: Cotizacion[]): ClasificacionImportada {
+  const asignadas = versiones
+    .filter((v) => v.estatus === "ASIGNADA")
+    .sort((a, b) => a.version - b.version);
+  const enviadas = versiones
+    .filter((v) => v.estatus === "ENVIADA")
+    .sort((a, b) => a.version - b.version);
+
+  // Con varias asignadas no hay referencia única; se devuelven todas las
+  // ENVIADA como "mayores" solo para que el reporte las liste, pero el script
+  // no toca estas cotizaciones.
+  if (asignadas.length !== 1) {
+    return { asignadas, enviadasMayores: enviadas, enviadasMenores: [] };
+  }
+
+  const referencia = asignadas[0].version;
+  return {
+    asignadas,
+    enviadasMayores: enviadas.filter((v) => v.version > referencia),
+    enviadasMenores: enviadas.filter((v) => v.version < referencia),
+  };
+}
+
 /** Transiciones permitidas (reglas del legacy). */
 export function transicionValida(de: EstatusCotizacion, a: EstatusCotizacion): boolean {
   if (de === a) return false;

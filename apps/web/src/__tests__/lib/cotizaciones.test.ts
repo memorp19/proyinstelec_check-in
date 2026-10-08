@@ -20,6 +20,7 @@ import {
   cambiarEstatus,
   getVersion,
   marcarNoAsignadas,
+  clasificarImportadas,
   getVigente,
   ultimaVersion,
   puedeEnviarseAlCliente,
@@ -617,5 +618,87 @@ describe("marcarNoAsignadas deja rastro", () => {
     await marcarNoAsignadas(2, 2026, 0, "ana@proyinstelec.mx");
 
     expect(registrarBitacora).not.toHaveBeenCalled();
+  });
+});
+
+// Los datos importados nunca pasaron por marcarNoAsignadas, así que conservan
+// en ENVIADA versiones que ya estaban descartadas de hecho. Esta clasificación
+// decide qué REPORTAR; quién cambia el estatus sigue siendo marcarNoAsignadas.
+describe("clasificarImportadas", () => {
+  /** Versión mínima con lo que la clasificación mira. */
+  const v = (version: number, estatus: string) =>
+    ({ numero: 2, anio: 2026, version, estatus }) as never;
+
+  it("separa las ENVIADA por encima y por debajo de la asignada", () => {
+    const r = clasificarImportadas([
+      v(0, "ENVIADA"),
+      v(1, "ASIGNADA"),
+      v(2, "ENVIADA"),
+      v(3, "ENVIADA"),
+    ]);
+
+    expect(r.asignadas.map((c) => c.version)).toEqual([1]);
+    expect(r.enviadasMayores.map((c) => c.version)).toEqual([2, 3]);
+    expect(r.enviadasMenores.map((c) => c.version)).toEqual([0]);
+  });
+
+  // Son las que tapan a la asignada: ORDEN_VIGENTE prefiere la versión más alta
+  // que no esté descartada, y ENVIADA no se descarta.
+  it("el caso que rompe el listado: una ENVIADA mayor que la asignada", () => {
+    const r = clasificarImportadas([v(0, "ASIGNADA"), v(1, "ENVIADA")]);
+
+    expect(r.enviadasMayores.map((c) => c.version)).toEqual([1]);
+    expect(r.enviadasMenores).toEqual([]);
+  });
+
+  it("una ENVIADA menor no tapa, pero se reporta aparte", () => {
+    const r = clasificarImportadas([v(0, "ENVIADA"), v(1, "ASIGNADA")]);
+
+    expect(r.enviadasMayores).toEqual([]);
+    expect(r.enviadasMenores.map((c) => c.version)).toEqual([0]);
+  });
+
+  it("ignora los estatus que no son ENVIADA ni ASIGNADA", () => {
+    const r = clasificarImportadas([
+      v(0, "ASIGNADA"),
+      v(1, "CANCELADA"),
+      v(2, "NO ASIGNADA"),
+      v(3, "PROCESO"),
+      v(4, "ENVIADA"),
+    ]);
+
+    expect(r.enviadasMayores.map((c) => c.version)).toEqual([4]);
+    expect(r.enviadasMenores).toEqual([]);
+  });
+
+  // Violan "una cotización, una OT": sin referencia única no se puede decidir
+  // cuál descartar, así que el script las reporta y no las toca.
+  it("con dos ASIGNADA no elige referencia", () => {
+    const r = clasificarImportadas([v(0, "ASIGNADA"), v(1, "ASIGNADA"), v(2, "ENVIADA")]);
+
+    expect(r.asignadas.map((c) => c.version)).toEqual([0, 1]);
+    // Todas las ENVIADA se listan juntas; no hay "mayor que" con dos referencias
+    expect(r.enviadasMayores.map((c) => c.version)).toEqual([2]);
+    expect(r.enviadasMenores).toEqual([]);
+  });
+
+  it("sin ninguna ASIGNADA tampoco elige referencia", () => {
+    const r = clasificarImportadas([v(0, "ENVIADA"), v(1, "ENVIADA")]);
+
+    expect(r.asignadas).toEqual([]);
+    expect(r.enviadasMayores.map((c) => c.version)).toEqual([0, 1]);
+  });
+
+  it("devuelve las versiones ordenadas, venga como venga la lista", () => {
+    const r = clasificarImportadas([v(3, "ENVIADA"), v(1, "ASIGNADA"), v(2, "ENVIADA")]);
+
+    expect(r.enviadasMayores.map((c) => c.version)).toEqual([2, 3]);
+  });
+
+  it("una cotización ya corregida no deja nada que descartar", () => {
+    const r = clasificarImportadas([v(0, "ASIGNADA"), v(1, "NO ASIGNADA")]);
+
+    expect(r.enviadasMayores).toEqual([]);
+    expect(r.enviadasMenores).toEqual([]);
   });
 });

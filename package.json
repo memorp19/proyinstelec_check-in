@@ -18,7 +18,8 @@
     "db:seed": "tsx scripts/seed.ts",
     "import:erp": "tsx scripts/importar-erp.ts",
     "backfill:carpetas": "tsx scripts/backfill-carpetas-cotizaciones.ts",
-    "auditar:pdfs": "tsx scripts/auditar-pdfs-cotizaciones.ts"
+    "auditar:pdfs": "tsx scripts/auditar-pdfs-cotizaciones.ts",
+    "marcar:no-asignadas": "tsx scripts/marcar-no-asignadas-importadas.ts"
   },
   "devDependencies": {
     "dotenv": "^16.4.7",
