@@ -41,6 +41,7 @@ type Modal =
   | { tipo: "enviar"; cot: Cot }
   | { tipo: "oc"; cot: Cot }
   | { tipo: "ot-sin-oc"; cot: Cot }
+  | { tipo: "oc-posterior"; cot: Cot }
   | null;
 
 const key = (c: Cot) => `${String(c.numero).padStart(3, "0")}-${c.anio}`;
@@ -225,8 +226,71 @@ export function CotizacionesClient({
           {modal.tipo === "ot-sin-oc" && (
             <OcForm sinOc cot={modal.cot} catalogos={catalogos} onDone={(msg) => { setAviso(msg); setModal(null); }} />
           )}
+          {modal.tipo === "oc-posterior" && (
+            <OcPosteriorForm cot={modal.cot} onDone={(msg) => { setAviso(msg); setModal(null); }} />
+          )}
         </ModalShell>
       )}
+    </div>
+  );
+}
+
+
+/**
+ * Captura la OC de una cotizacion que ya esta ASIGNADA y ya tiene OT.
+ *
+ * No reutiliza `OcForm` porque aquel genera la OT: pide responsable y areas, y
+ * ofrece elegir version. Aqui no hay nada que elegir — el servidor escribe en
+ * la version que tiene la OT, que no siempre es la vigente.
+ */
+function OcPosteriorForm({ cot, onDone }: { cot: Cot; onDone: (msg: string) => void }) {
+  const [oc, setOc] = useState("");
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function guardar() {
+    if (!oc.trim()) return;
+    setGuardando(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/erp/cotizaciones/${cot.numero}-${cot.anio}/oc-posterior`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ordenCompra: oc.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "No se pudo registrar la orden de compra");
+      onDone(`OC ${data.ordenCompra} registrada en la v${data.version} y en ${data.folioOt}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error");
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="font-mono text-[10px] text-white/50">
+        La orden de trabajo ya existe. La OC se guarda en la versión que la generó y en su OT.
+      </p>
+      <input
+        className={input}
+        placeholder="No. de Orden de Compra *"
+        value={oc}
+        onChange={(e) => setOc(e.target.value)}
+      />
+      {error && (
+        <p className="font-mono text-[10px] text-danger bg-danger/10 border border-danger/20 rounded-lg px-3 py-2">
+          {error}
+        </p>
+      )}
+      <button
+        onClick={guardar}
+        disabled={guardando || !oc.trim()}
+        className="w-full min-h-tap font-mono text-xs font-bold text-navy bg-amber-400 rounded-xl disabled:opacity-40"
+      >
+        {guardando ? "Guardando…" : "Registrar OC"}
+      </button>
     </div>
   );
 }
@@ -239,6 +303,7 @@ function tituloModal(m: NonNullable<Modal>) {
     enviar: "Enviar al cliente",
     oc: "Ingresar OC → Generar OT",
     "ot-sin-oc": "Generar OT sin OC",
+    "oc-posterior": "Registrar OC",
   }[m.tipo];
   return `${t} · ${m.cot.folio}`;
 }
@@ -423,6 +488,12 @@ function Buscador({
                         Generar OT sin OC
                       </button>
                     </>
+                  )}
+                  {/* Trabajo ejecutado y OC pendiente: la OT ya existe y solo falta el numero */}
+                  {c.estatus === "ASIGNADA" && !c.orden_compra && puedeCrearOT && (
+                    <button onClick={() => abrirModal({ tipo: "oc-posterior", cot: c })} className="font-mono text-[10px] font-bold text-navy bg-amber-400 rounded-lg px-3 py-1.5 active:scale-[0.97] transition-transform">
+                      Registrar OC
+                    </button>
                   )}
                   {c.estatus === "ENVIADA" && puedeEnviar && (
                     <button onClick={() => abrirModal({ tipo: "enviar", cot: c })} className={`${btnGhost} ml-1.5`}>
@@ -1001,8 +1072,9 @@ function OcForm({
       )}
       {sinOc ? (
         <p className="font-mono text-[10px] text-amber-300/80 bg-amber-400/10 border border-amber-400/20 rounded-lg px-3 py-2">
-          Se generará la OT sin orden de compra. La cotización queda ASIGNADA y la OC puede
-          capturarse después, cuando el cliente la emita.
+          Se generará la OT sin orden de compra. La cotización queda ASIGNADA, y cuando el
+          cliente emita la OC se captura con el botón <strong>Registrar OC</strong> de la
+          tarjeta: se guarda en esta misma versión y en su orden de trabajo.
         </p>
       ) : (
         <input className={input} placeholder="No. de Orden de Compra *" value={oc} onChange={(e) => setOc(e.target.value)} />
