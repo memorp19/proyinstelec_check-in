@@ -1,0 +1,52 @@
+{
+  "_comentario": [
+    "Decisiones de operación que el Excel no puede expresar, aplicadas sobre las",
+    "filas leídas ANTES de evaluar las reglas.",
+    "",
+    "CRITERIO: un error de captura se corrige en el Excel, no aquí. Este archivo",
+    "es para lo contrario: filas donde el Excel dice la verdad para su propio uso",
+    "y aun así el ERP necesita otra cosa. Cada entrada lleva su motivo, y el",
+    "motivo es lo que se revisa en el PR.",
+    "",
+    "Campos: cotizacion, anio, version identifican la fila. estatus, ordenCompra",
+    "y folioOt son los que se cambian (solo los presentes). equivalenciaOt dice",
+    "con qué folio aparece esa OT en el Control de Proceso y el Control de OT,",
+    "para la validación cruzada y para tomar su estatus."
+  ],
+  "ajustes": [
+    {
+      "cotizacion": 224,
+      "anio": 2026,
+      "version": 0,
+      "estatus": "ASIGNADA",
+      "ordenCompra": null,
+      "motivo": "Trabajo ejecutado; OC pendiente del cliente. En el Excel sigue ENVIADA hasta que llegue la OC."
+    },
+    {
+      "cotizacion": 232,
+      "anio": 2026,
+      "version": 0,
+      "estatus": "ASIGNADA",
+      "ordenCompra": null,
+      "motivo": "Trabajo ejecutado; OC pendiente del cliente. En el Excel sigue ENVIADA hasta que llegue la OC."
+    },
+    {
+      "cotizacion": 254,
+      "anio": 2026,
+      "version": 0,
+      "estatus": "ASIGNADA",
+      "ordenCompra": null,
+      "motivo": "Trabajo ejecutado; OC pendiente del cliente. En el Excel sigue ENVIADA hasta que llegue la OC."
+    },
+    {
+      "cotizacion": 178,
+      "anio": 2026,
+      "version": 2,
+      "estatus": "ASIGNADA",
+      "ordenCompra": null,
+      "folioOt": "OT178262",
+      "equivalenciaOt": "OT178261",
+      "motivo": "El cliente trabaja con la v2; los controles conservan el folio de la v1 y el reporte PREPOP-OT178261 ya emitido. La v0 y la v1 quedan NO ASIGNADA por la regla normal, así que la OT solo cuelga de la v2."
+    }
+  ]
+}

@@ -21,7 +21,13 @@ import { folioCotizacion, folioOT } from "./folios";
 
 // ── Hallazgos ─────────────────────────────────────────────────────────────────
 
-export type Severidad = "bloqueante" | "aviso";
+/**
+ * `informativo` no es un problema: es un hecho de la operación que el reporte
+ * enumera para que se vea. "ASIGNADA sin orden de compra" son 22 cotizaciones
+ * con el trabajo ejecutado y la OC todavía pendiente del cliente; mezclarlas
+ * con los avisos haría ruido sobre lo que sí hay que mirar.
+ */
+export type Severidad = "bloqueante" | "aviso" | "informativo";
 
 export interface Hallazgo {
   severidad: Severidad;
@@ -41,6 +47,13 @@ const aviso = (tipo: string, referencia: string, mensaje: string): Hallazgo => (
 
 const bloqueante = (tipo: string, referencia: string, mensaje: string): Hallazgo => ({
   severidad: "bloqueante",
+  tipo,
+  referencia,
+  mensaje,
+});
+
+const informativo = (tipo: string, referencia: string, mensaje: string): Hallazgo => ({
+  severidad: "informativo",
   tipo,
   referencia,
   mensaje,
@@ -141,6 +154,191 @@ function serialOpcional(celda: Celda | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+// ── Ajustes de operación ──────────────────────────────────────────────────────
+
+/**
+ * Un cambio sobre una fila leída, decidido por la operación.
+ *
+ * El criterio es estrecho a propósito: un error de captura se corrige en el
+ * Excel, donde lo ve quien lo mantiene. Esto es para lo contrario — filas donde
+ * el Excel dice la verdad para su propio uso y aun así el ERP necesita otra
+ * cosa. El caso que lo motiva: una cotización cuyo trabajo ya se ejecutó pero
+ * que en el control sigue en ENVIADA porque la orden de compra del cliente no
+ * ha llegado.
+ *
+ * `motivo` es obligatorio y es lo que se revisa en el PR: sin él esto sería una
+ * lista de excepciones sin dueño.
+ */
+export interface Ajuste {
+  cotizacion: number;
+  anio: number;
+  version: number;
+  estatus?: string;
+  ordenCompra?: string | null;
+  folioOt?: string | null;
+  /**
+   * El folio con el que esa OT aparece en el Control de Proceso y en el de OT.
+   *
+   * La 178 trabaja con la v2, pero los controles conservan `OT178261` —el de la
+   * v1— porque el reporte ya se emitió con ese folio. Sin la equivalencia, la
+   * validación cruzada no encontraría la OT y su estatus se perdería.
+   */
+  equivalenciaOt?: string;
+  motivo: string;
+}
+
+/** Los campos que un ajuste puede cambiar, para validar que cambie alguno. */
+const CAMPOS_AJUSTABLES = ["estatus", "ordenCompra", "folioOt"] as const;
+
+export interface LecturaAjustes {
+  ajustes: Ajuste[];
+  hallazgos: Hallazgo[];
+}
+
+/**
+ * Valida el contenido del archivo de ajustes. Una entrada mal formada bloquea:
+ * un ajuste silenciosamente ignorado dejaría la carga distinta de lo que su
+ * autor cree, que es justo lo que este archivo viene a evitar.
+ */
+export function leerAjustes(crudo: unknown): LecturaAjustes {
+  const hallazgos: Hallazgo[] = [];
+  const lista = (crudo as { ajustes?: unknown })?.ajustes;
+
+  if (!Array.isArray(lista)) {
+    return {
+      ajustes: [],
+      hallazgos: [
+        bloqueante("ajustes-ilegibles", "ajustes", 'El archivo no tiene un arreglo "ajustes"'),
+      ],
+    };
+  }
+
+  const ajustes: Ajuste[] = [];
+  const vistos = new Set<string>();
+
+  lista.forEach((item, i) => {
+    const a = item as Record<string, unknown>;
+    const ref = `ajuste #${i + 1}`;
+    const enteros = ["cotizacion", "anio", "version"] as const;
+
+    const falta = enteros.find((k) => !Number.isInteger(a[k]));
+    if (falta) {
+      hallazgos.push(bloqueante("ajuste-invalido", ref, `"${falta}" falta o no es un entero`));
+      return;
+    }
+
+    if (typeof a.motivo !== "string" || a.motivo.trim() === "") {
+      hallazgos.push(
+        bloqueante(
+          "ajuste-sin-motivo",
+          `${a.cotizacion}-${a.anio} v${a.version}`,
+          "Sin motivo. Un ajuste sin motivo es una excepción sin dueño",
+        ),
+      );
+      return;
+    }
+
+    const clave = `${a.cotizacion}-${a.anio}-${a.version}`;
+    if (vistos.has(clave)) {
+      hallazgos.push(bloqueante("ajuste-duplicado", clave, "Dos ajustes para la misma versión"));
+      return;
+    }
+    vistos.add(clave);
+
+    const cambia = CAMPOS_AJUSTABLES.some((k) => k in a);
+    if (!cambia && !("equivalenciaOt" in a)) {
+      hallazgos.push(
+        bloqueante("ajuste-vacio", clave, `No cambia ningún campo (${CAMPOS_AJUSTABLES.join(", ")})`),
+      );
+      return;
+    }
+
+    ajustes.push(a as unknown as Ajuste);
+  });
+
+  return { ajustes, hallazgos };
+}
+
+export interface AjusteAplicado {
+  ajuste: Ajuste;
+  /** Qué cambió, en texto, para el reporte: `estatus ENVIADA → ASIGNADA`. */
+  cambios: string[];
+}
+
+export interface AplicacionAjustes {
+  filas: FilaCotizacion[];
+  /** `${cotizacion}-${version}` → folio con el que la OT vive en los controles. */
+  equivalencias: Map<string, string>;
+  aplicados: AjusteAplicado[];
+  hallazgos: Hallazgo[];
+}
+
+/**
+ * Aplica los ajustes sobre las filas leídas, antes de evaluar cualquier regla.
+ *
+ * Un ajuste que apunta a una fila inexistente, o que ya no cambia nada, se
+ * avisa y no se aplica: significa que el Excel ya se corrigió y la entrada
+ * sobra. Avisar y no bloquear es deliberado — la carga no se detiene por una
+ * excepción que dejó de hacer falta, pero nadie se entera tarde de que el
+ * archivo acumula entradas muertas.
+ */
+export function aplicarAjustes(filas: FilaCotizacion[], ajustes: Ajuste[]): AplicacionAjustes {
+  const porClave = new Map(filas.map((f) => [`${f.numero}-${f.anio}-${f.version}`, f]));
+  const equivalencias = new Map<string, string>();
+  const aplicados: AjusteAplicado[] = [];
+  const hallazgos: Hallazgo[] = [];
+
+  for (const a of ajustes) {
+    const clave = `${a.cotizacion}-${a.anio}-${a.version}`;
+    const ref = `${String(a.cotizacion).padStart(3, "0")}-${a.anio} v${a.version}`;
+    const fila = porClave.get(clave);
+
+    if (!fila) {
+      hallazgos.push(
+        aviso(
+          "ajuste-sin-fila",
+          ref,
+          "El ajuste apunta a una versión que no existe en el Control de Cotizaciones; no se aplica",
+        ),
+      );
+      continue;
+    }
+
+    const cambios: string[] = [];
+    if (a.estatus !== undefined && fila.estatus !== a.estatus) {
+      cambios.push(`estatus ${fila.estatus} → ${a.estatus}`);
+      fila.estatus = a.estatus;
+    }
+    if (a.ordenCompra !== undefined && fila.ordenCompra !== a.ordenCompra) {
+      cambios.push(`OC ${fila.ordenCompra ?? "(ninguna)"} → ${a.ordenCompra ?? "(ninguna)"}`);
+      fila.ordenCompra = a.ordenCompra;
+    }
+    if (a.folioOt !== undefined && fila.folioOt !== a.folioOt) {
+      cambios.push(`OT ${fila.folioOt ?? "(ninguna)"} → ${a.folioOt ?? "(ninguna)"}`);
+      fila.folioOt = a.folioOt;
+    }
+    if (a.equivalenciaOt) {
+      equivalencias.set(`${a.cotizacion}-${a.version}`, a.equivalenciaOt.trim().toUpperCase());
+      cambios.push(`en los controles aparece como ${a.equivalenciaOt}`);
+    }
+
+    if (cambios.length === 0) {
+      hallazgos.push(
+        aviso(
+          "ajuste-innecesario",
+          ref,
+          "La fila ya está como pide el ajuste; probablemente el Excel ya se corrigió y la entrada sobra",
+        ),
+      );
+      continue;
+    }
+
+    aplicados.push({ ajuste: a, cambios });
+  }
+
+  return { filas, equivalencias, aplicados, hallazgos };
+}
+
 // ── Orden de compra ───────────────────────────────────────────────────────────
 
 /**
@@ -198,12 +396,24 @@ export function resolverFolioOT(params: {
   deCotizaciones: string | null;
   deProceso?: string | null;
   deControlOT?: string | null;
+  /**
+   * Folio con el que esta OT vive en los controles, cuando no es el suyo. Un
+   * control que traiga este folio se toma como confirmación, no como
+   * desacuerdo: es una equivalencia decidida, no una discrepancia.
+   */
+  equivalenciaOt?: string | null;
 }): ResultadoOT {
   const esperado = folioOT(params.numero, params.anio, params.version);
   const ref = `${String(params.numero).padStart(3, "0")}-${params.anio} v${params.version}`;
   const hallazgos: Hallazgo[] = [];
 
-  const norm = (v: string | null | undefined) => (v ?? "").trim().toUpperCase() || null;
+  const equivalente = (params.equivalenciaOt ?? "").trim().toUpperCase() || null;
+  const norm = (v: string | null | undefined) => {
+    const limpio = (v ?? "").trim().toUpperCase() || null;
+    // La equivalencia se resuelve antes de comparar, para que el folio que los
+    // controles conservan cuente como el folio bueno.
+    return limpio !== null && limpio === equivalente ? esperado : limpio;
+  };
   const cot = norm(params.deCotizaciones);
   const proc = norm(params.deProceso);
   const ctrl = norm(params.deControlOT);
@@ -501,8 +711,12 @@ export function revisarCotizacion(
       );
     }
 
+    // No es un problema: el trabajo se ejecuta y la OC del cliente llega
+    // después. Se enumera para que se vea cuántas están en esa situación.
     if (f.estatus === "ASIGNADA" && !f.ordenCompra) {
-      hallazgos.push(aviso("asignada-sin-oc", `${ref} v${f.version}`, "ASIGNADA sin orden de compra"));
+      hallazgos.push(
+        informativo("asignada-sin-oc", `${ref} v${f.version}`, "ASIGNADA sin orden de compra todavía"),
+      );
     }
 
     if (esOrdenCompraDoble(f.ordenCompra)) {

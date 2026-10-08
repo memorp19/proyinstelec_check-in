@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import type { Celda } from "@/src/lib/excel";
 import {
+  aplicarAjustes,
   esFilaCargable,
+  leerAjustes,
   esOrdenCompraDoble,
   leerFilaCotizacion,
   mapearEstatusOT,
@@ -12,6 +14,7 @@ import {
   resolverFolioOT,
   revisarCotizacion,
   versionesNoAsignadas,
+  type Ajuste,
   type FilaCotizacion,
 } from "@/src/lib/importacion-2026";
 import { ESTATUS_COTIZACION } from "@/src/lib/cotizaciones";
@@ -445,5 +448,245 @@ describe("otRepetidas", () => {
 
   it("las filas sin OT no se comparan", () => {
     expect(otRepetidas([fila(44, 0, null), fila(47, 0, null)])).toEqual([]);
+  });
+});
+
+
+// Los ajustes son decisiones de operacion que el Excel no puede expresar: una
+// cotizacion cuyo trabajo ya se ejecuto pero que en el control sigue en ENVIADA
+// porque la OC del cliente no ha llegado. Un error de captura NO va aqui.
+describe("leerAjustes", () => {
+  const bueno = {
+    cotizacion: 224,
+    anio: 2026,
+    version: 0,
+    estatus: "ASIGNADA",
+    ordenCompra: null,
+    motivo: "Trabajo ejecutado; OC pendiente del cliente.",
+  };
+
+  it("acepta un ajuste bien formado", () => {
+    const r = leerAjustes({ ajustes: [bueno] });
+    expect(r.ajustes).toHaveLength(1);
+    expect(r.hallazgos).toEqual([]);
+  });
+
+  // Sin motivo esto seria una lista de excepciones sin dueno, imposible de
+  // revisar en un PR.
+  it("el motivo es obligatorio", () => {
+    for (const motivo of [undefined, "", "   "]) {
+      const r = leerAjustes({ ajustes: [{ ...bueno, motivo }] });
+      expect(r.ajustes).toEqual([]);
+      expect(r.hallazgos[0].tipo).toBe("ajuste-sin-motivo");
+      expect(r.hallazgos[0].severidad).toBe("bloqueante");
+    }
+  });
+
+  it("exige cotizacion, anio y version enteros", () => {
+    for (const campo of ["cotizacion", "anio", "version"]) {
+      const r = leerAjustes({ ajustes: [{ ...bueno, [campo]: "224" }] });
+      expect(r.ajustes).toEqual([]);
+      expect(r.hallazgos[0].tipo).toBe("ajuste-invalido");
+      expect(r.hallazgos[0].mensaje).toContain(campo);
+    }
+  });
+
+  it("un ajuste que no cambia nada no tiene sentido", () => {
+    const r = leerAjustes({ ajustes: [{ cotizacion: 1, anio: 2026, version: 0, motivo: "x" }] });
+    expect(r.hallazgos[0].tipo).toBe("ajuste-vacio");
+  });
+
+  // Dos entradas para la misma fila harian que el resultado dependiera del
+  // orden del archivo.
+  it("rechaza dos ajustes para la misma version", () => {
+    const r = leerAjustes({ ajustes: [bueno, { ...bueno, estatus: "CANCELADA" }] });
+    expect(r.ajustes).toHaveLength(1);
+    expect(r.hallazgos[0].tipo).toBe("ajuste-duplicado");
+  });
+
+  // Un ajuste ignorado en silencio dejaria la carga distinta de lo que su autor
+  // cree, que es justo lo que el archivo viene a evitar.
+  it("una entrada mala no tumba a las buenas, pero si bloquea", () => {
+    const r = leerAjustes({ ajustes: [bueno, { ...bueno, cotizacion: 232, motivo: "" }] });
+    expect(r.ajustes).toHaveLength(1);
+    expect(r.hallazgos.filter((h) => h.severidad === "bloqueante")).toHaveLength(1);
+  });
+
+  it("un archivo sin arreglo de ajustes bloquea", () => {
+    expect(leerAjustes({}).hallazgos[0].tipo).toBe("ajustes-ilegibles");
+    expect(leerAjustes(null).hallazgos[0].tipo).toBe("ajustes-ilegibles");
+  });
+});
+
+describe("aplicarAjustes", () => {
+  const fila = (p: Partial<FilaCotizacion> = {}): FilaCotizacion =>
+    ({
+      fila: 304,
+      numero: 224,
+      anio: 2026,
+      version: 0,
+      folio: "PCOTOP-224-2026",
+      cliente: "SYMRISE",
+      titulo: "CONTRA INCENDIO",
+      dirigidaA: "ING. HECTOR DEL BOSQUE",
+      prioridad: "BAJA",
+      estatus: "ENVIADA",
+      elaboro: "EAOL",
+      fechaSolicitud: 46238,
+      fechaEntrega: 46297,
+      fechaSolicitudCruda: "46238",
+      fechaEntregaCruda: "46297",
+      ordenCompra: null,
+      folioOt: "OT224260",
+      ...p,
+    }) as FilaCotizacion;
+
+  const ajuste = (p: Partial<Ajuste> = {}): Ajuste => ({
+    cotizacion: 224,
+    anio: 2026,
+    version: 0,
+    estatus: "ASIGNADA",
+    motivo: "Trabajo ejecutado; OC pendiente del cliente.",
+    ...p,
+  });
+
+  it("cambia el estatus de la fila y lo reporta en texto", () => {
+    const f = fila();
+    const r = aplicarAjustes([f], [ajuste()]);
+
+    expect(f.estatus).toBe("ASIGNADA");
+    expect(r.aplicados).toHaveLength(1);
+    expect(r.aplicados[0].cambios).toEqual(["estatus ENVIADA → ASIGNADA"]);
+    expect(r.hallazgos).toEqual([]);
+  });
+
+  it("el guion del Excel ya era null, asi que la OC no cuenta como cambio", () => {
+    const r = aplicarAjustes([fila()], [ajuste({ ordenCompra: null })]);
+    expect(r.aplicados[0].cambios).toEqual(["estatus ENVIADA → ASIGNADA"]);
+  });
+
+  it("quitar la OC se reporta con palabras, no con null", () => {
+    const r = aplicarAjustes([fila({ ordenCompra: "9140" })], [ajuste({ ordenCompra: null })]);
+    expect(r.aplicados[0].cambios).toContain("OC 9140 → (ninguna)");
+  });
+
+  it("solo toca los campos presentes en el ajuste", () => {
+    const f = fila({ ordenCompra: "9140" });
+    aplicarAjustes([f], [ajuste()]);
+    expect(f.ordenCompra).toBe("9140");
+    expect(f.folioOt).toBe("OT224260");
+  });
+
+  // El caso de la 178: el cliente trabaja con la v2, pero los controles
+  // conservan el folio de la v1 porque el reporte ya se emitio con el.
+  it("mueve el folio de OT y registra la equivalencia", () => {
+    const f = fila({ numero: 178, version: 2, estatus: "DEPENDIENTE CLIENTE", folioOt: "OT178261" });
+    const r = aplicarAjustes(
+      [f],
+      [
+        ajuste({
+          cotizacion: 178,
+          version: 2,
+          folioOt: "OT178262",
+          equivalenciaOt: "OT178261",
+          motivo: "El cliente trabaja con la v2.",
+        }),
+      ],
+    );
+
+    expect(f.folioOt).toBe("OT178262");
+    expect(r.equivalencias.get("178-2")).toBe("OT178261");
+    expect(r.aplicados[0].cambios).toContain("OT OT178261 → OT178262");
+  });
+
+  it("la equivalencia se guarda en mayusculas y sin espacios", () => {
+    const r = aplicarAjustes([fila()], [ajuste({ equivalenciaOt: " ot224260 " })]);
+    expect(r.equivalencias.get("224-0")).toBe("OT224260");
+  });
+
+  // El archivo acumula entradas muertas si nadie las ve. Avisa y no bloquea: la
+  // carga no se detiene por una excepcion que dejo de hacer falta.
+  it("avisa si el ajuste apunta a una fila que no existe", () => {
+    const r = aplicarAjustes([fila()], [ajuste({ cotizacion: 999 })]);
+
+    expect(r.aplicados).toEqual([]);
+    const h = r.hallazgos[0];
+    expect(h.tipo).toBe("ajuste-sin-fila");
+    expect(h.severidad).toBe("aviso");
+    expect(h.referencia).toBe("999-2026 v0");
+  });
+
+  it("la version equivocada cuenta como fila inexistente", () => {
+    const r = aplicarAjustes([fila()], [ajuste({ version: 1 })]);
+    expect(r.hallazgos[0].tipo).toBe("ajuste-sin-fila");
+  });
+
+  it("avisa si la fila ya esta como pide el ajuste", () => {
+    const r = aplicarAjustes([fila({ estatus: "ASIGNADA" })], [ajuste()]);
+
+    expect(r.aplicados).toEqual([]);
+    expect(r.hallazgos[0].tipo).toBe("ajuste-innecesario");
+    expect(r.hallazgos[0].severidad).toBe("aviso");
+  });
+
+  // Aplicar dos veces el mismo archivo sobre las mismas filas no puede producir
+  // un resultado distinto.
+  it("es idempotente: la segunda pasada no cambia nada y avisa", () => {
+    const f = fila();
+    expect(aplicarAjustes([f], [ajuste()]).aplicados).toHaveLength(1);
+
+    const segunda = aplicarAjustes([f], [ajuste()]);
+    expect(segunda.aplicados).toEqual([]);
+    expect(segunda.hallazgos[0].tipo).toBe("ajuste-innecesario");
+  });
+
+  it("sin ajustes no pasa nada", () => {
+    const r = aplicarAjustes([fila()], []);
+    expect(r.aplicados).toEqual([]);
+    expect(r.hallazgos).toEqual([]);
+    expect(r.equivalencias.size).toBe(0);
+  });
+});
+
+// La equivalencia tiene que llegar hasta la validacion cruzada: el folio que
+// los controles conservan cuenta como confirmacion, no como discrepancia.
+describe("resolverFolioOT con equivalencia", () => {
+  const base = { numero: 178, anio: 2026, version: 2 };
+
+  it("el folio viejo en los controles no es un desacuerdo", () => {
+    const r = resolverFolioOT({
+      ...base,
+      deCotizaciones: "OT178262",
+      deProceso: "OT178261",
+      deControlOT: "OT178261",
+      equivalenciaOt: "OT178261",
+    });
+
+    expect(r.folio).toBe("OT178262");
+    expect(r.hallazgos).toEqual([]);
+  });
+
+  // Sin declararla, el mismo dato si es una discrepancia. Es lo que hace que
+  // declararla valga la pena: la excepcion queda escrita en el archivo.
+  it("sin equivalencia, ese mismo dato si se reporta", () => {
+    const r = resolverFolioOT({
+      ...base,
+      deCotizaciones: "OT178262",
+      deProceso: "OT178261",
+      deControlOT: "OT178261",
+    });
+    expect(r.hallazgos.filter((h) => h.tipo === "ot-desacuerdo")).toHaveLength(2);
+  });
+
+  it("la equivalencia no tapa un folio que de verdad es de otra cotizacion", () => {
+    const r = resolverFolioOT({
+      numero: 225,
+      anio: 2026,
+      version: 0,
+      deCotizaciones: "OT226260",
+      equivalenciaOt: "OT178261",
+    });
+    expect(r.folio).toBeNull();
+    expect(r.hallazgos[0].tipo).toBe("ot-no-cuadra");
   });
 });

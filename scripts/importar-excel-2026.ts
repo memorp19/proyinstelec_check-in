@@ -26,7 +26,9 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { neon } from "@neondatabase/serverless";
 import { LibroExcel, texto, fechaDeSerial } from "../apps/web/src/lib/excel";
 import {
+  aplicarAjustes,
   esFilaCargable,
+  leerAjustes,
   leerFilaCotizacion,
   mapearEstatusOT,
   normalizarRazon,
@@ -35,6 +37,7 @@ import {
   resolverFolioOT,
   revisarCotizacion,
   versionesNoAsignadas,
+  type AjusteAplicado,
   type FilaCotizacion,
   type Hallazgo,
 } from "../apps/web/src/lib/importacion-2026";
@@ -138,18 +141,24 @@ interface FilaControlOT {
   estatusCrudo: string;
 }
 
-/** `${numero}-${version}` → folio y estatus, según el Control de OT. */
-function leerControlOT(): Map<string, FilaControlOT> {
+/**
+ * El Control de OT, indexado de dos formas: por `${numero}-${version}` para la
+ * validación cruzada, y por folio para poder encontrar el estatus de una OT que
+ * los controles guardan bajo otro folio (ver `equivalenciaOt`).
+ */
+function leerControlOT(): { porClave: Map<string, FilaControlOT>; porFolio: Map<string, FilaControlOT> } {
   const libro = abrir("control-ot-2026.xlsx");
-  const fuera = new Map<string, FilaControlOT>();
+  const porClave = new Map<string, FilaControlOT>();
+  const porFolio = new Map<string, FilaControlOT>();
   for (const { numero, celdas } of libro.filas("Ordenes de Trabajo 2026")) {
     if (numero < 9 || texto(celdas.B).toUpperCase() !== "OT") continue;
     const folio = texto(celdas.J);
     if (!folio || folio === "-") continue;
-    const clave = `${parseInt(texto(celdas.C), 10)}-${parseInt(texto(celdas.E) || "0", 10)}`;
-    fuera.set(clave, { folio, estatusCrudo: texto(celdas.K) });
+    const fila = { folio, estatusCrudo: texto(celdas.K) };
+    porClave.set(`${parseInt(texto(celdas.C), 10)}-${parseInt(texto(celdas.E) || "0", 10)}`, fila);
+    porFolio.set(folio.trim().toUpperCase(), fila);
   }
-  return fuera;
+  return { porClave, porFolio };
 }
 
 // ── Armado de la carga ────────────────────────────────────────────────────────
@@ -174,8 +183,16 @@ async function main() {
   const otProceso = leerOtDeProceso();
   const controlOT = leerControlOT();
   console.log(
-    `📖  Cotizaciones: ${filas.length} versiones · Proceso: ${otProceso.size} OT · Control de OT: ${controlOT.size} OT\n`,
+    `📖  Cotizaciones: ${filas.length} versiones · Proceso: ${otProceso.size} OT · Control de OT: ${controlOT.porClave.size} OT\n`,
   );
+
+  // Los ajustes entran aquí: sobre las filas ya leídas y antes de que ninguna
+  // regla las mire, para que todo lo que sigue —descartes, OT, verificación—
+  // trabaje sobre la versión de los datos que la operación considera buena.
+  const lectura = leerAjustes(
+    JSON.parse(readFileSync("scripts/ajustes-importacion-2026.json", "utf-8")),
+  );
+  const ajustados = aplicarAjustes(filas, lectura.ajustes);
 
   const alias: Record<string, string> = JSON.parse(
     readFileSync("scripts/alias-clientes.json", "utf-8"),
@@ -186,7 +203,11 @@ async function main() {
     `SELECT id, razon_social, razon_normalizada FROM clientes`,
   )) as Array<{ id: string; razon_social: string; razon_normalizada: string }>;
 
-  const hallazgos: Hallazgo[] = [...otRepetidas(filas)];
+  const hallazgos: Hallazgo[] = [
+    ...lectura.hallazgos,
+    ...ajustados.hallazgos,
+    ...otRepetidas(filas),
+  ];
   const cargables: Cargable[] = [];
   const bloqueadas = new Set<number>();
   /** Razón social → filas que la necesitan, para dar de alta una sola vez. */
@@ -232,19 +253,26 @@ async function main() {
       // ── OT: solo las ASIGNADA ────────────────────────────────────────────
       let ot: Cargable["ot"] = null;
       if (estatusFinal === "ASIGNADA") {
+        const equivalencia = ajustados.equivalencias.get(clave) ?? null;
         const resuelto = resolverFolioOT({
           numero: v.numero,
           anio: v.anio,
           version: v.version,
           deCotizaciones: v.folioOt,
           deProceso: otProceso.get(clave) ?? null,
-          deControlOT: controlOT.get(clave)?.folio ?? null,
+          deControlOT: controlOT.porClave.get(clave)?.folio ?? null,
+          equivalenciaOt: equivalencia,
         });
         hallazgos.push(...resuelto.hallazgos);
 
         if (resuelto.folio) {
-          const crudo = controlOT.get(clave)?.estatusCrudo ?? "";
-          const estatus = mapearEstatusOT(crudo, resuelto.folio);
+          // Con equivalencia, el estatus se busca por el folio con el que la OT
+          // vive en el control, no por (numero, version): el control no tiene
+          // una fila para esta versión.
+          const enControl = equivalencia
+            ? controlOT.porFolio.get(equivalencia)
+            : controlOT.porClave.get(clave);
+          const estatus = mapearEstatusOT(enControl?.estatusCrudo ?? "", resuelto.folio);
           hallazgos.push(...estatus.hallazgos);
           if (estatus.estatus !== null) ot = { folio: resuelto.folio, estatus: estatus.estatus };
         }
@@ -263,13 +291,18 @@ async function main() {
   // ── Reporte ─────────────────────────────────────────────────────────────────
   const bloqueantes = hallazgos.filter((h) => h.severidad === "bloqueante");
   const avisos = hallazgos.filter((h) => h.severidad === "aviso");
+  const informativos = hallazgos.filter((h) => h.severidad === "informativo");
 
+  imprimirAjustes(ajustados.aplicados);
   imprimirHallazgos("BLOQUEANTES", bloqueantes);
   imprimirHallazgos("Avisos", avisos);
+  imprimirHallazgos("Informativo (no requiere acción)", informativos);
 
   console.log(
     `📦  Se cargarían ${cargables.length} versiones de ${porNumero.size - bloqueadas.size} ` +
-      `cotizaciones, ${cargables.filter((c) => c.ot).length} OT y ${altasCliente.size} clientes nuevos.`,
+      `cotizaciones, ${cargables.filter((c) => c.ot).length} OT y ${altasCliente.size} clientes nuevos,` +
+      `
+    con ${ajustados.aplicados.length} ajustes de operación aplicados.`,
   );
   if (bloqueadas.size > 0) {
     console.log(`    ${bloqueadas.size} cotizaciones NO se cargan: ${[...bloqueadas].join(", ")}`);
@@ -285,13 +318,21 @@ async function main() {
       cotizacionesBloqueadas: bloqueadas.size,
       ot: cargables.filter((c) => c.ot).length,
       clientesNuevos: altasCliente.size,
+      ajustesAplicados: ajustados.aplicados.length,
       bloqueantes: bloqueantes.length,
       avisos: avisos.length,
+      informativos: informativos.length,
     },
     cotizacionesBloqueadas: [...bloqueadas],
     clientesNuevos: [...altasCliente.values()],
+    ajustesAplicados: ajustados.aplicados.map((a) => ({
+      cotizacion: `${String(a.ajuste.cotizacion).padStart(3, "0")}-${a.ajuste.anio} v${a.ajuste.version}`,
+      cambios: a.cambios,
+      motivo: a.ajuste.motivo,
+    })),
     bloqueantes,
     avisos,
+    informativos,
   };
   mkdirSync(`${DIR}/reportes`, { recursive: true });
   const archivo = `${DIR}/reportes/${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
@@ -315,14 +356,29 @@ async function main() {
   await verificar(cargables);
 }
 
+/** Cada ajuste aplicado, con lo que cambió y por qué. */
+function imprimirAjustes(aplicados: AjusteAplicado[]) {
+  if (aplicados.length === 0) return;
+  console.log(`── Ajustes de operación aplicados (${aplicados.length}) ──`);
+  for (const { ajuste, cambios } of aplicados) {
+    const ref = `${String(ajuste.cotizacion).padStart(3, "0")}-${ajuste.anio} v${ajuste.version}`;
+    console.log(`  ${ref}: ${cambios.join(" · ")}`);
+    console.log(`    motivo: ${ajuste.motivo}`);
+  }
+  console.log();
+}
+
 function imprimirHallazgos(titulo: string, lista: Hallazgo[]) {
   if (lista.length === 0) return;
   console.log(`── ${titulo} (${lista.length}) ──`);
   const porTipo = new Map<string, Hallazgo[]>();
   for (const h of lista) porTipo.set(h.tipo, [...(porTipo.get(h.tipo) ?? []), h]);
   for (const [tipo, hs] of porTipo) {
-    console.log(`  ${tipo} (${hs.length})`);
-    for (const h of hs) console.log(`    ${h.referencia}: ${h.mensaje}`);
+    // Un cliente nuevo lo señalan todas sus filas, pero el alta es una sola:
+    // repetir la línea por cada fila convertía 7 altas en 16 renglones.
+    const unicos = [...new Map(hs.map((h) => [`${h.referencia}|${h.mensaje}`, h])).values()];
+    console.log(`  ${tipo} (${unicos.length})`);
+    for (const h of unicos) console.log(`    ${h.referencia}: ${h.mensaje}`);
   }
   console.log();
 }
