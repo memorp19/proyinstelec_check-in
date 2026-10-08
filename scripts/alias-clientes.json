@@ -1,0 +1,33 @@
+{
+  "_comentario": [
+    "Nombre corto del Control de Cotizaciones -> razón social del catálogo `clientes`.",
+    "Solo van aquí los renombres que NO salen de normalizar texto: son decisiones",
+    "humanas (una razón social que no se parece al nombre de uso, o un plantel que",
+    "factura la matriz). Lo que sí sale de normalizar -'FONKEL MEXICANA' contra",
+    "'FONKEL MEXICANA S.A. de C.V.'- no necesita entrada.",
+    "La llave se compara en MAYÚSCULAS."
+  ],
+  "CENTRO SANTA FE": "ADMINISTRADORA DE CENTROS COMERCIALES SANTA FE S.A. de C.V.",
+  "CONCRAM": "Proyectos Concram",
+  "CRCC": "China Railway Construction Corporation Limited",
+  "AREOPUERTO DE MONTERREY": "AEROPUERTO DE MONTERREY",
+  "EMBOBINADOS DE ELECTROMAGNETISMO": "EMBOBINADOS DE ELECTROMAGNETISMO INDUSTRIAL",
+  "SAINT GOBAIN VETROTEX": "SAINT-GOBAIN AMERICA S.A. de C.V.",
+  "SANATORIO SAGRADO CORAZON": "Sanatorio Sagrado Corazon de Jesus",
+  "SERVICIOS PROFESIONALES PS": "Servicios Profesionales PS - Montajes Eléctricos S.A. de C.V.",
+  "STADIA SUITES": "Stadia Suites Mexico City Santa Fe",
+  "UVM COYOACAN": "Universidad del Valle de Mexico, SC",
+  "UVM COYOACÁN": "Universidad del Valle de Mexico, SC",
+  "UVM CUERNAVACA": "Universidad del Valle de Mexico, SC",
+  "UVM CUMBRES": "Universidad del Valle de Mexico, SC",
+  "UVM HISPANO": "Universidad del Valle de Mexico, SC",
+  "UVM LOMAS VERDES": "Universidad del Valle de Mexico, SC",
+  "UVM MARINA NACIONAL": "Universidad del Valle de Mexico, SC",
+  "UVM QUERÉTARO": "Universidad del Valle de Mexico, SC",
+  "UVM QUERÉTARO CLINICA": "Universidad del Valle de Mexico, SC",
+  "UVM SAN RAFAEL": "Universidad del Valle de Mexico, SC",
+  "UVM TEXCOCO": "Universidad del Valle de Mexico, SC",
+  "UVM TOLUCA": "Universidad del Valle de Mexico, SC",
+  "SEISA ENERGIA": "SISTEMAS DE ENERGIA INTERNACIONAL S.A. De C.V.",
+  "SEISA ENERGÍA": "SISTEMAS DE ENERGIA INTERNACIONAL S.A. De C.V."
+}
