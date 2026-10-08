@@ -42,24 +42,28 @@ const fechaCorta = (iso: string) =>
   new Date(iso).toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric" });
 
 /**
- * El flujo real de una OT es lineal, así que el siguiente estado se deduce del
- * actual. Esto solo dibuja el botón: la transición la valida el servidor con
+ * Copia del mapa de `src/lib/ot.ts`. Se duplica a propósito: ese módulo importa
+ * `getDb`, así que no puede entrar en un componente de cliente. Esto solo
+ * dibuja los botones — la transición la valida el servidor con
  * `transicionValidaOT`, igual que cualquier otra regla.
+ *
+ * Desde "Revisión" hay DOS destinos: cerrar o devolver a "En Proceso". Por eso
+ * ya no se dibuja un único botón "siguiente".
  */
-const FLUJO_ESTATUS = [
-  "",
-  "Asignado",
-  "En Proceso",
-  "En Ejecución",
-  "Revisión",
-  "Cerrado",
-] as const;
+const TRANSICIONES: Record<string, readonly string[]> = {
+  "": ["En Proceso"],
+  "En Proceso": ["Revisión"],
+  "Revisión": ["Cerrado", "En Proceso"],
+  Cerrado: [],
+};
 
-function siguienteEstatus(actual: string): string | null {
-  const i = FLUJO_ESTATUS.indexOf(actual as (typeof FLUJO_ESTATUS)[number]);
-  if (i < 0 || i === FLUJO_ESTATUS.length - 1) return null;
-  return FLUJO_ESTATUS[i + 1];
+/** Vacío si el valor guardado no está en el catálogo: la OT se queda quieta. */
+function transicionesDesde(actual: string): readonly string[] {
+  return TRANSICIONES[actual] ?? [];
 }
+
+/** Un estatus que la app no conoce: dato importado o escrito por fuera. */
+const fueraDeCatalogo = (actual: string) => !(actual in TRANSICIONES);
 
 const MAX_RESPONSABLES = 3;
 
@@ -207,9 +211,18 @@ export function OTClient({ puedeReasignar }: { puedeReasignar: boolean }) {
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="font-head text-sm font-bold text-white">{o.folio}</p>
-                    <span className="font-mono text-[9px] px-2 py-0.5 rounded-full bg-white/10 border border-white/20 text-white/60">
-                      {o.estatus}
-                    </span>
+                    {fueraDeCatalogo(o.estatus) ? (
+                      <span
+                        className="font-mono text-[9px] px-2 py-0.5 rounded-full bg-amber-400/15 border border-amber-400/30 text-amber-300"
+                        title="Estatus fuera del catálogo: la OT no se puede mover desde la app hasta corregirlo"
+                      >
+                        {o.estatus}
+                      </span>
+                    ) : (
+                      <span className="font-mono text-[9px] px-2 py-0.5 rounded-full bg-white/10 border border-white/20 text-white/60">
+                        {o.estatus || "SIN ESTATUS"}
+                      </span>
+                    )}
                     {!o.tiene_control_operativo && (
                       <span
                         className="font-mono text-[9px] px-2 py-0.5 rounded-full bg-amber-400/15 border border-amber-400/30 text-amber-300"
@@ -251,16 +264,18 @@ export function OTClient({ puedeReasignar }: { puedeReasignar: boolean }) {
                       Sin carpeta
                     </span>
                   )}
-                  {puedeReasignar && siguienteEstatus(o.estatus) && (
-                    <button
-                      onClick={() => avanzar(o.folio, siguienteEstatus(o.estatus)!)}
-                      disabled={ocupado === o.folio}
-                      className="font-mono text-[10px] text-blue-mid hover:text-white border border-blue/30 hover:border-blue/60 rounded-lg px-3 py-1.5 transition-colors disabled:opacity-40"
-                      title={`Mover a ${siguienteEstatus(o.estatus)}`}
-                    >
-                      → {siguienteEstatus(o.estatus)}
-                    </button>
-                  )}
+                  {puedeReasignar &&
+                    transicionesDesde(o.estatus).map((destino) => (
+                      <button
+                        key={destino}
+                        onClick={() => avanzar(o.folio, destino)}
+                        disabled={ocupado === o.folio}
+                        className="font-mono text-[10px] text-blue-mid hover:text-white border border-blue/30 hover:border-blue/60 rounded-lg px-3 py-1.5 transition-colors disabled:opacity-40"
+                        title={`Mover a ${destino}`}
+                      >
+                        {destino === "En Proceso" && o.estatus === "Revisión" ? "↩" : "→"} {destino}
+                      </button>
+                    ))}
                   <button onClick={() => alternar(o.folio)} className={btnGhost}>
                     {abierta === o.folio ? "Ocultar" : "Responsables"}
                   </button>

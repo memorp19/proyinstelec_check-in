@@ -50,22 +50,20 @@ export const MAX_RESPONSABLES = 3;
 // ── Estatus de la OT ──────────────────────────────────────────────────────────
 
 /**
- * Los seis estatus reales de la operación, en orden. Salieron de los datos de
- * 2026: de 93 OT, 51 están en Cerrado, 36 en "En Proceso" y 6 en "Revisión".
- * Las dos de en medio faltaban en el catálogo, así que 42 OT activas tenían un
- * estatus que el código rechazaba. La OT nace vacía.
+ * Los cuatro estatus de la operación, en orden. Salen del **Control de Órdenes
+ * de Trabajo 2026**, que es donde el equipo los lleva: PROCESO, REVISIÓN y
+ * TERMINADO (y "-" para la cotización que todavía no tiene OT). El mapeo al
+ * catálogo de la app es PROCESO → "En Proceso", REVISIÓN → "Revisión",
+ * TERMINADO → "Cerrado"; la OT nace vacía.
  *
- * Las cadenas van tal cual están en los datos, con acento en "En Ejecución" y
- * "Revisión": el valor guardado es el que se compara.
+ * "Asignado" y "En Ejecución" NO están: no los usa ninguna de las tres fuentes
+ * —ni el Control de OT, ni el de Cotizaciones, ni el de Proceso—, así que eran
+ * estados que el código ofrecía y la operación nunca escribía.
+ *
+ * Las cadenas van tal cual se guardan, con el acento de "Revisión": el valor
+ * almacenado es el que se compara.
  */
-export const ESTATUS_OT = [
-  "",
-  "Asignado",
-  "En Proceso",
-  "En Ejecución",
-  "Revisión",
-  "Cerrado",
-] as const;
+export const ESTATUS_OT = ["", "En Proceso", "Revisión", "Cerrado"] as const;
 export type EstatusOT = (typeof ESTATUS_OT)[number];
 
 export function esEstatusOT(valor: string): valor is EstatusOT {
@@ -73,24 +71,40 @@ export function esEstatusOT(valor: string): valor is EstatusOT {
 }
 
 /**
- * Transiciones permitidas. Lineal y sin vuelta atrás; no hay cancelación
- * porque no aparece en la operación real (si hiciera falta, se agrega con su
- * propia regla, no colando un valor nuevo).
+ * Transiciones permitidas.
+ *
+ * Avanza de una en una, con una vuelta atrás: de "Revisión" se puede regresar a
+ * "En Proceso". Es el retrabajo real —el cliente revisa y pide corregir— y sin
+ * él la única salida de "Revisión" sería cerrar la OT o tocar SQL.
+ *
+ * "Cerrado" es terminal: reabrir una OT cerrada no es mover un estatus, es un
+ * hecho administrativo que necesita su propia regla y su propio rastro.
  */
+export const TRANSICIONES_OT: Record<EstatusOT, readonly EstatusOT[]> = {
+  "": ["En Proceso"],
+  "En Proceso": ["Revisión"],
+  "Revisión": ["Cerrado", "En Proceso"],
+  Cerrado: [],
+};
+
+/**
+ * A dónde puede moverse una OT desde donde está.
+ *
+ * Devuelve lista vacía —no lanza— si el valor guardado está fuera del catálogo.
+ * Pasa con datos importados: la columna es `text` sin `CHECK`, así que la base
+ * acepta cualquier cosa. La OT se queda quieta y visible en vez de romper la
+ * pantalla, y el valor crudo se muestra tal cual para que se note.
+ */
+export function transicionesDesdeOT(de: string): readonly EstatusOT[] {
+  return esEstatusOT(de) ? TRANSICIONES_OT[de] : [];
+}
+
 export function transicionValidaOT(de: string, a: string): boolean {
   if (de === a) return false;
-  const mapa: Record<EstatusOT, EstatusOT[]> = {
-    "": ["Asignado"],
-    Asignado: ["En Proceso"],
-    "En Proceso": ["En Ejecución"],
-    "En Ejecución": ["Revisión"],
-    "Revisión": ["Cerrado"],
-    Cerrado: [],
-  };
   // `de` se lee de la base, así que puede traer un valor fuera del catálogo
   // (importaciones, datos viejos). Se rechaza en vez de reventar.
-  if (!esEstatusOT(de) || !esEstatusOT(a)) return false;
-  return mapa[de].includes(a);
+  if (!esEstatusOT(a)) return false;
+  return transicionesDesdeOT(de).includes(a);
 }
 
 type FilaOT = typeof ordenesTrabajo.$inferSelect;

@@ -88,36 +88,67 @@ Cambios necesarios, en orden de dependencia:
 La designación inicial que hace `generarOT` sigue siendo válida: designa al
 primero, y los otros dos se agregan después.
 
-### 2.2 El estatus de la OT tiene CUATRO valores, no siete
+### 2.2 El estatus de la OT tiene CUATRO valores, y salen del Control de OT
 
 El análisis del legacy había registrado siete valores observados
 (PROCESO / EN PROCESO / ASIGNADA / TERMINADO / CERRADO / CANCELADO / FACTURADO).
-Los reales de la operación son cuatro:
+Los reales son cuatro, y ahora se sabe de dónde vienen: del **Control de Órdenes
+de Trabajo 2026**, que es la hoja donde el equipo lleva el estatus de cada OT.
+Su catálogo tiene tres valores más el guion de "todavía no hay OT":
 
 ```
-(vacío) → Asignado → En Ejecución → Cerrado
+PROCESO · REVISIÓN · TERMINADO        ("-" = la cotización aún no tiene OT)
 ```
 
-`TERMINADO`, `FACTURADO` y `EN PROCESO` no existen.
+Con el mapeo al catálogo de la app:
 
-Hoy la OT **nace con un estatus inválido**: el esquema declara
-`.default("PROCESO")` y `createOT` escribe `estatus: "PROCESO"`. `PROCESO` es un
-estatus de *cotización* que se filtró a la tabla de OT; son dos ejes distintos
-(la cotización llega a `ASIGNADA` justo cuando nace la OT).
+| Control de OT 2026 | Estatus en la app |
+|---|---|
+| — | `""` (la OT nace vacía) |
+| `PROCESO` | `En Proceso` |
+| `REVISIÓN` | `Revisión` |
+| `TERMINADO` | `Cerrado` |
 
-Cambios: el default pasa a vacío, `createOT` deja de escribir `PROCESO`, y se
-agrega `transicionValidaOT` copiando el patrón de `transicionValida` en
-[`src/lib/cotizaciones.ts`](../apps/web/src/lib/cotizaciones.ts):
+```
+(vacío) → En Proceso → Revisión → Cerrado
+                ↑__________|
+```
+
+**Corrección de la versión anterior de esta sección.** Decía que los cuatro
+valores eran `(vacío) → Asignado → En Ejecución → Cerrado`. Eso era una lectura
+del legacy, no de la operación: **ninguna de las tres fuentes usa `Asignado` ni
+`En Ejecución`** —ni el Control de OT, ni el de Cotizaciones, ni el de Proceso—,
+así que eran dos estados que el código ofrecía y nadie escribía nunca. Salen del
+catálogo. `TERMINADO`, `FACTURADO` y `EN PROCESO` tampoco existen como valores
+guardados: `TERMINADO` es la grafía del Excel, que se mapea a `Cerrado`.
+
+`PROCESO` a secas era un estatus de *cotización* filtrado a la tabla de OT; son
+dos ejes distintos (la cotización llega a `ASIGNADA` justo cuando nace la OT).
+El default de la columna pasó a vacío y `createOT` ya no lo escribe.
+
+Transiciones, en `transicionValidaOT`, copiando el patrón de `transicionValida`
+en [`src/lib/cotizaciones.ts`](../apps/web/src/lib/cotizaciones.ts):
 
 | De | Puede pasar a |
 |---|---|
-| `""` (vacío) | `Asignado` |
-| `Asignado` | `En Ejecución` |
-| `En Ejecución` | `Cerrado` |
+| `""` (vacío) | `En Proceso` |
+| `En Proceso` | `Revisión` |
+| `Revisión` | `Cerrado`, `En Proceso` |
 | `Cerrado` | — (terminal) |
 
-La cancelación de OT no aparece en la operación real; no se inventa. Si hiciera
-falta, se agrega con su propia regla.
+El regreso `Revisión → En Proceso` es el **retrabajo**: el cliente revisa y pide
+corregir. Sin él, la única salida de `Revisión` sería cerrar la OT o tocar SQL.
+
+`Cerrado` es terminal: reabrir una OT cerrada no es mover un estatus, es un
+hecho administrativo que necesita su propia regla y su propio rastro. La
+cancelación de OT no aparece en la operación real; no se inventa.
+
+**La columna no tiene `CHECK`.** Es `text`, así que la base acepta cualquier
+cosa y una carga por SQL puede dejar un valor que la app no conoce. El código no
+lo normaliza —adivinar la intención escondería el dato malo—: `transicionesDesdeOT`
+devuelve lista vacía, la OT se queda quieta y la pantalla la marca en ámbar con
+el valor crudo a la vista. Agregar el `CHECK` queda para un PR propio, después
+de la recarga desde los Excel.
 
 ---
 
