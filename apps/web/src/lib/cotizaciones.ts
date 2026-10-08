@@ -37,7 +37,7 @@ export interface Cotizacion {
   numero: number;
   anio: number;
   version: number;
-  folio: string; // PCOTOP-NNN-AAAA[-v]
+  folio: string; // PCOTOP-002-2026 (v0) · PCOTOP-002-2026-1 (v1)
   cliente: string; // razón social
   cliente_id?: string;
   titulo: string;

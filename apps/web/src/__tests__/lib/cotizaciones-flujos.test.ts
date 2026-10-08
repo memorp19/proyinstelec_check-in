@@ -141,7 +141,10 @@ describe("enviarAlCliente", () => {
 
   it("el PDF es obligatorio", async () => {
     vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({ puede: true, cotizacion: vigente as any });
-    vi.mocked(buscarPdfCotizacion).mockResolvedValue(null);
+    vi.mocked(buscarPdfCotizacion).mockResolvedValue({
+      pdf: null,
+      nombresEnCarpeta: ["otra-cosa.pdf"],
+    });
     await expect(
       enviarAlCliente({
         numero: 1, anio: 2026, destinatarios: ["a@x.mx"],
@@ -150,10 +153,51 @@ describe("enviarAlCliente", () => {
     ).rejects.toThrow("PDF");
   });
 
+  // El mensaje es una instrucción: le dice al equipo con qué nombre generar el
+  // PDF. Si interpolara `cotizacion.folio`, las 75 filas cargadas con "-v1"
+  // harían que el sistema pidiera justo el nombre que esta rama viene a quitar.
+  it("el error pide el folio canónico, no el que está guardado en la fila", async () => {
+    const conFolioMalo = { ...vigente, version: 1, folio: "PCOTOP-001-2026-v1" };
+    vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({
+      puede: true,
+      cotizacion: conFolioMalo as any,
+    });
+    vi.mocked(buscarPdfCotizacion).mockResolvedValue({
+      pdf: null,
+      nombresEnCarpeta: ["PCOTOP-001-2026-1 Subestación.pdf"],
+    });
+
+    const enviar = enviarAlCliente({
+      numero: 1, anio: 2026, destinatarios: ["a@x.mx"],
+      remitente: { email: "maria@proyinstelec.mx", nombre: "María" },
+    });
+
+    await expect(enviar).rejects.toThrow('"PCOTOP-001-2026-1 …"');
+    await expect(enviar).rejects.not.toThrow("-v1");
+    // Y se busca por el canónico, que es lo que de verdad se llama el archivo
+    expect(vi.mocked(buscarPdfCotizacion).mock.calls[0][0].folio).toBe("PCOTOP-001-2026-1");
+  });
+
+  it("el error dice qué PDF sí había en la carpeta", async () => {
+    vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({ puede: true, cotizacion: vigente as any });
+    vi.mocked(buscarPdfCotizacion).mockResolvedValue({
+      pdf: null,
+      nombresEnCarpeta: ["PCOTOP-001-2026_Subestación.pdf"],
+    });
+
+    await expect(
+      enviarAlCliente({
+        numero: 1, anio: 2026, destinatarios: ["a@x.mx"],
+        remitente: { email: "maria@proyinstelec.mx", nombre: "María" },
+      }),
+    ).rejects.toThrow("PCOTOP-001-2026_Subestación.pdf");
+  });
+
   it("envía con PDF adjunto, CC al resto del equipo y pasa a ENVIADA", async () => {
     vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({ puede: true, cotizacion: vigente as any });
     vi.mocked(buscarPdfCotizacion).mockResolvedValue({
-      filename: "PCOTOP-001-2026.pdf", contenido: Buffer.from("pdf"),
+      pdf: { filename: "PCOTOP-001-2026.pdf", contenido: Buffer.from("pdf") },
+      nombresEnCarpeta: ["PCOTOP-001-2026.pdf"],
     });
     vi.mocked(getVigente).mockResolvedValue({ ...vigente, estatus: "ENVIADA" } as any);
     vi.mocked(cambiarEstatus).mockResolvedValue({ ...vigente, estatus: "ENVIADA" } as any);
@@ -177,7 +221,8 @@ describe("enviarAlCliente", () => {
     beforeEach(() => {
       vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({ puede: true, cotizacion: vigente as any });
       vi.mocked(buscarPdfCotizacion).mockResolvedValue({
-        filename: "PCOTOP-001-2026.pdf", contenido: Buffer.from("pdf"),
+        pdf: { filename: "PCOTOP-001-2026.pdf", contenido: Buffer.from("pdf") },
+        nombresEnCarpeta: ["PCOTOP-001-2026.pdf"],
       });
     });
 
