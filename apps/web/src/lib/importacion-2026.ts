@@ -61,9 +61,16 @@ export interface FilaCotizacion {
   prioridad: "BAJA" | "MEDIA" | "ALTA";
   estatus: string;
   elaboro: string;
-  /** Serial de Excel. Null si la celda viene vacía. */
+  /** Serial de Excel. Null si la celda viene vacía O si no es un número. */
   fechaSolicitud: number | null;
   fechaEntrega: number | null;
+  /**
+   * Lo que había escrito en las celdas de fecha, para poder distinguir "vacía"
+   * de "capturada como texto". La 136 v2 trae `19/5/0226` —año 0226, un error
+   * de dedo— y Excel nunca la convirtió en fecha porque es una cadena.
+   */
+  fechaSolicitudCruda: string;
+  fechaEntregaCruda: string;
   ordenCompra: string | null;
   folioOt: string | null;
 }
@@ -120,6 +127,8 @@ export function leerFilaCotizacion(
     elaboro: texto(celdas.K),
     fechaSolicitud: serialOpcional(celdas.L),
     fechaEntrega: serialOpcional(celdas.M),
+    fechaSolicitudCruda: texto(celdas.L),
+    fechaEntregaCruda: texto(celdas.M),
     ordenCompra: ordenCompraCruda(celdas.N),
     folioOt: texto(celdas.O) || null,
   };
@@ -508,9 +517,23 @@ export function revisarCotizacion(
     if (f.fechaSolicitud === null) {
       hallazgos.push(
         bloqueante(
-          "sin-fecha-solicitud",
+          f.fechaSolicitudCruda ? "fecha-solicitud-ilegible" : "sin-fecha-solicitud",
           `${ref} v${f.version}`,
-          "Sin fecha de solicitud, y la columna es NOT NULL; captúrala en el Excel (no se inventa)",
+          f.fechaSolicitudCruda
+            ? `La fecha de solicitud dice "${f.fechaSolicitudCruda}", capturada como texto: Excel nunca la convirtió en fecha. Corrígela en el Excel`
+            : "Sin fecha de solicitud, y la columna es NOT NULL; captúrala en el Excel (no se inventa)",
+        ),
+      );
+    }
+
+    // La de entrega sí es nullable, así que un valor ilegible se iría como NULL
+    // sin que nadie se entere. Se avisa.
+    if (f.fechaEntrega === null && f.fechaEntregaCruda) {
+      hallazgos.push(
+        aviso(
+          "fecha-entrega-ilegible",
+          `${ref} v${f.version}`,
+          `La fecha de entrega dice "${f.fechaEntregaCruda}", capturada como texto; se cargaría vacía`,
         ),
       );
     }
