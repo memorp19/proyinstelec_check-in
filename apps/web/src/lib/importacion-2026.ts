@@ -656,6 +656,141 @@ export function resolverCliente(params: {
   };
 }
 
+
+// ── Consultas de escritura ────────────────────────────────────────────────────
+
+/**
+ * Una funcion de consulta en forma de *tagged template*, como la que devuelve
+ * `neon()`.
+ *
+ * El tipo importa: `neon()` tambien se puede LLAMAR con una cadena
+ * (`sql("SELECT 1")`), y entonces trata el argumento como texto de consulta ya
+ * terminado. Si lo que se le pasa es un template literal de JavaScript, los
+ * `${...}` ya se concatenaron antes de que la libreria vea nada, y el valor
+ * viaja dentro del SQL. Un cliente llamado "GSM INDUSTRIAL" produce entonces
+ * `... VALUES (GSM INDUSTRIAL)` y Postgres responde
+ * `syntax error at or near "INDUSTRIAL"`.
+ *
+ * Declarar el parametro como tagged template obliga a escribir sql`...` en
+ * todas las escrituras, que es la forma que SI parametriza.
+ */
+export type ConsultaSql<T = unknown> = (
+  plantilla: TemplateStringsArray,
+  ...valores: unknown[]
+) => T;
+
+/** Los campos de una cotizacion tal como se escriben. */
+export interface FilaEscribible {
+  numero: number;
+  anio: number;
+  version: number;
+  folio: string;
+  cliente: string;
+  clienteId: string | null;
+  titulo: string;
+  dirigidaA: string;
+  prioridad: string;
+  estatus: string;
+  elaboro: string;
+  /** ISO 8601. La columna es NOT NULL. */
+  fechaSolicitud: string;
+  fechaEntrega: string | null;
+  ordenCompra: string | null;
+  folioOt: string | null;
+  createdBy: string;
+}
+
+export function insertarCotizacion<T>(sql: ConsultaSql<T>, f: FilaEscribible): T {
+  return sql`INSERT INTO cotizaciones
+       (numero, anio, version, folio, cliente, cliente_id, titulo, dirigida_a,
+        prioridad, estatus, elaboro, fecha_solicitud, fecha_entrega,
+        orden_compra, folio_ot, created_by)
+     VALUES (${f.numero}, ${f.anio}, ${f.version}, ${f.folio}, ${f.cliente}, ${f.clienteId},
+             ${f.titulo}, ${f.dirigidaA}, ${f.prioridad}, ${f.estatus}, ${f.elaboro},
+             ${f.fechaSolicitud}, ${f.fechaEntrega}, ${f.ordenCompra}, ${f.folioOt},
+             ${f.createdBy})`;
+}
+
+export interface OtEscribible {
+  folio: string;
+  numeroCotizacion: number;
+  anio: number;
+  version: number;
+  ordenCompra: string | null;
+  cliente: string;
+  titulo: string;
+  dirigidaA: string;
+  estatus: string;
+  createdBy: string;
+}
+
+export function insertarOT<T>(sql: ConsultaSql<T>, o: OtEscribible): T {
+  return sql`INSERT INTO ordenes_trabajo
+       (folio, numero_cotizacion, anio, version, orden_compra, cliente, titulo,
+        dirigida_a, estatus, created_by)
+     VALUES (${o.folio}, ${o.numeroCotizacion}, ${o.anio}, ${o.version}, ${o.ordenCompra},
+             ${o.cliente}, ${o.titulo}, ${o.dirigidaA}, ${o.estatus}, ${o.createdBy})`;
+}
+
+export interface ClienteEscribible {
+  id: string;
+  razonSocial: string;
+  razonNormalizada: string;
+  createdBy: string;
+}
+
+export function insertarCliente<T>(sql: ConsultaSql<T>, c: ClienteEscribible): T {
+  return sql`INSERT INTO clientes (id, razon_social, razon_normalizada, created_by)
+     VALUES (${c.id}, ${c.razonSocial}, ${c.razonNormalizada}, ${c.createdBy})
+     ON CONFLICT DO NOTHING`;
+}
+
+export interface BitacoraEscribible {
+  id: string;
+  usuario: string;
+  referencia: string;
+  detalle: string;
+}
+
+export function insertarBitacora<T>(sql: ConsultaSql<T>, b: BitacoraEscribible): T {
+  return sql`INSERT INTO bitacora (id, accion, usuario, referencia, detalle)
+     VALUES (${b.id}, 'COTIZACION_IMPORTADA', ${b.usuario}, ${b.referencia}, ${b.detalle})`;
+}
+
+/**
+ * El borrado del anio, en orden de dependencia: los responsables cuelgan de la
+ * OT. `ot_responsables` caeria por ON CASCADE, pero se borra explicitamente
+ * para que el orden quede escrito.
+ */
+export function borrarAnio<T>(sql: ConsultaSql<T>, anio: number): T[] {
+  return [
+    sql`DELETE FROM ot_responsables WHERE folio_ot IN (
+          SELECT folio FROM ordenes_trabajo WHERE anio = ${anio})`,
+    sql`DELETE FROM aprobaciones WHERE anio = ${anio}`,
+    sql`DELETE FROM ordenes_trabajo WHERE anio = ${anio}`,
+    sql`DELETE FROM bitacora WHERE referencia LIKE ${"%-" + anio}`,
+    sql`DELETE FROM cotizaciones WHERE anio = ${anio}`,
+  ];
+}
+
+export const MARCA_ENSAYO = "ENSAYO_ROLLBACK_DELIBERADO";
+
+/**
+ * Hace fallar la transaccion a proposito, para el modo de ensayo: todas las
+ * escrituras se ejecutan de verdad —y sus restricciones se comprueban— pero el
+ * lote revierte y no queda nada.
+ *
+ * Es un cast imposible y no un `RAISE EXCEPTION` dentro de un bloque `DO`
+ * porque ahi el cuerpo va entre `$$...$$`: un `$1` dentro de esas comillas no
+ * es un parametro sino texto literal, asi que la sentencia declararia cero
+ * parametros y el driver mandaria uno. Postgres incluye el valor rechazado en
+ * el mensaje (`invalid input syntax for type integer: "..."`), que es como se
+ * reconoce que el fallo fue el deliberado y no uno de verdad.
+ */
+export function abortarEnsayo<T>(sql: ConsultaSql<T>): T {
+  return sql`SELECT CAST(${MARCA_ENSAYO} AS integer)`;
+}
+
 // ── Inconsistencias que se reportan y no se resuelven ─────────────────────────
 
 /**
@@ -670,6 +805,13 @@ export function revisarCotizacion(
   anio: number,
   filas: FilaCotizacion[],
   estatusValidos: readonly string[],
+  /**
+   * Versiones que van a quedar NO ASIGNADA. Se pasan para no avisar de cosas
+   * que la carga ya resuelve: una version descartada no recibe OT, asi que
+   * "tiene OT pero no esta ASIGNADA" seria ruido sobre un dato que no se
+   * escribe. La 178 v1 es el caso.
+   */
+  descartadas: readonly number[] = [],
 ): Hallazgo[] {
   const ref = `${String(numero).padStart(3, "0")}-${anio}`;
   const hallazgos: Hallazgo[] = [];
@@ -704,8 +846,10 @@ export function revisarCotizacion(
     }
 
     // La OT nace al aceptar la cotización. Una OT en otro estatus significa que
-    // el trabajo arrancó sin que el estatus lo refleje.
-    if (f.folioOt && f.estatus !== "ASIGNADA") {
+    // el trabajo arrancó sin que el estatus lo refleje — salvo que la versión
+    // vaya a quedar descartada, en cuyo caso su OT no se escribe y no hay nada
+    // que avisar.
+    if (f.folioOt && f.estatus !== "ASIGNADA" && !descartadas.includes(f.version)) {
       hallazgos.push(
         aviso("ot-sin-asignada", `${ref} v${f.version}`, `Tiene OT ${f.folioOt} pero está en ${f.estatus}`),
       );

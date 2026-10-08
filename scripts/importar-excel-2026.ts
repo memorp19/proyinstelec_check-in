@@ -11,7 +11,8 @@
  * NO ESCRIBE NADA POR DEFECTO. Sin --aplicar solo reporta.
  *
  * Uso, desde la raíz del repositorio:
- *   pnpm importar:2026
+ *   pnpm importar:2026                                            # solo reporta
+ *   pnpm importar:2026 --ensayo  --destino=ep-xxx.neon.tech --limpiar
  *   pnpm importar:2026 --aplicar --destino=ep-xxx.neon.tech --limpiar
  *
  * Fuentes, en `importacion/` (fuera del repositorio):
@@ -23,12 +24,20 @@
  */
 import { config } from "dotenv";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { neon } from "@neondatabase/serverless";
 import { LibroExcel, texto, fechaDeSerial } from "../apps/web/src/lib/excel";
 import {
+  abortarEnsayo,
   aplicarAjustes,
+  borrarAnio,
   esFilaCargable,
+  insertarBitacora,
+  insertarCliente,
+  insertarCotizacion,
+  insertarOT,
   leerAjustes,
+  MARCA_ENSAYO,
   leerFilaCotizacion,
   mapearEstatusOT,
   normalizarRazon,
@@ -51,6 +60,13 @@ const USUARIO = "importador";
 const DETALLE_BITACORA = "carga inicial desde Control de Cotizaciones 2026";
 
 const APLICAR = process.argv.includes("--aplicar");
+/**
+ * Ejecuta la carga de verdad y revierte la transaccion al final. Sirve para
+ * probar las escrituras —tipos, restricciones, llaves— contra la base real sin
+ * dejar un solo renglon. Exige `--destino` igual que `--aplicar`: escribe,
+ * aunque despues lo deshaga.
+ */
+const ENSAYO = process.argv.includes("--ensayo");
 const LIMPIAR = process.argv.includes("--limpiar");
 const DESTINO = (process.argv.find((a) => a.startsWith("--destino=")) ?? "").split("=")[1] ?? null;
 
@@ -84,7 +100,7 @@ function verificarDestino(): void {
     process.exit(1);
   }
 
-  if (!APLICAR) return;
+  if (!APLICAR && !ENSAYO) return;
 
   if (!DESTINO) {
     console.error(
@@ -173,10 +189,8 @@ interface Cargable {
 }
 
 async function main() {
-  console.log(
-    `🔁  Recarga de ${ANIO} desde los controles en Excel` +
-      `${APLICAR ? "" : "  (REPORTE — no escribe nada)"}\n`,
-  );
+  const modo = ENSAYO ? "  (ENSAYO — escribe y revierte)" : APLICAR ? "" : "  (REPORTE — no escribe nada)";
+  console.log(`🔁  Recarga de ${ANIO} desde los controles en Excel${modo}\n`);
   verificarDestino();
 
   const filas = leerCotizaciones();
@@ -199,9 +213,9 @@ async function main() {
   );
   delete (alias as Record<string, unknown>)._comentario as never;
 
-  const catalogo = (await sql(
-    `SELECT id, razon_social, razon_normalizada FROM clientes`,
-  )) as Array<{ id: string; razon_social: string; razon_normalizada: string }>;
+  const catalogo = (await sql`
+    SELECT id, razon_social, razon_normalizada FROM clientes
+  `) as Array<{ id: string; razon_social: string; razon_normalizada: string }>;
 
   const hallazgos: Hallazgo[] = [
     ...lectura.hallazgos,
@@ -210,8 +224,14 @@ async function main() {
   ];
   const cargables: Cargable[] = [];
   const bloqueadas = new Set<number>();
-  /** Razón social → filas que la necesitan, para dar de alta una sola vez. */
+  /** Razón social normalizada → razón social, para dar de alta una sola vez. */
   const altasCliente = new Map<string, string>();
+  /**
+   * El id de cada cliente nuevo se genera aquí, no en la base. Es lo que
+   * permite escribir clientes y cotizaciones en una sola transacción: sin esto
+   * había que insertar los clientes, releer sus ids y escribir después.
+   */
+  const idsClientes = new Map<string, string>();
 
   // ── Por cotización ──────────────────────────────────────────────────────────
   const porNumero = new Map<number, FilaCotizacion[]>();
@@ -221,14 +241,21 @@ async function main() {
 
   for (const [numero, versiones] of [...porNumero].sort((a, b) => a[0] - b[0])) {
     const ref = `${String(numero).padStart(3, "0")}-${ANIO}`;
-    const propios = revisarCotizacion(numero, ANIO, versiones, ESTATUS_COTIZACION);
-    hallazgos.push(...propios);
 
+    // El descarte va primero: `revisarCotizacion` necesita saber qué versiones
+    // van a quedar NO ASIGNADA para no avisar de una OT que no se va a escribir.
     const descarte = versionesNoAsignadas(
       versiones.map((v) => ({ version: v.version, estatus: v.estatus })),
       ref,
     );
-    hallazgos.push(...descarte.hallazgos);
+    const propios = revisarCotizacion(
+      numero,
+      ANIO,
+      versiones,
+      ESTATUS_COTIZACION,
+      descarte.descartadas,
+    );
+    hallazgos.push(...propios, ...descarte.hallazgos);
 
     const propiosBloqueantes = [...propios, ...descarte.hallazgos].some(
       (h) => h.severidad === "bloqueante",
@@ -246,7 +273,11 @@ async function main() {
         alias,
       });
       hallazgos.push(...cliente.hallazgos);
-      if (cliente.altaComo) altasCliente.set(normalizarRazon(cliente.altaComo), cliente.altaComo);
+      if (cliente.altaComo) {
+        const norm = normalizarRazon(cliente.altaComo);
+        altasCliente.set(norm, cliente.altaComo);
+        if (!idsClientes.has(norm)) idsClientes.set(norm, randomUUID());
+      }
 
       const estatusFinal = descarte.descartadas.includes(v.version) ? "NO ASIGNADA" : v.estatus;
 
@@ -339,8 +370,11 @@ async function main() {
   writeFileSync(archivo, JSON.stringify(reporte, null, 2), "utf-8");
   console.log(`\n📄  Reporte completo: ${archivo}`);
 
-  if (!APLICAR) {
-    console.log("\n📋  Reporte, no se escribió nada. Con --aplicar se aplica la carga.\n");
+  if (!APLICAR && !ENSAYO) {
+    console.log(
+      "\n📋  Reporte, no se escribió nada." +
+        "\n    --ensayo escribe y revierte; --aplicar escribe de verdad.\n",
+    );
     return;
   }
 
@@ -352,8 +386,8 @@ async function main() {
     process.exit(1);
   }
 
-  await aplicar(cargables, altasCliente);
-  await verificar(cargables);
+  const escribio = await aplicar(cargables, altasCliente, idsClientes);
+  if (escribio) await verificar(cargables);
 }
 
 /** Cada ajuste aplicado, con lo que cambió y por qué. */
@@ -385,10 +419,15 @@ function imprimirHallazgos(titulo: string, lista: Hallazgo[]) {
 
 // ── Escritura ─────────────────────────────────────────────────────────────────
 
-async function aplicar(cargables: Cargable[], altas: Map<string, string>) {
-  const existentes = (await sql(
-    `SELECT count(*)::int AS n FROM cotizaciones WHERE anio = ${ANIO}`,
-  )) as Array<{ n: number }>;
+/** Devuelve true si la carga quedó escrita; false si fue un ensayo revertido. */
+async function aplicar(
+  cargables: Cargable[],
+  altas: Map<string, string>,
+  idsClientes: Map<string, string>,
+): Promise<boolean> {
+  const existentes = (await sql`
+    SELECT count(*)::int AS n FROM cotizaciones WHERE anio = ${ANIO}
+  `) as Array<{ n: number }>;
 
   if (existentes[0].n > 0 && !LIMPIAR) {
     console.error(
@@ -398,69 +437,70 @@ async function aplicar(cargables: Cargable[], altas: Map<string, string>) {
     process.exit(1);
   }
 
-  // Un solo lote: el driver HTTP de Neon no tiene transacciones interactivas,
-  // pero sí ejecuta un arreglo de sentencias como una sola transacción. Importa
-  // aquí más que en ningún otro script: entre el borrado y la carga no puede
-  // haber un instante con el año a medias.
-  const lote = [];
+  // UN SOLO lote. El driver HTTP de Neon no tiene transacciones interactivas,
+  // pero sí ejecuta un arreglo de sentencias como una sola transacción: entre
+  // el borrado y la carga no puede haber un instante con el año a medias.
+  //
+  // Antes eran dos lotes porque los ids de los clientes nuevos los generaba la
+  // base y hacían falta para ligar las filas. Generarlos aquí —`randomUUID` es
+  // lo mismo que usa el esquema por omisión— deja todo en una transacción, y
+  // de paso hace posible el modo de ensayo, que necesita revertirlo todo junto.
+  const lote: unknown[] = [];
 
-  if (LIMPIAR) {
-    // En orden de dependencia: los responsables cuelgan de la OT, y la OT de
-    // la cotización. `ot_responsables` cae por ON DELETE CASCADE, pero se
-    // borra explícitamente para que el orden quede escrito.
+  if (LIMPIAR) lote.push(...borrarAnio(sql, ANIO));
+
+  for (const [norm, razonSocial] of altas) {
     lote.push(
-      sql(`DELETE FROM ot_responsables WHERE folio_ot IN (
-             SELECT folio FROM ordenes_trabajo WHERE anio = ${ANIO})`),
-      sql(`DELETE FROM aprobaciones WHERE anio = ${ANIO}`),
-      sql(`DELETE FROM ordenes_trabajo WHERE anio = ${ANIO}`),
-      sql(`DELETE FROM bitacora WHERE referencia LIKE '%-${ANIO}'`),
-      sql(`DELETE FROM cotizaciones WHERE anio = ${ANIO}`),
+      insertarCliente(sql, {
+        id: idsClientes.get(norm)!,
+        razonSocial,
+        razonNormalizada: norm,
+        createdBy: USUARIO,
+      }),
     );
   }
 
-  for (const razon of altas.values()) {
-    lote.push(
-      sql(`INSERT INTO clientes (id, razon_social, razon_normalizada, created_by)
-           VALUES (gen_random_uuid()::text, ${razon}, ${normalizarRazon(razon)}, ${USUARIO})
-           ON CONFLICT DO NOTHING`),
-    );
-  }
-
-  console.log(`\n✍️   Escribiendo ${cargables.length} versiones…`);
-  await sql.transaction(lote);
-
-  // Los ids de los clientes recién creados hacen falta para ligar las filas.
-  const catalogo = (await sql(`SELECT id, razon_normalizada FROM clientes`)) as Array<{
-    id: string;
-    razon_normalizada: string;
-  }>;
-  const porNorm = new Map(catalogo.map((c) => [normalizarRazon(c.razon_normalizada), c.id]));
-
-  const segundo = [];
   for (const c of cargables) {
     const v = c.cotizacion;
     const clienteId =
-      c.clienteId ?? (c.altaCliente ? (porNorm.get(normalizarRazon(c.altaCliente)) ?? null) : null);
+      c.clienteId ??
+      (c.altaCliente ? (idsClientes.get(normalizarRazon(c.altaCliente)) ?? null) : null);
 
-    segundo.push(
-      sql(`INSERT INTO cotizaciones
-             (numero, anio, version, folio, cliente, cliente_id, titulo, dirigida_a,
-              prioridad, estatus, elaboro, fecha_solicitud, fecha_entrega,
-              orden_compra, folio_ot, created_by)
-           VALUES (${v.numero}, ${v.anio}, ${v.version}, ${v.folio}, ${v.cliente}, ${clienteId},
-                   ${v.titulo}, ${v.dirigidaA}, ${v.prioridad}, ${c.estatusFinal}, ${v.elaboro},
-                   ${fechaDeSerial(v.fechaSolicitud!).toISOString()},
-                   ${v.fechaEntrega === null ? null : fechaDeSerial(v.fechaEntrega).toISOString()},
-                   ${v.ordenCompra}, ${c.ot?.folio ?? null}, ${USUARIO})`),
+    lote.push(
+      insertarCotizacion(sql, {
+        numero: v.numero,
+        anio: v.anio,
+        version: v.version,
+        folio: v.folio,
+        cliente: v.cliente,
+        clienteId,
+        titulo: v.titulo,
+        dirigidaA: v.dirigidaA,
+        prioridad: v.prioridad,
+        estatus: c.estatusFinal,
+        elaboro: v.elaboro,
+        fechaSolicitud: fechaDeSerial(v.fechaSolicitud!).toISOString(),
+        fechaEntrega: v.fechaEntrega === null ? null : fechaDeSerial(v.fechaEntrega).toISOString(),
+        ordenCompra: v.ordenCompra,
+        folioOt: c.ot?.folio ?? null,
+        createdBy: USUARIO,
+      }),
     );
 
     if (c.ot) {
-      segundo.push(
-        sql(`INSERT INTO ordenes_trabajo
-               (folio, numero_cotizacion, anio, version, orden_compra, cliente, titulo,
-                dirigida_a, estatus, created_by)
-             VALUES (${c.ot.folio}, ${v.numero}, ${v.anio}, ${v.version}, ${v.ordenCompra},
-                     ${v.cliente}, ${v.titulo}, ${v.dirigidaA}, ${c.ot.estatus}, ${USUARIO})`),
+      lote.push(
+        insertarOT(sql, {
+          folio: c.ot.folio,
+          numeroCotizacion: v.numero,
+          anio: v.anio,
+          version: v.version,
+          ordenCompra: v.ordenCompra,
+          cliente: v.cliente,
+          titulo: v.titulo,
+          dirigidaA: v.dirigidaA,
+          estatus: c.ot.estatus,
+          createdBy: USUARIO,
+        }),
       );
     }
   }
@@ -468,15 +508,41 @@ async function aplicar(cargables: Cargable[], altas: Map<string, string>) {
   // Una entrada por cotización, no por versión: lo que pasó es una carga, no
   // un cambio de estatus por fila.
   for (const numero of new Set(cargables.map((c) => c.cotizacion.numero))) {
-    segundo.push(
-      sql(`INSERT INTO bitacora (id, accion, usuario, referencia, detalle)
-           VALUES (gen_random_uuid()::text, 'COTIZACION_IMPORTADA', ${USUARIO},
-                   ${`${String(numero).padStart(3, "0")}-${ANIO}`}, ${DETALLE_BITACORA})`),
+    lote.push(
+      insertarBitacora(sql, {
+        id: randomUUID(),
+        usuario: USUARIO,
+        referencia: `${String(numero).padStart(3, "0")}-${ANIO}`,
+        detalle: DETALLE_BITACORA,
+      }),
     );
   }
 
-  await sql.transaction(segundo);
+  if (ENSAYO) {
+    // Todo lo de arriba se ejecuta de verdad —y sus restricciones se
+    // comprueban— y esto revienta el lote al final, así que no queda nada.
+    lote.push(abortarEnsayo(sql));
+    console.log(`\n🧪  Ensayo: escribiendo ${cargables.length} versiones y revirtiendo…`);
+  } else {
+    console.log(`\n✍️   Escribiendo ${cargables.length} versiones…`);
+  }
+
+  try {
+    await sql.transaction(lote as Parameters<typeof sql.transaction>[0]);
+  } catch (err) {
+    const mensaje = err instanceof Error ? err.message : String(err);
+    if (ENSAYO && mensaje.includes(MARCA_ENSAYO)) {
+      console.log(
+        `✅  Ensayo correcto: las ${lote.length - 1} sentencias se ejecutaron sin error y la\n` +
+          "    transacción se revirtió. No quedó nada escrito.\n",
+      );
+      return false;
+    }
+    throw err;
+  }
+
   console.log("✅  Carga aplicada.\n");
+  return true;
 }
 
 // ── Verificación contra los Excel ─────────────────────────────────────────────
@@ -484,10 +550,10 @@ async function aplicar(cargables: Cargable[], altas: Map<string, string>) {
 async function verificar(cargables: Cargable[]) {
   console.log("🔎  Verificando contra los Excel, versión por versión…");
 
-  const enBase = (await sql(
-    `SELECT numero, version, folio, estatus, orden_compra, folio_ot
-       FROM cotizaciones WHERE anio = ${ANIO}`,
-  )) as Array<{
+  const enBase = (await sql`
+    SELECT numero, version, folio, estatus, orden_compra, folio_ot
+      FROM cotizaciones WHERE anio = ${ANIO}
+  `) as Array<{
     numero: number;
     version: number;
     folio: string;

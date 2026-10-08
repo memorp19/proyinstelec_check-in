@@ -37,9 +37,20 @@ el correcto, se usa el correcto.
 # 1. Reporte. No escribe nada, no necesita --destino.
 pnpm importar:2026
 
-# 2. Carga, cuando el reporte sale sin bloqueantes.
+# 2. Ensayo: ejecuta TODAS las escrituras contra la base real y revierte la
+#    transaccion al final. Comprueba tipos, restricciones y llaves sin dejar
+#    un solo renglon. Exige --destino, porque escribe aunque luego lo deshaga.
+pnpm importar:2026 --ensayo --destino=ep-xxxx.neon.tech --limpiar
+
+# 3. Carga de verdad, cuando el ensayo sale limpio.
 pnpm importar:2026 --aplicar --destino=ep-xxxx.neon.tech --limpiar
 ```
+
+El ensayo existe porque hay fallos que solo aparecen contra Postgres. La
+primera carga real murio con `syntax error at or near "INDUSTRIAL"`: un nombre
+de cliente se estaba interpolando dentro del SQL en vez de viajar como
+parametro. Correr el ensayo antes de aplicar cuesta un minuto y encuentra esa
+clase de problema sin dejar la base a medias.
 
 **`--destino` es obligatorio para escribir y tiene que ser idéntico al host que
 el script imprime.** `DATABASE_URL` apunta a lo que tenga el `.env.local` de
