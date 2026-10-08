@@ -39,7 +39,8 @@ export async function GET(_req: Request, { params }: { params: { folio: string }
 }
 
 /**
- * Mueve el estatus de la OT: "" → Asignado → En Ejecución → Cerrado.
+ * Mueve el estatus de la OT:
+ * "" → Asignado → En Proceso → En Ejecución → Revisión → Cerrado.
  *
  * Bajo `ot.reasignar` por el mismo motivo que los responsables: avanzar una OT
  * es una decisión de operación, no del alta comercial.

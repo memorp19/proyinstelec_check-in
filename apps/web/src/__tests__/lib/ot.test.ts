@@ -15,6 +15,9 @@ import {
   responsablesActivosPorFolio,
   setCarpetaDriveOT,
   transicionValidaOT,
+  transicionesDesdeOT,
+  esEstatusOT,
+  ESTATUS_OT,
   cambiarEstatusOT,
   MAX_RESPONSABLES,
 } from "@/src/lib/ot";
@@ -346,46 +349,130 @@ describe("desactivarResponsable", () => {
 });
 
 describe("transicionValidaOT", () => {
-  it("flujo real: (vacío) → Asignado → En Ejecución → Cerrado", () => {
-    expect(transicionValidaOT("", "Asignado")).toBe(true);
-    expect(transicionValidaOT("Asignado", "En Ejecución")).toBe(true);
-    expect(transicionValidaOT("En Ejecución", "Cerrado")).toBe(true);
+  // El catálogo sale del Control de Órdenes de Trabajo 2026, que es donde el
+  // equipo lleva el estatus: PROCESO / REVISIÓN / TERMINADO. "Asignado" y
+  // "En Ejecución" no los usa ninguna fuente, así que salieron del catálogo.
+  it("recorre la cadena: '' → En Proceso → Revisión → Cerrado", () => {
+    expect(transicionValidaOT("", "En Proceso")).toBe(true);
+    expect(transicionValidaOT("En Proceso", "Revisión")).toBe(true);
+    expect(transicionValidaOT("Revisión", "Cerrado")).toBe(true);
   });
 
-  it("no se salta pasos ni vuelve atrás", () => {
-    expect(transicionValidaOT("", "En Ejecución")).toBe(false);
+  // El retrabajo real: el cliente revisa y pide corregir. Sin esta vuelta, la
+  // única salida de "Revisión" sería cerrar la OT o tocar SQL.
+  it("de Revisión se puede regresar a En Proceso", () => {
+    expect(transicionValidaOT("Revisión", "En Proceso")).toBe(true);
+  });
+
+  it("'Asignado' y 'En Ejecución' ya no son estatus", () => {
+    expect(esEstatusOT("Asignado")).toBe(false);
+    expect(esEstatusOT("En Ejecución")).toBe(false);
+    expect(transicionValidaOT("", "Asignado")).toBe(false);
+    expect(transicionValidaOT("En Proceso", "En Ejecución")).toBe(false);
+  });
+
+  // Las cadenas van con acento tal como están guardadas; sin él no son el
+  // mismo valor y la OT quedaría fuera del catálogo.
+  it("exige el acento de 'Revisión'", () => {
+    expect(esEstatusOT("Revision")).toBe(false);
+    expect(transicionValidaOT("En Proceso", "Revision")).toBe(false);
+    expect(transicionValidaOT("Revision", "Cerrado")).toBe(false);
+  });
+
+  it("no se salta pasos", () => {
+    expect(transicionValidaOT("", "Revisión")).toBe(false);
     expect(transicionValidaOT("", "Cerrado")).toBe(false);
-    expect(transicionValidaOT("En Ejecución", "Asignado")).toBe(false);
-    expect(transicionValidaOT("Cerrado", "En Ejecución")).toBe(false);
+    expect(transicionValidaOT("En Proceso", "Cerrado")).toBe(false);
   });
 
-  it("Cerrado es terminal y no hay cancelación", () => {
-    expect(transicionValidaOT("Cerrado", "")).toBe(false);
-    expect(transicionValidaOT("Asignado", "CANCELADO")).toBe(false);
+  it("no se regresa más de un paso", () => {
+    expect(transicionValidaOT("En Proceso", "")).toBe(false);
+    expect(transicionValidaOT("Revisión", "")).toBe(false);
+  });
+
+  it("Cerrado es terminal: no sale hacia ningún estatus del catálogo", () => {
+    for (const destino of ESTATUS_OT) {
+      expect(transicionValidaOT("Cerrado", destino)).toBe(false);
+    }
+    expect(transicionValidaOT("Cerrado", "CANCELADO")).toBe(false);
   });
 
   it("no hay transición a sí mismo", () => {
-    expect(transicionValidaOT("Asignado", "Asignado")).toBe(false);
+    for (const e of ESTATUS_OT) {
+      expect(transicionValidaOT(e, e)).toBe(false);
+    }
+  });
+});
+
+// La columna `estatus` es `text` sin CHECK, así que la base acepta cualquier
+// cosa: una carga por SQL o un dato viejo pueden dejar un valor que la app no
+// conoce. El requisito no es aceptarlo, es NO ROMPERSE con él.
+describe("un estatus guardado fuera del catálogo", () => {
+  const AJENOS = ["EN PROCESO", "PROCESO", "TERMINADO", "En Ejecución", "Asignado", "FACTURADO"];
+
+  it("no se reconoce como estatus", () => {
+    for (const v of AJENOS) expect(esEstatusOT(v)).toBe(false);
   });
 
-  // Los estatus del legacy que no existen en la operación real. Se rechazan
-  // en vez de reventar: la base puede traerlos de datos viejos o importados.
-  it("rechaza los estatus que no existen, sin lanzar", () => {
-    expect(transicionValidaOT("PROCESO", "Asignado")).toBe(false);
-    expect(transicionValidaOT("Asignado", "TERMINADO")).toBe(false);
-    expect(transicionValidaOT("FACTURADO", "Cerrado")).toBe(false);
+  it("no ofrece ninguna transición, y no lanza", () => {
+    for (const v of AJENOS) {
+      expect(() => transicionesDesdeOT(v)).not.toThrow();
+      expect(transicionesDesdeOT(v)).toEqual([]);
+    }
+  });
+
+  it("no se puede salir de él ni entrar en él", () => {
+    for (const v of AJENOS) {
+      expect(transicionValidaOT(v, "En Proceso")).toBe(false);
+      expect(transicionValidaOT(v, "Cerrado")).toBe(false);
+      expect(transicionValidaOT("En Proceso", v)).toBe(false);
+      expect(transicionValidaOT("", v)).toBe(false);
+    }
+  });
+
+  // "EN PROCESO" y "En Proceso" solo se diferencian por mayúsculas, y es el
+  // error de captura más probable al cargar por SQL. No se normaliza a
+  // propósito: adivinar la intención escondería el dato malo.
+  it("no se normalizan mayúsculas ni acentos", () => {
+    expect(transicionValidaOT("EN PROCESO", "Revisión")).toBe(false);
+    expect(transicionValidaOT("en proceso", "Revisión")).toBe(false);
+    expect(transicionValidaOT("REVISION", "Cerrado")).toBe(false);
+  });
+});
+
+describe("transicionesDesdeOT", () => {
+  it("desde Revisión ofrece cerrar y devolver, en ese orden", () => {
+    expect(transicionesDesdeOT("Revisión")).toEqual(["Cerrado", "En Proceso"]);
+  });
+
+  it("los demás estatus ofrecen un solo destino", () => {
+    expect(transicionesDesdeOT("")).toEqual(["En Proceso"]);
+    expect(transicionesDesdeOT("En Proceso")).toEqual(["Revisión"]);
+  });
+
+  it("Cerrado no ofrece ninguno", () => {
+    expect(transicionesDesdeOT("Cerrado")).toEqual([]);
+  });
+
+  // Lo que dibuja la UI tiene que ser exactamente lo que el servidor acepta.
+  it("todo lo que ofrece es una transición válida", () => {
+    for (const de of ESTATUS_OT) {
+      for (const a of transicionesDesdeOT(de)) {
+        expect(transicionValidaOT(de, a)).toBe(true);
+      }
+    }
   });
 });
 
 describe("cambiarEstatusOT", () => {
   it("avanza y sella updated_at", async () => {
-    const db = usarDb([[filaOT({ estatus: "" })], [filaOT({ estatus: "Asignado" })]]);
+    const db = usarDb([[filaOT({ estatus: "" })], [filaOT({ estatus: "En Proceso" })]]);
 
-    const ot = await cambiarEstatusOT("OT001260", "Asignado");
+    const ot = await cambiarEstatusOT("OT001260", "En Proceso");
 
-    expect(ot.estatus).toBe("Asignado");
+    expect(ot.estatus).toBe("En Proceso");
     const set = db.llamadas.find((l) => l.metodo === "set")!.args[0] as Record<string, unknown>;
-    expect(set.estatus).toBe("Asignado");
+    expect(set.estatus).toBe("En Proceso");
     expect(set.updatedAt).toBeInstanceOf(Date);
   });
 
@@ -398,7 +485,7 @@ describe("cambiarEstatusOT", () => {
 
   it("avisa si la OT no existe", async () => {
     usarDb([[]]);
-    await expect(cambiarEstatusOT("OT999260", "Asignado")).rejects.toThrow("no existe");
+    await expect(cambiarEstatusOT("OT999260", "En Proceso")).rejects.toThrow("no existe");
   });
 
   // El WHERE incluye el estatus leído: si alguien lo movió entre la validación
@@ -406,7 +493,7 @@ describe("cambiarEstatusOT", () => {
   it("si alguien se adelantó, no pisa el cambio ajeno", async () => {
     usarDb([[filaOT({ estatus: "" })], []]);
 
-    await expect(cambiarEstatusOT("OT001260", "Asignado")).rejects.toThrow(
+    await expect(cambiarEstatusOT("OT001260", "En Proceso")).rejects.toThrow(
       "cambió mientras se guardaba",
     );
   });
