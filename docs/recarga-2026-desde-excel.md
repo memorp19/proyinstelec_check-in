@@ -106,21 +106,55 @@ pasó es una carga, no un cambio de estatus fila por fila.
 
 ---
 
-## 4. Qué corregir en los Excel antes de cargar
+## 4. Lo que se corrige en el Excel y lo que se ajusta aquí
 
-El reporte tiene que salir **sin bloqueantes**. Los conocidos:
+La línea está en quién tiene la razón.
 
-| Caso | Qué pasa | Qué hacer |
-|---|---|---|
-| **002** | v0 sin fecha de solicitud | Capturarla. La versión aceptada es la **v1** (OC 9140, OT002261) |
-| **136 v2** | Fecha `19/5/0226`, año mal y escrita como texto | Corregirla como fecha |
-| **241** | Dos filas con versión 0 (una ENVIADA, otra ASIGNADA) | La asignada es la **v1**, OT241261 |
-| **225 / 226** | Las dos reclaman `OT226260` | La 225 es `OT225260` |
+**Un error de captura se corrige en el Excel**, donde lo ve quien lo mantiene.
+El reporte tiene que salir **sin bloqueantes**, y esos bloqueantes son errores:
+una fecha escrita como texto, dos filas con la misma versión, dos cotizaciones
+reclamando el mismo folio de OT. Si el importador los "arreglara", el Excel
+seguiría mal y la próxima carga volvería a tropezar.
 
-Avisos que no detienen la carga pero conviene revisar: la **061** (Cotizaciones
-dice `OT061260`, el Control de OT `OT061250`), la **178** (v1 y v2 comparten
-`OT178261`), y la **255 v0**, cuya fecha de entrega dice `10/0972026` y se
-cargaría vacía.
+**`scripts/ajustes-importacion-2026.json` es para lo contrario**: filas donde el
+Excel dice la verdad para su propio uso y aun así el ERP necesita otra cosa. Se
+lee después de los Excel y antes de que ninguna regla mire las filas.
+
+Cada entrada identifica la fila con `cotizacion`, `anio` y `version`, cambia
+solo los campos que nombra (`estatus`, `ordenCompra`, `folioOt`) y lleva un
+`motivo` **obligatorio** — es lo que se revisa en el PR; sin él esto sería una
+lista de excepciones sin dueño.
+
+Las cuatro entradas actuales son de dos clases:
+
+- **224, 232 y 254** pasan a `ASIGNADA` sin OC. El trabajo se ejecutó y la orden
+  de compra del cliente no ha llegado; en el control siguen en `ENVIADA` hasta
+  que llegue. No es un error del Excel: para el control comercial es correcto.
+- **La 178 v2** pasa a `ASIGNADA` con `OT178262`. Los controles conservan
+  `OT178261` —el folio de la v1, con el que ya se emitió el reporte
+  `PREPOP-OT178261`— así que el ajuste declara esa **equivalencia** con
+  `equivalenciaOt`. Sin ella, la validación cruzada vería una discrepancia y el
+  estatus de la OT se perdería, porque el Control de OT no tiene fila para la
+  v2. La v0 y la v1 quedan `NO ASIGNADA` por la regla normal.
+
+Un ajuste que apunta a una fila inexistente, o que ya no cambia nada, **avisa y
+no se aplica**: quiere decir que el Excel ya se corrigió y la entrada sobra. No
+bloquea —la carga no se detiene por una excepción que dejó de hacer falta— pero
+el archivo tampoco acumula entradas muertas en silencio. Aplicar dos veces el
+mismo archivo da el mismo resultado.
+
+### "ASIGNADA sin orden de compra" no es un problema
+
+Son 22 cotizaciones con el trabajo ejecutado y la OC pendiente del cliente. El
+reporte las enumera bajo **Informativo**, separadas de los avisos, para que no
+hagan ruido sobre lo que sí hay que mirar.
+
+**Ojo con lo que viene después:** hoy la app **no** permite capturar esa OC más
+tarde. `generarOT` exige que el estatus sea `ENVIADA`
+([`cotizaciones-flujos.ts`](../apps/web/src/lib/cotizaciones-flujos.ts)), y el
+botón "Ingresar OC" solo se dibuja para cotizaciones en `ENVIADA` sin OT. Una
+vez cargadas como `ASIGNADA`, esas 22 quedan sin vía para registrar su OC desde
+la aplicación. Está pendiente de decidir.
 
 ---
 
