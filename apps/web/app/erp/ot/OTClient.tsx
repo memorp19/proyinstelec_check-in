@@ -225,14 +225,10 @@ export function OTClient({ puedeReasignar }: { puedeReasignar: boolean }) {
                         {o.estatus || "SIN ESTATUS"}
                       </span>
                     )}
-                    {!o.tiene_control_operativo && (
-                      <span
-                        className="font-mono text-[9px] px-2 py-0.5 rounded-full bg-amber/15 border border-amber/30 text-amber"
-                        title="Toda OT debe tener control operativo (llega en la Fase 2)"
-                      >
-                        SIN CONTROL OPERATIVO
-                      </span>
-                    )}
+                    {/* No hay etiqueta de "sin control operativo": cada OT tiene el
+                        suyo y nace con él, así que no es un estado que la tarjeta
+                        deba señalar. La columna `tiene_control_operativo` sigue en
+                        la tabla y se resuelve en la Fase 2 (ver §7.1 del plan). */}
                   </div>
                   <p className="font-mono text-xs text-white/60 mt-1 truncate">
                     {o.cliente} · {o.titulo}

@@ -344,40 +344,81 @@ subcarpetas (1 nivel) y crear subcarpeta idempotente. Hoy solo tiene
 
 ## 7. Operaciones que necesitan cuidado (regla 2: sin transacciones)
 
-### 7.1 El control operativo nace con la OT
+### 7.1 El control operativo nace con la OT — ninguna OT existe sin él
 
-**El control operativo se crea automáticamente al dar de alta la OC, dentro de la
-carpeta de la OT. No es un acto explícito del usuario.** Las dos vías se
-comportan igual: la que recibe orden de compra y la que no. Como ambas comparten
-el núcleo `generarOT` de `src/lib/cotizaciones-flujos.ts`, el control se crea en
-un solo lugar y las dos vías lo heredan sin duplicar lógica.
+**Regla de negocio: cada OT tiene su control operativo, y se crea en el mismo
+momento que la OT.** No es un acto explícito del usuario, no es opcional y no
+hay un estado intermedio de "OT sin control". Si existe la OT, existe su
+control.
 
-Esto simplifica el flujo normal en lugar de complicarlo: `tiene_control_operativo`,
-`control_creado_por` y `control_creado_at` se escriben **en el mismo `INSERT` de
-`createOT`** que da de alta la OT. No hace falta un `UPDATE` extra ni una ruta
-aparte, y no se agrega ningún paso que pueda fallar a medias.
+Las dos vías de alta se comportan igual —la que recibe orden de compra y la que
+no— porque ambas comparten el núcleo `generarOT` de
+`src/lib/cotizaciones-flujos.ts`. El control se crea en un solo lugar y las dos
+lo heredan sin duplicar lógica.
 
-El único paso adicional es insertar el `PD-001` automático. Si ese insert falla,
-la OT queda marcada con control y sin primer pendiente — una inconsistencia que
-el detector de excepciones del panel (§8) muestra, y que la ruta de excepción
-(§7.2) repara.
+**Se crea en la misma transacción que la OT**, no en un paso posterior. El
+driver HTTP de Neon no tiene transacciones interactivas, así que el alta pasa a
+ser un lote: el `INSERT` de `ordenes_trabajo`, el del control y el del `PD-001`
+automático viajan juntos y entran o no entran los tres. Es lo que convierte la
+regla en una garantía en vez de una intención: sin lote, un fallo entre el
+primer insert y el segundo dejaría exactamente la OT sin control que la regla
+prohíbe.
+
+#### Las OT que ya existen
+
+Una **migración con backfill** crea el control de todas las OT anteriores, **las
+93 importadas de 2026 incluidas**. Va en la misma migración que crea la tabla,
+para que no haya ni un despliegue en el que la regla sea falsa:
+
+```sql
+INSERT INTO control_operativo (folio_ot, creado_por, creado_at)
+SELECT folio, 'migracion', created_at FROM ordenes_trabajo
+ON CONFLICT (folio_ot) DO NOTHING;
+```
+
+`creado_at` toma el `created_at` de su OT y no `now()`: el control nació con la
+OT, y fecharlo el día de la migración diría que todos los controles se crearon
+el mismo día.
+
+#### `tiene_control_operativo` queda redundante
+
+Hoy la columna es `boolean NOT NULL DEFAULT false` y **nada en el código le
+escribe `true` nunca** — ni una ruta, ni un script. Con la regla de arriba
+cumplida, su respuesta es siempre la misma: toda OT tiene control.
+
+En esta fase se resuelve de una de las dos formas, y es decisión al implementar:
+
+- **Eliminarla**, si el control vive en su propia tabla con `folio_ot` único: la
+  pregunta la responde la existencia de la fila.
+- **Derivarla**, como columna generada o como vista, si conviene conservar el
+  nombre para no tocar los lectores.
+
+Lo que no se queda es una columna que afirma algo que nadie mantiene. Mientras
+tanto, la pantalla de OT **no muestra ninguna etiqueta** de "sin control
+operativo": señalaba una carencia en el 100% de las filas, y lo que faltaba era
+la funcionalidad, no el dato.
 
 ### 7.2 Ruta de excepción: OT sin control
 
 `POST /api/erp/ot/[folio]/control` con el permiso `control.operativo.crear` deja
-de ser parte del flujo normal y queda solo para los casos de excepción: OT
-importadas del sistema viejo y OT que por alguna razón quedaron sin control.
-Tiene que ser idempotente:
+de ser parte del flujo normal. Con §7.1 cumplida —alta en el mismo lote y
+backfill de las existentes— no debería hacer falta nunca: queda como reparación
+para el caso en que un control se pierda por una intervención manual en la base.
+
+Tiene que ser idempotente, en una sola sentencia:
 
 ```sql
-UPDATE ordenes_trabajo
-   SET tiene_control_operativo = true, control_creado_por = $2, control_creado_at = now()
- WHERE folio = $1 AND tiene_control_operativo = false
-RETURNING folio
+INSERT INTO control_operativo (folio_ot, creado_por, creado_at)
+VALUES ($1, $2, now())
+ON CONFLICT (folio_ot) DO NOTHING
+RETURNING folio_ot
 ```
 
 Cero filas devueltas = ya tenía control, así que se devuelve el existente sin
 duplicar (regla del legacy) y sin leer-luego-escribir.
+
+Que esta ruta se use es, en sí, una señal: significa que algo rompió la regla de
+§7.1. El detector de excepciones del panel (§8) es el que debe encontrarlo.
 
 ### 7.3 Reprogramar un servicio
 
