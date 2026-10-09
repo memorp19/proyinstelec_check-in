@@ -46,3 +46,7 @@ _to_delete_snapshots/
 
 # Claude Code: preferencias personales, no del equipo
 .claude/settings.local.json
+
+# Importación — los Excel de control traen datos reales de clientes,
+# montos y folios. Se copian a mano y NUNCA se versionan.
+importacion/
