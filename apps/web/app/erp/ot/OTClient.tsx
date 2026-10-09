@@ -169,8 +169,10 @@ export function OTClient({ puedeReasignar }: { puedeReasignar: boolean }) {
       <p className="font-mono text-[10px] text-white/40 uppercase tracking-widest mb-1">ERP · OT</p>
       <h1 className="font-head text-2xl font-bold mb-1">Órdenes de Trabajo</h1>
       <p className="text-white/50 text-sm mb-5">
-        Las OT se generan al ingresar la orden de compra de una cotización enviada. El control
-        operativo y los documentos llegan más adelante en la Fase 2.
+        Las OT se generan al registrar la orden de compra de una cotización enviada, o con
+        &ldquo;Generar OT sin OC&rdquo; cuando el cliente autoriza el trabajo antes de emitirla —
+        en ese caso la OC se registra después, desde la cotización. Cada OT tendrá su control
+        operativo, creado junto con ella; los documentos llegan en la Fase 2.
       </p>
 
       <div className="flex items-center gap-2 mb-4">
@@ -207,13 +209,15 @@ export function OTClient({ puedeReasignar }: { puedeReasignar: boolean }) {
         ) : (
           ordenes.map((o) => (
             <div key={o.folio} className="bg-white/10 border border-white/10 rounded-xl px-4 py-4">
-              <div className="flex items-start justify-between gap-3 flex-wrap">
-                <div className="min-w-0">
+              {/* Misma razón que en la tarjeta de cotización: sin envolver y con la
+                  columna de texto en flex-1, los botones no se mueven de sitio. */}
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="font-head text-sm font-bold text-white">{o.folio}</p>
                     {fueraDeCatalogo(o.estatus) ? (
                       <span
-                        className="font-mono text-[9px] px-2 py-0.5 rounded-full bg-amber-400/15 border border-amber-400/30 text-amber-300"
+                        className="font-mono text-[9px] px-2 py-0.5 rounded-full bg-amber/15 border border-amber/30 text-amber"
                         title="Estatus fuera del catálogo: la OT no se puede mover desde la app hasta corregirlo"
                       >
                         {o.estatus}
@@ -223,20 +227,20 @@ export function OTClient({ puedeReasignar }: { puedeReasignar: boolean }) {
                         {o.estatus || "SIN ESTATUS"}
                       </span>
                     )}
-                    {!o.tiene_control_operativo && (
-                      <span
-                        className="font-mono text-[9px] px-2 py-0.5 rounded-full bg-amber-400/15 border border-amber-400/30 text-amber-300"
-                        title="Toda OT debe tener control operativo (llega en la Fase 2)"
-                      >
-                        SIN CONTROL OPERATIVO
-                      </span>
-                    )}
+                    {/* No hay etiqueta de "sin control operativo": cada OT tiene el
+                        suyo y nace con él, así que no es un estado que la tarjeta
+                        deba señalar. La columna `tiene_control_operativo` sigue en
+                        la tabla y se resuelve en la Fase 2 (ver §7.1 del plan). */}
                   </div>
                   <p className="font-mono text-xs text-white/60 mt-1 truncate">
                     {o.cliente} · {o.titulo}
                   </p>
                   <p className="font-mono text-[10px] text-white/35 mt-1">
-                    OC: {o.orden_compra} · Origen: {folioCotizacion(o)} · {fechaCorta(o.created_at)}
+                    {/* Sin OC no se deja el hueco: el trabajo se ejecuta y la orden
+                        del cliente llega después, así que es un estado, no un dato
+                        que falte. Mismo criterio que la etiqueta SIN OC. */}
+                    OC: {o.orden_compra || "pendiente"} · Origen: {folioCotizacion(o)} ·{" "}
+                    {fechaCorta(o.created_at)}
                   </p>
                   <p className="font-mono text-[10px] text-white/35 mt-1">
                     {o.responsables.length === 1 ? "Responsable: " : "Responsables: "}
@@ -258,7 +262,7 @@ export function OTClient({ puedeReasignar }: { puedeReasignar: boolean }) {
                     </a>
                   ) : (
                     <span
-                      className="font-mono text-[10px] text-amber-300/70 border border-amber-400/20 rounded-lg px-3 py-1.5"
+                      className="font-mono text-[10px] text-amber/70 border border-amber/20 rounded-lg px-3 py-1.5"
                       title="Revisa ERP_OT_FOLDER_ID y vuelve a generar la carpeta"
                     >
                       Sin carpeta

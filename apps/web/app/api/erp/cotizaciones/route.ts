@@ -39,6 +39,7 @@ export async function GET(req: NextRequest) {
       mesEntrega: q.get("mesEntrega") ? parseInt(q.get("mesEntrega")!, 10) : undefined,
       ot: q.get("ot") ?? undefined,
       oc: q.get("oc") ?? undefined,
+      sinOc: q.get("sinOc") === "1",
     });
     return NextResponse.json({ cotizaciones: resultados });
   } catch (err) {

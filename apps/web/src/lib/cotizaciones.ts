@@ -301,6 +301,12 @@ export interface FiltrosCotizacion {
   mesEntrega?: number; // 1-12, sobre fecha_entrega
   ot?: string; // contains
   oc?: string; // contains
+  /**
+   * Solo las ASIGNADA que todavía no tienen orden de compra. Es la cola de
+   * trabajo de quien persigue las OC: el trabajo se ejecutó y falta el número
+   * del cliente para poder facturar.
+   */
+  sinOc?: boolean;
 }
 
 /**
@@ -327,6 +333,9 @@ export async function buscarCotizaciones(
   }
   if (filtros.ot) condiciones.push(ilike(v.folioOt, `%${filtros.ot}%`));
   if (filtros.oc) condiciones.push(ilike(v.ordenCompra, `%${filtros.oc}%`));
+  if (filtros.sinOc) {
+    condiciones.push(eq(v.estatus, "ASIGNADA"), sql`${v.ordenCompra} IS NULL`);
+  }
 
   const filas = await getDb()
     .select({
