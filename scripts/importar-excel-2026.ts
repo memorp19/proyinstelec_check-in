@@ -12,8 +12,8 @@
  *
  * Uso, desde la raíz del repositorio:
  *   pnpm importar:2026                                            # solo reporta
- *   pnpm importar:2026 --ensayo  --destino=ep-xxx.neon.tech --limpiar
- *   pnpm importar:2026 --aplicar --destino=ep-xxx.neon.tech --limpiar
+ *   pnpm importar:2026 --ensayo  --destino=ep-xxx.neon.tech --limpiar --clientes-nuevos=7
+ *   pnpm importar:2026 --aplicar --destino=ep-xxx.neon.tech --limpiar --clientes-nuevos=7
  *
  * Fuentes, en `importacion/` (fuera del repositorio):
  *   control-cotizaciones-2026.xlsx   hoja "Cotizaciones 2026"
@@ -31,6 +31,7 @@ import {
   abortarEnsayo,
   aplicarAjustes,
   borrarAnio,
+  esViolacionDeFk,
   esFilaCargable,
   insertarBitacora,
   insertarCliente,
@@ -67,6 +68,24 @@ const APLICAR = process.argv.includes("--aplicar");
  * aunque despues lo deshaga.
  */
 const ENSAYO = process.argv.includes("--ensayo");
+/**
+ * Cuantos clientes nuevos se espera dar de alta. Obligatorio para escribir.
+ *
+ * Es el numero que ya se conoce de antemano por haber corrido el reporte, y
+ * teclearlo convierte un aviso facil de pasar por alto en una afirmacion. Si
+ * el Excel cambio y aparecen clientes que nadie reviso, la carga se detiene en
+ * vez de crearlos en silencio.
+ */
+const CLIENTES_NUEVOS = (() => {
+  const arg = process.argv.find((a) => a.startsWith("--clientes-nuevos="));
+  if (!arg) return null;
+  const n = Number(arg.split("=")[1]);
+  if (!Number.isInteger(n) || n < 0) {
+    console.error("❌  --clientes-nuevos espera un entero, p. ej. --clientes-nuevos=7");
+    process.exit(1);
+  }
+  return n;
+})();
 const LIMPIAR = process.argv.includes("--limpiar");
 const DESTINO = (process.argv.find((a) => a.startsWith("--destino=")) ?? "").split("=")[1] ?? null;
 
@@ -110,6 +129,15 @@ function verificarDestino(): void {
   }
   if (DESTINO !== HOST) {
     console.error(`❌  --destino=${DESTINO} no es la base conectada (${HOST}). No se escribe nada.`);
+    process.exit(1);
+  }
+
+  if (CLIENTES_NUEVOS === null) {
+    console.error(
+      "❌  Para escribir hay que confirmar cuántos clientes nuevos se esperan:\n" +
+        "       --clientes-nuevos=N\n" +
+        "    Corre primero el reporte: el número sale ahí.",
+    );
     process.exit(1);
   }
 }
@@ -185,7 +213,7 @@ interface Cargable {
   estatusFinal: string;
   clienteId: string | null;
   altaCliente: string | null;
-  ot: { folio: string; estatus: string } | null;
+  ot: { folio: string; estatus: string; createdAt: string } | null;
 }
 
 async function main() {
@@ -223,7 +251,6 @@ async function main() {
     ...otRepetidas(filas),
   ];
   const cargables: Cargable[] = [];
-  const bloqueadas = new Set<number>();
   /** Razón social normalizada → razón social, para dar de alta una sola vez. */
   const altasCliente = new Map<string, string>();
   /**
@@ -257,14 +284,10 @@ async function main() {
     );
     hallazgos.push(...propios, ...descarte.hallazgos);
 
-    const propiosBloqueantes = [...propios, ...descarte.hallazgos].some(
-      (h) => h.severidad === "bloqueante",
-    );
-    if (propiosBloqueantes) {
-      bloqueadas.add(numero);
-      continue;
-    }
-
+    // La carga es todo o nada: no hay salto por cotización. Un bloqueante
+    // detiene la corrida entera en la compuerta de abajo. Saltarse unas pocas
+    // dejaría el año a medias y sin forma de saber qué falta sin releer el
+    // reporte, que es peor que no cargar.
     for (const v of versiones) {
       const clave = `${v.numero}-${v.version}`;
       const cliente = resolverCliente({
@@ -305,7 +328,29 @@ async function main() {
             : controlOT.porClave.get(clave);
           const estatus = mapearEstatusOT(enControl?.estatusCrudo ?? "", resuelto.folio);
           hallazgos.push(...estatus.hallazgos);
-          if (estatus.estatus !== null) ot = { folio: resuelto.folio, estatus: estatus.estatus };
+
+          // La OT nace cuando se acepta la cotización, no el día de la carga.
+          // Sin esto, las 93 OT de 2026 quedarían con la fecha del importador y
+          // cualquier "antigüedad de la OT" mediría cuándo se corrió el script.
+          const serial = v.fechaEntrega ?? v.fechaSolicitud!;
+          if (v.fechaEntrega === null) {
+            hallazgos.push({
+              severidad: "informativo",
+              tipo: "ot-fecha-de-solicitud",
+              referencia: resuelto.folio,
+              mensaje:
+                "Sin fecha de entrega; la OT se fecha con la de solicitud " +
+                `(${fechaDeSerial(v.fechaSolicitud!).toISOString().slice(0, 10)})`,
+            });
+          }
+
+          if (estatus.estatus !== null) {
+            ot = {
+              folio: resuelto.folio,
+              estatus: estatus.estatus,
+              createdAt: fechaDeSerial(serial).toISOString(),
+            };
+          }
         }
       }
 
@@ -330,13 +375,13 @@ async function main() {
   imprimirHallazgos("Informativo (no requiere acción)", informativos);
 
   console.log(
-    `📦  Se cargarían ${cargables.length} versiones de ${porNumero.size - bloqueadas.size} ` +
+    `📦  Se cargarían ${cargables.length} versiones de ${porNumero.size} ` +
       `cotizaciones, ${cargables.filter((c) => c.ot).length} OT y ${altasCliente.size} clientes nuevos,` +
       `
     con ${ajustados.aplicados.length} ajustes de operación aplicados.`,
   );
-  if (bloqueadas.size > 0) {
-    console.log(`    ${bloqueadas.size} cotizaciones NO se cargan: ${[...bloqueadas].join(", ")}`);
+  if (bloqueantes.length > 0) {
+    console.log("    ⚠️  Con bloqueantes pendientes NO se carga nada: la carga es todo o nada.");
   }
 
   const reporte = {
@@ -346,15 +391,14 @@ async function main() {
     totales: {
       versionesLeidas: filas.length,
       versionesCargables: cargables.length,
-      cotizacionesBloqueadas: bloqueadas.size,
       ot: cargables.filter((c) => c.ot).length,
       clientesNuevos: altasCliente.size,
+      cotizaciones: porNumero.size,
       ajustesAplicados: ajustados.aplicados.length,
       bloqueantes: bloqueantes.length,
       avisos: avisos.length,
       informativos: informativos.length,
     },
-    cotizacionesBloqueadas: [...bloqueadas],
     clientesNuevos: [...altasCliente.values()],
     ajustesAplicados: ajustados.aplicados.map((a) => ({
       cotizacion: `${String(a.ajuste.cotizacion).padStart(3, "0")}-${a.ajuste.anio} v${a.ajuste.version}`,
@@ -382,6 +426,15 @@ async function main() {
     console.error(
       `\n❌  Hay ${bloqueantes.length} hallazgos bloqueantes. Corrígelos en los Excel y vuelve\n` +
         "    a correr el reporte: la carga solo se aplica cuando sale limpia.\n",
+    );
+    process.exit(1);
+  }
+
+  if (CLIENTES_NUEVOS !== null && CLIENTES_NUEVOS !== altasCliente.size) {
+    console.error(
+      `\n❌  Se esperaban ${CLIENTES_NUEVOS} clientes nuevos y salen ${altasCliente.size}.` +
+        "\n    O el Excel trae clientes que nadie revisó, o falta un alias en" +
+        "\n    scripts/alias-clientes.json. No se escribe nada.\n",
     );
     process.exit(1);
   }
@@ -428,6 +481,26 @@ async function aplicar(
   const existentes = (await sql`
     SELECT count(*)::int AS n FROM cotizaciones WHERE anio = ${ANIO}
   `) as Array<{ n: number }>;
+
+  // La bitácora y las aprobaciones NO se borran: son rastro humano que esta
+  // carga no sabe reconstruir. Se cuentan para que quede dicho cuánto sobrevive
+  // y contra qué va a quedar apuntando.
+  const [rastro] = (await sql`
+    SELECT (SELECT count(*)::int FROM aprobaciones WHERE anio = ${ANIO}) AS aprobaciones,
+           (SELECT count(*)::int FROM bitacora
+             WHERE referencia LIKE ${"%-" + ANIO}) AS bitacora
+  `) as Array<{ aprobaciones: number; bitacora: number }>;
+
+  console.log(
+    `\n📚  Se conservan ${rastro.aprobaciones} aprobaciones y ${rastro.bitacora} entradas de` +
+      "\n    bitácora de este año. Son rastro humano y la carga no los reemplaza.",
+  );
+  if (rastro.aprobaciones > 0) {
+    console.log(
+      "    Ojo: la aprobación es por versión exacta. Si la recarga cambia qué es\n" +
+        "    cada versión, una aprobación vieja puede quedar apuntando a otra cosa.",
+    );
+  }
 
   if (existentes[0].n > 0 && !LIMPIAR) {
     console.error(
@@ -500,6 +573,7 @@ async function aplicar(
           dirigidaA: v.dirigidaA,
           estatus: c.ot.estatus,
           createdBy: USUARIO,
+          createdAt: c.ot.createdAt,
         }),
       );
     }
@@ -531,6 +605,19 @@ async function aplicar(
     await sql.transaction(lote as Parameters<typeof sql.transaction>[0]);
   } catch (err) {
     const mensaje = err instanceof Error ? err.message : String(err);
+    // Si algún día `aprobaciones` o `bitacora` ganan una llave foránea a
+    // `cotizaciones`, el borrado del año fallará aquí. El lote es atómico, así
+    // que no se escribió nada; lo que falta es decir por qué.
+    if (esViolacionDeFk(err)) {
+      console.error(
+        `\n❌  Una llave foránea impide borrar las cotizaciones de ${ANIO}.` +
+          `\n    No se escribió nada.` +
+          `\n    Hay ${rastro.aprobaciones} aprobaciones y ${rastro.bitacora} entradas de bitácora` +
+          "\n    de este año, y este script no las borra a propósito: son rastro humano." +
+          `\n\n    ${mensaje}\n`,
+      );
+      process.exit(1);
+    }
     if (ENSAYO && mensaje.includes(MARCA_ENSAYO)) {
       console.log(
         `✅  Ensayo correcto: las ${lote.length - 1} sentencias se ejecutaron sin error y la\n` +

@@ -33,35 +33,88 @@ el correcto, se usa el correcto.
 
 ## 2. Correrlo
 
+Son cuatro pasos y el orden importa. **El 4 es obligatorio en producción y está
+prohibido en cualquier otra base.**
+
 ```bash
-# 1. Reporte. No escribe nada, no necesita --destino.
+# 1. REPORTE. No escribe nada, no necesita --destino.
+#    De aquí sale el número de clientes nuevos que pide el paso 2.
 pnpm importar:2026
 
-# 2. Ensayo: ejecuta TODAS las escrituras contra la base real y revierte la
-#    transaccion al final. Comprueba tipos, restricciones y llaves sin dejar
-#    un solo renglon. Exige --destino, porque escribe aunque luego lo deshaga.
-pnpm importar:2026 --ensayo --destino=ep-xxxx.neon.tech --limpiar
+# 2. ENSAYO. Ejecuta TODAS las escrituras contra la base real y revierte la
+#    transacción al final: comprueba tipos, restricciones y llaves sin dejar un
+#    solo renglón. Exige --destino porque escribe, aunque luego lo deshaga.
+pnpm importar:2026 --ensayo --destino=ep-xxxx.neon.tech --limpiar --clientes-nuevos=7
 
-# 3. Carga de verdad, cuando el ensayo sale limpio.
-pnpm importar:2026 --aplicar --destino=ep-xxxx.neon.tech --limpiar
+# 3. CARGA, cuando el ensayo sale limpio.
+pnpm importar:2026 --aplicar --destino=ep-xxxx.neon.tech --limpiar --clientes-nuevos=7
+
+# 4. CARPETAS DE DRIVE. SOLO EN PRODUCCIÓN. Ver la advertencia de abajo.
+pnpm backfill:carpetas --aplicar
 ```
 
-El ensayo existe porque hay fallos que solo aparecen contra Postgres. La
-primera carga real murio con `syntax error at or near "INDUSTRIAL"`: un nombre
-de cliente se estaba interpolando dentro del SQL en vez de viajar como
-parametro. Correr el ensayo antes de aplicar cuesta un minuto y encuentra esa
-clase de problema sin dejar la base a medias.
+### Paso 4: obligatorio en producción, prohibido en pruebas
+
+El importador **no escribe `drive_folder_id` ni `drive_folder_url`**: esos datos
+no están en ningún Excel, salen de buscar la carpeta en Drive.
+
+- **En producción es obligatorio.** Sin él, ninguna cotización de 2026 se puede
+  enviar al cliente: `buscarPdfCotizacion` necesita la carpeta, y la regla
+  endurecida ya no acepta "el único PDF de la carpeta". La carga queda completa
+  pero el ciclo comercial, roto.
+- **En una rama de Neon o en una base de pruebas, NO se corre.** `backfill:carpetas`
+  **crea carpetas de verdad en Drive**, y Drive es uno solo: no tiene ramas. Una
+  corrida desde una base de prueba ensucia el Drive real de la empresa con
+  carpetas que no corresponden a nada.
+
+### Qué más falta después de cargar
+
+El importador tampoco escribe `monto_mxn`, `monto_usd` ni `fecha_envio`. Los
+montos se capturan al elaborar la cotización y no están en el Control de
+Cotizaciones; la fecha de envío real tampoco. Se capturan desde la app conforme
+se usen.
+
+### Las guardas
 
 **`--destino` es obligatorio para escribir y tiene que ser idéntico al host que
 el script imprime.** `DATABASE_URL` apunta a lo que tenga el `.env.local` de
 quien ejecuta, y esto borra y recarga un año entero: teclear el host es la
 confirmación de que quien corre el comando sabe dónde está parado.
 
+**`--clientes-nuevos=N` también es obligatorio para escribir.** Es el número que
+ya salió en el reporte. Teclearlo convierte un aviso fácil de pasar por alto en
+una afirmación: si el Excel cambió y aparecen clientes que nadie revisó, la
+carga se detiene en vez de crearlos en silencio.
+
 El script **se niega a correr** si:
 
 - el host coincide con `PRODUCTION_DATABASE_HOST`;
 - ya hay cotizaciones de 2026 y no se pasó `--limpiar`;
+- el número de clientes nuevos no coincide con `--clientes-nuevos`;
 - queda un solo hallazgo **bloqueante**.
+
+### La carga es todo o nada
+
+No hay salto por cotización. Un bloqueante detiene la corrida entera: se
+corrige en el Excel y se vuelve a correr. Cargar "todo menos tres" dejaría el
+año a medias y sin forma de saber qué falta sin releer el reporte.
+
+### Qué NO borra `--limpiar`
+
+Reemplaza **cotizaciones, órdenes de trabajo y sus responsables**, que salen del
+Excel. **No toca `bitacora` ni `aprobaciones`**, y es deliberado:
+
+- La **aprobación** es por versión exacta y la da una persona. No está en ningún
+  Excel: borrarla dejaría 346 versiones sin una sola aprobación registrada.
+- La **bitácora** guarda envíos al cliente, correos y cambios de estatus que
+  ocurrieron de verdad. Y el filtro obvio se pasa de largo: `cotPk()` genera
+  `COT#002-2026`, así que un `LIKE '%-2026'` barre toda la historia de la app y
+  la sustituye por una línea por cotización.
+
+El script cuenta cuántas sobreviven y lo dice antes de escribir. **Conviene
+mirar ese número**: una aprobación es por versión exacta, así que si la recarga
+cambia qué es cada versión, una aprobación vieja puede quedar apuntando a otra
+cosa.
 
 Cada corrida deja `importacion/reportes/<fecha>.json` con todo el detalle.
 
@@ -92,6 +145,12 @@ dejaría inmovilizable desde la app.
 
 **Responsables de OT.** Vacíos. No hay fuente: ninguno de los tres Excel los
 trae, y `ot_responsables` estaba vacía también en la carga anterior.
+
+**Fecha de la OT.** Se escribe explícitamente con la **fecha de entrega** de la
+versión asignada, y si no la hay, con la de solicitud (se reporta). Dejarla al
+`defaultNow()` de la columna pondría a las 93 OT de 2026 la fecha del día de la
+carga, y cualquier "antigüedad de la OT" o "OT del mes" pasaría a medir cuándo
+se corrió el importador.
 
 **NO ASIGNADA.** Se aplica durante la carga: las versiones en ENVIADA de una
 cotización que ya tiene una ASIGNADA quedan en NO ASIGNADA. Si por encima de la

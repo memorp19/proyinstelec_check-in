@@ -115,6 +115,7 @@ describe("las escrituras parametrizan, nunca interpolan", () => {
       dirigidaA: VENENOS.dolar,
       estatus: "En Proceso",
       createdBy: "importador",
+      createdAt: "2026-07-31T12:00:00.000Z",
     });
 
     const [c] = llamadas;
@@ -122,6 +123,11 @@ describe("las escrituras parametrizan, nunca interpolan", () => {
     noViajaEnElTexto(c.texto);
     expect(c.valores).toContain(VENENOS.puntoYComa);
     expect(c.valores).toContain(VENENOS.dolar);
+    // La fecha de la OT se escribe explicitamente: sin ella, la columna usaria
+    // su defaultNow() y todas las OT historicas quedarian fechadas el dia de
+    // la carga.
+    expect(c.texto).toContain("created_at");
+    expect(c.valores).toContain("2026-07-31T12:00:00.000Z");
   });
 
   it("insertarBitacora manda el detalle como parámetro", () => {
@@ -139,17 +145,38 @@ describe("las escrituras parametrizan, nunca interpolan", () => {
     expect(c.valores).toContain(VENENOS.puntoYComa);
   });
 
-  it("el borrado del año parametriza el año y el patrón del LIKE", () => {
+  it("el borrado del año parametriza el año", () => {
     const { sql, llamadas } = espia();
     borrarAnio(sql, 2026);
 
-    expect(llamadas).toHaveLength(5);
+    expect(llamadas).toHaveLength(3);
     for (const c of llamadas) {
       expect(c.interpolada).toBe(false);
-      // Ni el año ni el patrón quedan escritos en el texto
       expect(c.texto).not.toContain("2026");
+      expect(c.valores).toEqual([2026]);
     }
-    expect(llamadas.map((c) => c.valores)).toEqual([[2026], [2026], [2026], ["%-2026"], [2026]]);
+  });
+
+  // Son rastro humano que la carga no sabe reconstruir: la aprobación es por
+  // versión exacta y la da una persona; la bitácora guarda envíos y correos que
+  // ocurrieron de verdad. Y el filtro obvio se pasa de largo, porque `cotPk()`
+  // genera `COT#002-2026` y un LIKE '%-2026' barre toda la historia de la app.
+  it("NO borra bitácora ni aprobaciones", () => {
+    const { sql, llamadas } = espia();
+    borrarAnio(sql, 2026);
+
+    const todo = llamadas.map((c) => c.texto).join(" ");
+    expect(todo).not.toContain("bitacora");
+    expect(todo).not.toContain("aprobaciones");
+    expect(todo).not.toContain("LIKE");
+  });
+
+  it("borra en orden de dependencia: responsables, OT, cotizaciones", () => {
+    const { sql, llamadas } = espia();
+    borrarAnio(sql, 2026);
+
+    const tablas = llamadas.map((c) => c.texto.match(/DELETE FROM (\w+)/)![1]);
+    expect(tablas).toEqual(["ot_responsables", "ordenes_trabajo", "cotizaciones"]);
   });
 
   it("cada consulta declara tantos huecos como valores manda", () => {

@@ -6,6 +6,7 @@ import {
   leerAjustes,
   esOrdenCompraDoble,
   leerFilaCotizacion,
+  MAPEO_ESTATUS_OT,
   mapearEstatusOT,
   normalizarRazon,
   ordenCompraCruda,
@@ -18,6 +19,7 @@ import {
   type FilaCotizacion,
 } from "@/src/lib/importacion-2026";
 import { ESTATUS_COTIZACION } from "@/src/lib/cotizaciones";
+import { ESTATUS_OT, esEstatusOT } from "@/src/lib/ot";
 
 /** Celda de texto. */
 const t = (valor: string): Celda => ({ valor, tipo: "s", conFormatoDeFecha: false });
@@ -232,6 +234,25 @@ describe("mapearEstatusOT", () => {
   it("no acepta la grafía de la app en la columna del Excel", () => {
     expect(mapearEstatusOT("Cerrado", "OT001260").estatus).toBeNull();
   });
+
+  // Son dos catálogos en dos archivos: el del Excel aquí y el de la app en
+  // `ot.ts`. Si se separan, el importador escribe estatus que la app no
+  // reconoce y la OT queda inmovilizable — sin botones y con 409 en el PATCH.
+  // Esta carga estrena el catálogo de cuatro valores, así que atarlos importa.
+  it("todo lo que produce el mapeo es un estatus que la app reconoce", () => {
+    for (const destino of Object.values(MAPEO_ESTATUS_OT)) {
+      expect(esEstatusOT(destino)).toBe(true);
+    }
+    // Y el vacío, que es con lo que nace una OT sin estatus en el control
+    expect(esEstatusOT(mapearEstatusOT("-", "OT001260").estatus!)).toBe(true);
+  });
+
+  it("el mapeo cubre todos los estatus no vacíos del catálogo de la app", () => {
+    const producidos = new Set(Object.values(MAPEO_ESTATUS_OT));
+    for (const e of ESTATUS_OT) {
+      if (e !== "") expect(producidos.has(e)).toBe(true);
+    }
+  });
 });
 
 describe("versionesNoAsignadas", () => {
@@ -303,10 +324,21 @@ describe("resolverCliente", () => {
     const r = resolverCliente({
       nombreExcel: "UVM HISPANO",
       catalogo,
-      alias: { "UVM HISPANO": "Universidad del Valle de Mexico, SC" },
+      alias: { "uvm hispano": "Universidad del Valle de Mexico, SC" },
     });
     expect(r.clienteId).toBe("c2");
     expect(r.hallazgos).toEqual([]);
+  });
+
+  // La llave del alias se normaliza igual que el catálogo. Sin eso, un
+  // "UVM Queretaro" sin acento falla el alias, falla el catálogo y acaba dando
+  // de alta un cliente nuevo con solo un aviso — y había que escribir las dos
+  // grafías a mano en el JSON.
+  it("el alias no depende de acentos ni mayúsculas", () => {
+    const alias = { "uvm queretaro": "Universidad del Valle de Mexico, SC" };
+    for (const escritura of ["UVM QUERÉTARO", "UVM Queretaro", "uvm querétaro"]) {
+      expect(resolverCliente({ nombreExcel: escritura, catalogo, alias }).clienteId).toBe("c2");
+    }
   });
 
   // Lo que la carga anterior hacía mal: estas nueve filas desaparecieron sin

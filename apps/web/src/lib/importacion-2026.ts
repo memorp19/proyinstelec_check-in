@@ -147,11 +147,26 @@ export function leerFilaCotizacion(
   };
 }
 
+/**
+ * Serial de Excel mas bajo y mas alto que se aceptan como fecha: 2023-01-01 y
+ * 2030-12-31.
+ *
+ * El rango existe porque un numero suelto en una columna de fecha es siempre
+ * un error de captura, y sin acotarlo entra como una fecha valida: un `2026`
+ * tecleado en la columna equivocada se convierte en **1905-07-18** sin que
+ * nadie lo note. Fuera del rango se devuelve null, y como el texto crudo si se
+ * conserva, el reporte lo marca como ilegible en vez de callarse.
+ */
+const SERIAL_MINIMO = 44927;
+const SERIAL_MAXIMO = 47848;
+
 function serialOpcional(celda: Celda | undefined): number | null {
-  const v = texto(celda);
-  if (!v) return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
+  // Exige celda numerica: una fecha escrita como texto ("19/5/0226") no es una
+  // fecha para Excel, y tratarla como tal seria inventar el dato.
+  if (!celda || celda.tipo !== "n") return null;
+  const n = Number(celda.valor);
+  if (!Number.isFinite(n)) return null;
+  return n >= SERIAL_MINIMO && n <= SERIAL_MAXIMO ? n : null;
 }
 
 // ── Ajustes de operación ──────────────────────────────────────────────────────
@@ -633,8 +648,11 @@ export function resolverCliente(params: {
     };
   }
 
-  // El alias manda sobre la normalización: es una decisión tomada a mano.
-  const porAlias = params.alias[nombre.toUpperCase()];
+  // El alias manda sobre la normalización: es una decisión tomada a mano. La
+  // llave se compara normalizada, igual que el catálogo — si no, "UVM
+  // Queretaro" sin acento falla el alias, falla el catálogo y acaba dando de
+  // alta un cliente nuevo con solo un aviso.
+  const porAlias = params.alias[normalizarRazon(nombre)];
   const buscado = porAlias ?? nombre;
 
   const norm = normalizarRazon(buscado);
@@ -722,14 +740,23 @@ export interface OtEscribible {
   dirigidaA: string;
   estatus: string;
   createdBy: string;
+  /**
+   * Cuando nacio la OT, en ISO. Se escribe explicitamente y no se deja al
+   * `defaultNow()` de la columna: en una carga historica, dejarlo por omision
+   * pone a las 93 OT de 2026 la fecha del dia de la carga, y cualquier
+   * "antiguedad de la OT" o "OT del mes" pasa a ser una medida de cuando se
+   * corrio el importador.
+   */
+  createdAt: string;
 }
 
 export function insertarOT<T>(sql: ConsultaSql<T>, o: OtEscribible): T {
   return sql`INSERT INTO ordenes_trabajo
        (folio, numero_cotizacion, anio, version, orden_compra, cliente, titulo,
-        dirigida_a, estatus, created_by)
+        dirigida_a, estatus, created_by, created_at)
      VALUES (${o.folio}, ${o.numeroCotizacion}, ${o.anio}, ${o.version}, ${o.ordenCompra},
-             ${o.cliente}, ${o.titulo}, ${o.dirigidaA}, ${o.estatus}, ${o.createdBy})`;
+             ${o.cliente}, ${o.titulo}, ${o.dirigidaA}, ${o.estatus}, ${o.createdBy},
+             ${o.createdAt})`;
 }
 
 export interface ClienteEscribible {
@@ -761,16 +788,37 @@ export function insertarBitacora<T>(sql: ConsultaSql<T>, b: BitacoraEscribible):
  * El borrado del anio, en orden de dependencia: los responsables cuelgan de la
  * OT. `ot_responsables` caeria por ON CASCADE, pero se borra explicitamente
  * para que el orden quede escrito.
+ *
+ * NO toca `bitacora` ni `aprobaciones`, y es deliberado. Las dos son rastro
+ * humano que esta carga no sabe reconstruir:
+ *
+ * - La **aprobacion** es por version exacta y la da una persona. No esta en
+ *   ningun Excel: borrarla dejaria 346 versiones sin una sola aprobacion
+ *   registrada.
+ * - La **bitacora** guarda envios al cliente, correos y cambios de estatus que
+ *   ocurrieron de verdad. Ademas el filtro obvio se pasa de largo: `cotPk()`
+ *   genera `COT#002-2026`, asi que un `LIKE '%-2026'` barre toda la historia
+ *   de la app y la sustituye por una linea por cotizacion.
+ *
+ * Lo que se reemplaza son las cotizaciones y sus OT, que SI salen del Excel.
  */
 export function borrarAnio<T>(sql: ConsultaSql<T>, anio: number): T[] {
   return [
     sql`DELETE FROM ot_responsables WHERE folio_ot IN (
           SELECT folio FROM ordenes_trabajo WHERE anio = ${anio})`,
-    sql`DELETE FROM aprobaciones WHERE anio = ${anio}`,
     sql`DELETE FROM ordenes_trabajo WHERE anio = ${anio}`,
-    sql`DELETE FROM bitacora WHERE referencia LIKE ${"%-" + anio}`,
     sql`DELETE FROM cotizaciones WHERE anio = ${anio}`,
   ];
+}
+
+/** Violacion de llave foranea, tal como la reporta Postgres. */
+export function esViolacionDeFk(err: unknown): boolean {
+  const e = err as { code?: string; message?: string; cause?: { code?: string } };
+  return (
+    e?.code === "23503" ||
+    e?.cause?.code === "23503" ||
+    (e?.message ?? "").includes("violates foreign key constraint")
+  );
 }
 
 export const MARCA_ENSAYO = "ENSAYO_ROLLBACK_DELIBERADO";
