@@ -156,6 +156,23 @@ export function CotizacionesClient({
   const [catalogos, setCatalogos] = useState<Catalogos | null>(null);
   const [modal, setModal] = useState<Modal>(null);
   const [aviso, setAviso] = useState<string | null>(null);
+  /**
+   * Se incrementa cuando un modal escribió algo. El listado lo observa y
+   * vuelve a buscar.
+   *
+   * Hace falta un contador —y no una llamada directa— porque el modal lo
+   * monta este componente y `buscar()` vive dentro de `Buscador`. Sin esto, la
+   * tarjeta seguía mostrando el valor anterior hasta recargar con F5: la base
+   * y la OT quedaban bien, pero la pantalla mentía.
+   */
+  const [recarga, setRecarga] = useState(0);
+
+  /** Cierra el modal, deja el aviso y pide al listado que se refresque. */
+  const trasEscribir = (msg?: string) => {
+    if (msg) setAviso(msg);
+    setModal(null);
+    setRecarga((n) => n + 1);
+  };
 
   useEffect(() => {
     fetch("/api/erp/catalogos")
@@ -199,6 +216,7 @@ export function CotizacionesClient({
           puedeModificarOC={puedeModificarOC}
           abrirModal={setModal}
           setAviso={setAviso}
+          recarga={recarga}
         />
       )}
       {tab === "nueva" && (
@@ -215,26 +233,26 @@ export function CotizacionesClient({
       {modal && (
         <ModalShell titulo={tituloModal(modal)} onClose={() => setModal(null)}>
           {modal.tipo === "editar" && (
-            <EditarForm cot={modal.cot} catalogos={catalogos} onDone={() => setModal(null)} />
+            <EditarForm cot={modal.cot} catalogos={catalogos} onDone={() => trasEscribir()} />
           )}
           {modal.tipo === "version" && (
-            <NuevaVersionForm cot={modal.cot} onDone={(msg) => { setAviso(msg); setModal(null); }} />
+            <NuevaVersionForm cot={modal.cot} onDone={trasEscribir} />
           )}
           {modal.tipo === "versiones" && <Versiones cot={modal.cot} />}
           {modal.tipo === "enviar" && (
-            <EnviarForm cot={modal.cot} onDone={(msg) => { setAviso(msg); setModal(null); }} />
+            <EnviarForm cot={modal.cot} onDone={trasEscribir} />
           )}
           {modal.tipo === "oc" && (
-            <OcForm cot={modal.cot} catalogos={catalogos} onDone={(msg) => { setAviso(msg); setModal(null); }} />
+            <OcForm cot={modal.cot} catalogos={catalogos} onDone={trasEscribir} />
           )}
           {modal.tipo === "ot-sin-oc" && (
-            <OcForm sinOc cot={modal.cot} catalogos={catalogos} onDone={(msg) => { setAviso(msg); setModal(null); }} />
+            <OcForm sinOc cot={modal.cot} catalogos={catalogos} onDone={trasEscribir} />
           )}
           {modal.tipo === "oc-posterior" && (
-            <OcPosteriorForm cot={modal.cot} onDone={(msg) => { setAviso(msg); setModal(null); }} />
+            <OcPosteriorForm cot={modal.cot} onDone={trasEscribir} />
           )}
           {modal.tipo === "oc-modificar" && (
-            <OcModificarForm cot={modal.cot} onDone={(msg) => { setAviso(msg); setModal(null); }} />
+            <OcModificarForm cot={modal.cot} onDone={trasEscribir} />
           )}
         </ModalShell>
       )}
@@ -413,6 +431,7 @@ function Buscador({
   puedeModificarOC,
   abrirModal,
   setAviso,
+  recarga,
 }: {
   anioActual: number;
   catalogos: Catalogos | null;
@@ -421,6 +440,8 @@ function Buscador({
   puedeModificarOC: boolean;
   abrirModal: (m: Modal) => void;
   setAviso: (s: string) => void;
+  /** Cambia cuando un modal escribió algo; dispara una búsqueda nueva. */
+  recarga: number;
 }) {
   const [filtros, setFiltros] = useState({
     anio: String(anioActual), empresa: "", numero: "", elaboro: "", dirigidaA: "", estatus: "", mesEntrega: "", ot: "", oc: "",
@@ -451,13 +472,16 @@ function Buscador({
   }, [filtros, soloSinOc]);
 
   useEffect(() => { buscar(); }, []); // carga inicial
-  // El interruptor filtra solo, sin pasar por el botón de buscar: es un
-  // cambio de "qué estoy mirando", no un criterio más que se teclea.
+
+  // Dos disparadores que no pasan por el botón de buscar:
+  //   · el interruptor "sin OC", que es un cambio de "qué estoy mirando";
+  //   · `recarga`, cuando un modal acaba de escribir.
+  // El ref evita que la carga inicial se duplique en el primer render.
   const primera = useRef(true);
   useEffect(() => {
     if (primera.current) { primera.current = false; return; }
     buscar();
-  }, [soloSinOc]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [soloSinOc, recarga]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function enviarARevision(c: Cot) {
     if (!confirm(`¿Enviar ${c.folio} a revisión? Se avisará a los revisores por correo.`)) return;
@@ -521,6 +545,13 @@ function Buscador({
         <button type="submit" disabled={loading} className={`${btnPrimary} col-span-2 md:col-span-3`}>
           {loading ? "Buscando…" : "Buscar"}
         </button>
+        <span className="col-span-2 md:col-span-1 flex items-center justify-end font-mono text-[10px] text-white/30">
+          {loading
+            ? "…"
+            : `${resultados.length} ${resultados.length === 1 ? "cotización" : "cotizaciones"}${
+                soloSinOc ? " sin OC" : ""
+              }`}
+        </span>
         <datalist id="dl-elaboro">
           {(catalogos?.responsables ?? []).map((r) => <option key={r.email} value={r.iniciales} />)}
         </datalist>

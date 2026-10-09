@@ -169,8 +169,10 @@ export function OTClient({ puedeReasignar }: { puedeReasignar: boolean }) {
       <p className="font-mono text-[10px] text-white/40 uppercase tracking-widest mb-1">ERP · OT</p>
       <h1 className="font-head text-2xl font-bold mb-1">Órdenes de Trabajo</h1>
       <p className="text-white/50 text-sm mb-5">
-        Las OT se generan al ingresar la orden de compra de una cotización enviada. El control
-        operativo y los documentos llegan más adelante en la Fase 2.
+        Las OT se generan al registrar la orden de compra de una cotización enviada, o con
+        &ldquo;Generar OT sin OC&rdquo; cuando el cliente autoriza el trabajo antes de emitirla —
+        en ese caso la OC se registra después, desde la cotización. Cada OT tendrá su control
+        operativo, creado junto con ella; los documentos llegan en la Fase 2.
       </p>
 
       <div className="flex items-center gap-2 mb-4">
