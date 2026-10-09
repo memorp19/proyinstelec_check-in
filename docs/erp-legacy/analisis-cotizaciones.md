@@ -9,9 +9,11 @@ Inventario funcional extraído del código en "Respaldo del Codigo" (000_GS, 12_
 
 ### Crear cotización
 - Numeración: sugiere `max(número usado)+1`, padding 3 dígitos. Validación de duplicado onblur y al guardar; si existe con datos, bloquea y remite a "Nueva Versión".
-- Folio: `PCOTOP-NNN-AAAA` (con versión: `PCOTOP-NNN-AAAA-v`).
+- Folio: `PCOTOP-NNN-AAAA` para la v0 y `PCOTOP-NNN-AAAA-{version}` de la v1 en
+  adelante. Literal: `PCOTOP-002-2026` y `PCOTOP-002-2026-1`. La versión va como
+  número, sin la letra "v".
 - Título se guarda como `titulo_cliente` (convención usada para localizar el PDF).
-- Drive: busca/crea carpeta `NNN - AAAA` bajo carpeta raíz. Si carpeta nueva o versión 0: copia 2 plantillas (Google Doc + Google Sheet) renombradas `PCOTOP-NNN-AAAA[-v] titulo_cliente`.
+- Drive: busca/crea carpeta `NNN - AAAA` bajo carpeta raíz. Si carpeta nueva o versión 0: copia 2 plantillas (Google Doc + Google Sheet) renombradas `PCOTOP-NNN-AAAA[-{version}] titulo_cliente`, p. ej. `PCOTOP-002-2026-1 titulo_cliente`.
 
 ### Nueva versión
 - Toma la versión máxima, crea fila con versión+1, estatus=PROCESO, fecha solicitud=hoy, hereda cliente/título/dirigida, limpia fechaEntrega/OC/OT. Oculta filas anteriores (mecanismo frágil → en la nueva app: ítem por versión, la última es la vigente). Copia plantillas de nuevo a la MISMA carpeta.

@@ -189,27 +189,37 @@ describe("PATCH estatus de la OT", () => {
 
   it("exige ot.reasignar", async () => {
     mockAuth.mockResolvedValue(SOLO_CREAR);
-    const res = await PATCH(pedirPatch({ estatus: "Asignado" }), { params });
+    const res = await PATCH(pedirPatch({ estatus: "En Proceso" }), { params });
     expect(res.status).toBe(403);
     expect(cambiarEstatusOT).not.toHaveBeenCalled();
   });
 
   it("avanza al siguiente estatus", async () => {
-    vi.mocked(cambiarEstatusOT).mockResolvedValue({ ...ot, estatus: "Asignado" } as never);
+    vi.mocked(cambiarEstatusOT).mockResolvedValue({ ...ot, estatus: "En Proceso" } as never);
 
-    const res = await PATCH(pedirPatch({ estatus: "Asignado" }), { params });
+    const res = await PATCH(pedirPatch({ estatus: "En Proceso" }), { params });
 
     expect(res.status).toBe(200);
-    expect(cambiarEstatusOT).toHaveBeenCalledWith(FOLIO, "Asignado");
-    expect((await res.json()).ot.estatus).toBe("Asignado");
+    expect(cambiarEstatusOT).toHaveBeenCalledWith(FOLIO, "En Proceso");
+    expect((await res.json()).ot.estatus).toBe("En Proceso");
   });
 
-  // Los siete valores del legacy ya no existen; se rechazan en la frontera.
+  // "TERMINADO" es la grafía del Control de OT; en la app ese estatus se llama
+  // "Cerrado". Llega aquí cuando alguien manda el valor del Excel tal cual.
   it("400 con un estatus fuera del catálogo", async () => {
     const res = await PATCH(pedirPatch({ estatus: "TERMINADO" }), { params });
 
     expect(res.status).toBe(400);
-    expect((await res.json()).error).toContain("Asignado");
+    expect((await res.json()).error).toContain("En Proceso");
+    expect(cambiarEstatusOT).not.toHaveBeenCalled();
+  });
+
+  // Salieron del catálogo: ninguna de las tres fuentes los usa.
+  it("400 con los estatus que se retiraron del catálogo", async () => {
+    for (const viejo of ["Asignado", "En Ejecución"]) {
+      const res = await PATCH(pedirPatch({ estatus: viejo }), { params });
+      expect(res.status).toBe(400);
+    }
     expect(cambiarEstatusOT).not.toHaveBeenCalled();
   });
 
@@ -226,7 +236,7 @@ describe("PATCH estatus de la OT", () => {
   it("404 si la OT no existe", async () => {
     vi.mocked(cambiarEstatusOT).mockRejectedValue(new Error("La OT OT999260 no existe"));
 
-    const res = await PATCH(pedirPatch({ estatus: "Asignado" }), { params });
+    const res = await PATCH(pedirPatch({ estatus: "En Proceso" }), { params });
 
     expect(res.status).toBe(404);
   });

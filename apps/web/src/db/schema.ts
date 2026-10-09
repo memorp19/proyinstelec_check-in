@@ -433,7 +433,8 @@ export const ordenesTrabajo = pgTable(
     titulo: text("titulo").notNull(),
     dirigidaA: text("dirigida_a"),
     /**
-     * Estatus de la OT: "" → Asignado → En Ejecución → Cerrado. Nace vacía.
+     * Estatus de la OT: "" → Asignado → En Proceso → En Ejecución →
+     * Revisión → Cerrado. Nace vacía.
      * Antes tenía default "PROCESO", que es un estatus de COTIZACIÓN colado
      * aquí: no existe en la operación real de las órdenes de trabajo.
      */

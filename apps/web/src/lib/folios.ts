@@ -96,7 +96,7 @@ export function folioPendiente(n: number): string {
 
 // ── Parseo (para importadores y búsquedas) ────────────────────────────────────
 
-/** Descompone PCOTOP-NNN-AAAA[-v]; acepta también "NNN-AAAA" y "NNN". */
+/** Descompone PCOTOP-002-2026 y PCOTOP-002-2026-1; acepta también "002-2026" y "002". */
 export function parseFolioCotizacion(
   texto: string,
 ): { numero: number; anio?: number; version?: number } | null {

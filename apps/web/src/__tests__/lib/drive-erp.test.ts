@@ -268,3 +268,114 @@ describe("copiarPlantillasCotizacion — con plantillas configuradas", () => {
     ]);
   });
 });
+
+// El folio de la v0 es prefijo del de todas sus versiones: "PCOTOP-002-2026"
+// empieza igual que "PCOTOP-002-2026-1". Y la carpeta la comparten todas, así
+// que el caso es el normal. Lo que se adjunta va al correo del cliente.
+describe("buscarPdfCotizacion — no confundir versiones", () => {
+  /** Devuelve el PDF elegido, o null, con la carpeta llena de estos nombres. */
+  async function elegir(folio: string, nombres: string[]) {
+    const list = vi.fn().mockResolvedValue({
+      data: { files: nombres.map((name, i) => ({ id: `f${i}`, name })) },
+    });
+    const get = vi.fn().mockResolvedValue({ data: new ArrayBuffer(8) });
+    getDriveClient.mockResolvedValue({ files: { list, get } });
+
+    const r = await buscarPdfCotizacion({ folderId: "carpeta-002", folio });
+    return r.pdf?.filename ?? null;
+  }
+
+  const CARPETA = [
+    "PCOTOP-002-2026 Subestación.pdf",
+    "PCOTOP-002-2026-1 Subestación rev.pdf",
+    "PCOTOP-002-2026-2 Subestación rev2.pdf",
+  ];
+
+  it("la v0 devuelve su PDF, no el de la v1 ni el de la v2", async () => {
+    expect(await elegir("PCOTOP-002-2026", CARPETA)).toBe("PCOTOP-002-2026 Subestación.pdf");
+  });
+
+  it("la v1 devuelve el suyo, no el de la v0", async () => {
+    expect(await elegir("PCOTOP-002-2026-1", CARPETA)).toBe(
+      "PCOTOP-002-2026-1 Subestación rev.pdf",
+    );
+  });
+
+  it("la v2 devuelve el suyo", async () => {
+    expect(await elegir("PCOTOP-002-2026-2", CARPETA)).toBe(
+      "PCOTOP-002-2026-2 Subestación rev2.pdf",
+    );
+  });
+
+  // Antes, con el folio como prefijo a secas, este caso devolvía el PDF de la
+  // v1 para la v0: el orden de Drive decidía qué se le mandaba al cliente.
+  it("la v0 no se queda con el PDF de la v1 aunque venga primero", async () => {
+    const alReves = [
+      "PCOTOP-002-2026-1 Subestación rev.pdf",
+      "PCOTOP-002-2026 Subestación.pdf",
+    ];
+    expect(await elegir("PCOTOP-002-2026", alReves)).toBe("PCOTOP-002-2026 Subestación.pdf");
+  });
+
+  it("acepta el PDF nombrado solo con el folio, sin título", async () => {
+    expect(await elegir("PCOTOP-002-2026", ["PCOTOP-002-2026.pdf"])).toBe("PCOTOP-002-2026.pdf");
+  });
+
+  // Igualdad exacta, no prefijo: si valiera como prefijo volvería la ambigüedad.
+  it("el PDF de la v1 sin título no sirve para la v0", async () => {
+    expect(await elegir("PCOTOP-002-2026", ["PCOTOP-002-2026-1.pdf"])).toBeNull();
+  });
+
+  // El comodín "si solo hay un PDF, ese" se quitó: con una carpeta compartida
+  // podía adjuntarle al cliente el PDF de otra versión.
+  it("un único PDF que no es el suyo ya no se devuelve", async () => {
+    expect(await elegir("PCOTOP-002-2026-1", ["PCOTOP-002-2026 Subestación.pdf"])).toBeNull();
+  });
+
+  it("no distingue mayúsculas", async () => {
+    expect(await elegir("pcotop-002-2026", ["PCOTOP-002-2026 Subestación.pdf"])).toBe(
+      "PCOTOP-002-2026 Subestación.pdf",
+    );
+  });
+
+  it("carpeta vacía devuelve null", async () => {
+    expect(await elegir("PCOTOP-002-2026", [])).toBeNull();
+  });
+
+  // La regla exige `<folio> ` con espacio exacto y los PDF los nombra el equipo
+  // a mano. Sin saber qué había en la carpeta, un no-match es indiagnosticable.
+  describe("qué había en la carpeta", () => {
+    async function buscar(folio: string, nombres: string[]) {
+      const list = vi.fn().mockResolvedValue({
+        data: { files: nombres.map((name, i) => ({ id: `f${i}`, name })) },
+      });
+      const get = vi.fn().mockResolvedValue({ data: new ArrayBuffer(8) });
+      getDriveClient.mockResolvedValue({ files: { list, get } });
+      return buscarPdfCotizacion({ folderId: "carpeta-002", folio });
+    }
+
+    it("sin match devuelve los nombres que sí estaban", async () => {
+      const r = await buscar("PCOTOP-002-2026", [
+        "PCOTOP-002-2026_Subestación.pdf",
+        "Cotización PCOTOP-002-2026.pdf",
+      ]);
+
+      expect(r.pdf).toBeNull();
+      expect(r.nombresEnCarpeta).toEqual([
+        "PCOTOP-002-2026_Subestación.pdf",
+        "Cotización PCOTOP-002-2026.pdf",
+      ]);
+    });
+
+    it("con match también los devuelve", async () => {
+      const r = await buscar("PCOTOP-002-2026", ["PCOTOP-002-2026 Subestación.pdf"]);
+
+      expect(r.pdf?.filename).toBe("PCOTOP-002-2026 Subestación.pdf");
+      expect(r.nombresEnCarpeta).toEqual(["PCOTOP-002-2026 Subestación.pdf"]);
+    });
+
+    it("la carpeta vacía se distingue de la que tiene PDF ajenos", async () => {
+      expect((await buscar("PCOTOP-002-2026", [])).nombresEnCarpeta).toEqual([]);
+    });
+  });
+});

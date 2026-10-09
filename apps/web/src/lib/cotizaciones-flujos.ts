@@ -19,7 +19,7 @@ import {
   ensureSubcarpetaOCCotizacion,
   subirArchivoErp,
 } from "./drive-erp";
-import { folioOT } from "./folios";
+import { folioCotizacion, folioOT } from "./folios";
 import { createOT, agregarResponsable, setCarpetaDriveOT } from "./ot";
 import { permisosEfectivos } from "./permisos";
 import { listUsers, type UserProfile } from "./users";
@@ -30,6 +30,28 @@ import { listUsers, type UserProfile } from "./users";
  * correo no abortan la operación principal (regla del legacy): se registran
  * en bitácora y se reportan en el resultado como avisos.
  */
+
+// ── El PDF de la cotización ───────────────────────────────────────────────────
+
+/**
+ * El folio con el que DEBE estar nombrado el PDF, calculado desde
+ * (numero, anio, version) en vez de leer `cotizacion.folio`.
+ *
+ * La columna guarda lo que se cargó, que no siempre es el folio canónico: la
+ * carga de `app-pruebas` metió 75 folios con "-v1" en vez de "-1". Si el
+ * mensaje de error interpolara ese valor, le pediría al equipo generar el PDF
+ * con el nombre malo — es decir, invitaría a renombrar los PDF a la convención
+ * que este mismo cambio viene a quitar.
+ */
+function folioEsperado(cotizacion: Cotizacion): string {
+  return folioCotizacion(cotizacion.numero, cotizacion.anio, cotizacion.version);
+}
+
+/** Qué PDF había en la carpeta, para que un no-match se pueda diagnosticar. */
+function queHabia(nombres: string[]): string {
+  if (nombres.length === 0) return "No hay ningún PDF en la carpeta.";
+  return `En la carpeta hay: ${nombres.join(", ")}.`;
+}
 
 // ── Resolución de personas por permiso (sustituye listas hardcodeadas) ────────
 
@@ -184,14 +206,16 @@ export async function enviarARevision(params: {
   let adjuntos: Adjunto[] | undefined;
   if (cotizacion.drive_folder_id) {
     try {
-      const pdf = await buscarPdfCotizacion({
+      const { pdf, nombresEnCarpeta } = await buscarPdfCotizacion({
         folderId: cotizacion.drive_folder_id,
-        folio: cotizacion.folio,
+        folio: folioEsperado(cotizacion),
       });
       if (pdf) {
         adjuntos = [{ filename: pdf.filename, mimeType: "application/pdf", contenido: pdf.contenido }];
       } else {
-        avisos.push("No se localizó el PDF en la carpeta; el correo de revisión salió sin adjunto");
+        avisos.push(
+          `No se localizó el PDF en la carpeta; el correo de revisión salió sin adjunto. ${queHabia(nombresEnCarpeta)}`,
+        );
       }
     } catch {
       avisos.push("No se pudo leer la carpeta de Drive; el correo de revisión salió sin adjunto");
@@ -366,7 +390,12 @@ export async function datosParaEnvio(params: {
   if (cotizacion.drive_folder_id) {
     try {
       pdfDisponible =
-        (await buscarPdfCotizacion({ folderId: cotizacion.drive_folder_id, folio: cotizacion.folio })) != null;
+        (
+          await buscarPdfCotizacion({
+            folderId: cotizacion.drive_folder_id,
+            folio: folioEsperado(cotizacion),
+          })
+        ).pdf != null;
     } catch {
       pdfDisponible = false;
     }
@@ -421,13 +450,14 @@ export async function enviarAlCliente(params: {
   if (!cotizacion.drive_folder_id) {
     throw new Error("La cotización no tiene carpeta de Drive; no se localizó el PDF");
   }
-  const pdf = await buscarPdfCotizacion({
+  const esperado = folioEsperado(cotizacion);
+  const { pdf, nombresEnCarpeta } = await buscarPdfCotizacion({
     folderId: cotizacion.drive_folder_id,
-    folio: cotizacion.folio,
+    folio: esperado,
   });
   if (!pdf) {
     throw new Error(
-      `No se encontró el PDF en la carpeta de la cotización. Genera el PDF con el nombre "${cotizacion.folio} …" y vuelve a intentar`,
+      `No se encontró el PDF en la carpeta de la cotización. Genera el PDF con el nombre "${esperado} …" y vuelve a intentar. ${queHabia(nombresEnCarpeta)}`,
     );
   }
 

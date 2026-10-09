@@ -11,7 +11,7 @@
 
 **ERP legacy (origen):** ~30,000 líneas de Google Apps Script sobre Google Sheets + Drive + MailApp. Tres bloques grandes:
 
-- **Cotizaciones:** folio `PCOTOP-NNN-AAAA-v`, versiones (filas ocultas), flujo PROCESO → REVISION → aprobación (hoja aparte) → ENVIADA → OC → ASIGNADA, envío por correo con PDF, carpetas Drive `NNN - AAAA` con plantillas Doc/Sheet, clientes/contactos, dashboard con métricas, historial 2024-2026.
+- **Cotizaciones:** folio `PCOTOP-NNN-AAAA` (v0) y `PCOTOP-NNN-AAAA-{version}` (v1+), p. ej. `PCOTOP-002-2026-1`, versiones (filas ocultas), flujo PROCESO → REVISION → aprobación (hoja aparte) → ENVIADA → OC → ASIGNADA, envío por correo con PDF, carpetas Drive `NNN - AAAA` con plantillas Doc/Sheet, clientes/contactos, dashboard con métricas, historial 2024-2026.
 - **OT / Control Operativo:** folio `OT NNN AA v`, carpeta Drive por OT, archivo Sheet "Control Operativo" por OT con pendientes `PD-###`, servicios `SRV-###` (fechas, equipo, fin de semana), responsables, documentos, avisos de vencimiento (3 avisos: −3, −1, +1 días), vínculo bidireccional con actividades del Weekly.
 - **Weekly / KPIs:** actividades `ACT-####` (semana lunes-domingo por fecha compromiso), solicitudes de reprogramación, ayudas entre áreas, comentarios, KPIs en 3 capas (plantilla → asignación → evaluación por periodo con snapshot), resumen automático de viernes, notificaciones por correo.
 
@@ -37,7 +37,7 @@ Decisiones confirmadas con Guillermo el 27/08/2026.
 
 **D8 — Histórico 2024 pospuesto** (✅ confirmado). El bloque de historial multi-año (validación 2024, ajustes, captura de montos desde PDFs, actas) queda fuera de estas fases; se decidirá después si se migra o se queda como consulta en Sheets. El historial 2025/2026 sí queda cubierto: los datos vivirán en DynamoDB desde la importación.
 
-**D9 — Folios y estados se conservan tal cual** (`PCOTOP-NNN-AAAA-v`, `OT` + número + año + versión, `PD-###`, `ACT-####`, `SRV-###`, `SOL-####`, `AYU-####`; estatus PROCESO/REVISION/ENVIADA/ASIGNADA, etc.), para que el equipo no cambie de vocabulario y los datos importados cuadren. Los contadores de folio se implementan con ítems `COUNTER#` y updates atómicos (adiós "max+1" leyendo toda la hoja).
+**D9 — Folios y estados se conservan tal cual** (`PCOTOP-NNN-AAAA-{version}`, p. ej. `PCOTOP-002-2026-1`; `OT` + número + año + versión, `PD-###`, `ACT-####`, `SRV-###`, `SOL-####`, `AYU-####`; estatus PROCESO/REVISION/ENVIADA/ASIGNADA, etc.), para que el equipo no cambie de vocabulario y los datos importados cuadren. Los contadores de folio se implementan con ítems `COUNTER#` y updates atómicos (adiós "max+1" leyendo toda la hoja).
 
 **D10 — Bitácora unificada.** Ítem `BITACORA` por evento (acción, usuario, detalle, referencia), TTL opcional. Cubre auditoría, "Log Envios" y la memoria de avisos enviados (`ACT-X|-3`).
 
