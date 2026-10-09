@@ -33,10 +33,13 @@ el correcto, se usa el correcto.
 
 ## 2. Correrlo
 
-Son cuatro pasos y el orden importa. **El 4 es obligatorio en producción y está
-prohibido en cualquier otra base.**
+Son cinco pasos y el orden importa. **El 0 es obligatorio antes de cargar
+producción. El 4 es obligatorio en producción y está prohibido en cualquier
+otra base.**
 
 ```bash
+# 0. CORTE. No es un comando: es una decisión de operación. Ver abajo.
+
 # 1. REPORTE. No escribe nada, no necesita --destino.
 #    De aquí sale el número de clientes nuevos que pide el paso 2.
 pnpm importar:2026
@@ -52,6 +55,32 @@ pnpm importar:2026 --aplicar --destino=ep-xxxx.neon.tech --limpiar --clientes-nu
 # 4. CARPETAS DE DRIVE. SOLO EN PRODUCCIÓN. Ver la advertencia de abajo.
 pnpm backfill:carpetas --aplicar
 ```
+
+### Paso 0: el corte — obligatorio antes de cargar producción
+
+**Los Excel son una foto, no un espejo.** Entre que se exportan y que se carga,
+cualquier captura en Apps Script queda fuera y se pierde al recargar el año.
+
+Por eso la carga de producción empieza por un corte, en este orden y sin saltos:
+
+1. **Se deja de capturar en Apps Script.** Avisado a todo el equipo, con hora.
+   Desde ese momento nadie abre el ERP viejo para escribir.
+2. **Se actualizan los tres Excel** con lo último que quedó en Apps Script —
+   Cotizaciones, Proceso y Órdenes de Trabajo— y se copian a `importacion/`.
+3. **Se corre el reporte** (paso 1) y se revisa que salga **sin bloqueantes**.
+   Si hay que corregir algo en los Excel, se corrige y se vuelve a correr.
+4. **Solo entonces se carga** (pasos 2 y 3).
+5. **Desde ese momento todo se captura en el ERP.** Apps Script queda como
+   consulta histórica, de solo lectura.
+
+**El caso que lo motivó:** la cotización **267 tenía una v1 y una v2 en Apps
+Script que no estaban en el Excel**. Sin el corte, la recarga las habría
+borrado — no quedan "sin actualizar", desaparecen: `--limpiar` reemplaza el año
+completo y lo que no está en el Excel no existe después.
+
+No hay forma de que el script detecte esto. Compara los Excel contra sí mismos
+y contra la base que va a reemplazar; lo que vive solo en Apps Script le es
+invisible. La única defensa es el orden.
 
 ### Paso 4: obligatorio en producción, prohibido en pruebas
 
@@ -119,6 +148,9 @@ cosa.
 Cada corrida deja `importacion/reportes/<fecha>.json` con todo el detalle.
 
 ### Para cargar producción
+
+**Primero el corte** (paso 0): sin él se pierde lo que se haya capturado en
+Apps Script después de exportar los Excel.
 
 No se apunta el script a producción. Se crea una rama de Neon, se carga ahí, se
 revisa, y se promueve la rama. `PRODUCTION_DATABASE_HOST` existe para que el
