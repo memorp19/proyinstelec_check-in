@@ -9,6 +9,7 @@ vi.mock("@/src/lib/bitacora", () => ({ registrarBitacora: vi.fn() }));
 vi.mock("@/src/lib/cotizaciones-flujos", async (importarReal) => ({
   ...(await importarReal<typeof import("@/src/lib/cotizaciones-flujos")>()),
   registrarOcPosterior: vi.fn(),
+  modificarOcPosterior: vi.fn(),
 }));
 vi.mock("@/src/lib/cotizaciones", async (importarReal) => ({
   ...(await importarReal<typeof import("@/src/lib/cotizaciones")>()),
@@ -19,9 +20,9 @@ vi.mock("@/src/lib/cotizaciones", async (importarReal) => ({
 import { auth } from "@/src/auth";
 const mockAuth = auth as unknown as ReturnType<typeof vi.fn>;
 
-import { registrarOcPosterior } from "@/src/lib/cotizaciones-flujos";
+import { modificarOcPosterior, registrarOcPosterior } from "@/src/lib/cotizaciones-flujos";
 import { updateCotizacion } from "@/src/lib/cotizaciones";
-import { POST } from "@/app/api/erp/cotizaciones/[key]/oc-posterior/route";
+import { POST, PATCH as PATCH_OC } from "@/app/api/erp/cotizaciones/[key]/oc-posterior/route";
 import { PATCH } from "@/app/api/erp/cotizaciones/[key]/route";
 
 const KEY = "224-2026";
@@ -29,6 +30,10 @@ const params = { key: KEY };
 
 const CON_PERMISO = {
   user: { email: "ventas@proyinstelec.mx", rol: "campo", permisos: ["ot.crear", "modulo.cotizaciones"] },
+};
+/** Puede corregir una OC ya registrada: permiso aparte y más alto. */
+const PUEDE_MODIFICAR = {
+  user: { email: "jefa@proyinstelec.mx", rol: "campo", permisos: ["ot.oc.modificar"] },
 };
 /** Puede ver cotizaciones pero no tocar órdenes de trabajo. */
 const SOLO_LECTURA = {
@@ -156,5 +161,83 @@ describe("PATCH /cotizaciones/[key] — lista blanca de campos", () => {
 
     expect(res.status).toBe(400);
     expect(updateCotizacion).not.toHaveBeenCalled();
+  });
+});
+
+// Corregir una OC ya registrada reescribe el número con el que se factura y se
+// cobra, así que no basta con `ot.crear`.
+describe("PATCH /oc-posterior — modificar una OC ya registrada", () => {
+  const cuerpo = { ordenCompra: "4501122596", motivo: "El cliente la reemitió en planta" };
+
+  beforeEach(() => {
+    mockAuth.mockResolvedValue(PUEDE_MODIFICAR);
+    vi.mocked(modificarOcPosterior).mockResolvedValue({
+      version: 1,
+      folioOt: "OT224261",
+      anterior: "82043",
+      ordenCompra: "4501122596",
+    } as never);
+  });
+
+  it("modifica y devuelve la OC anterior y la nueva", async () => {
+    const res = await PATCH_OC(pedir(cuerpo, "oc-posterior", "PATCH"), { params });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ anterior: "82043", ordenCompra: "4501122596" });
+    expect(modificarOcPosterior).toHaveBeenCalledWith({
+      numero: 224,
+      anio: 2026,
+      ordenCompra: "4501122596",
+      motivo: "El cliente la reemitió en planta",
+      usuario: "jefa@proyinstelec.mx",
+    });
+  });
+
+  // `ot.crear` alcanza para registrar la que falta, no para cambiar la que hay.
+  it("403 sin ot.oc.modificar, aunque tenga ot.crear", async () => {
+    mockAuth.mockResolvedValue(CON_PERMISO);
+
+    const res = await PATCH_OC(pedir(cuerpo, "oc-posterior", "PATCH"), { params });
+
+    expect(res.status).toBe(403);
+    expect(modificarOcPosterior).not.toHaveBeenCalled();
+  });
+
+  it("400 sin motivo, con motivo en blanco o demasiado corto", async () => {
+    for (const motivo of [undefined, "", "   ", "ok", 123]) {
+      const res = await PATCH_OC(
+        pedir({ ordenCompra: "9140", motivo }, "oc-posterior", "PATCH"),
+        { params },
+      );
+      expect(res.status).toBe(400);
+    }
+    expect(modificarOcPosterior).not.toHaveBeenCalled();
+  });
+
+  it("400 con OC vacía", async () => {
+    const res = await PATCH_OC(
+      pedir({ ordenCompra: "  ", motivo: "corrección de captura" }, "oc-posterior", "PATCH"),
+      { params },
+    );
+    expect(res.status).toBe(400);
+  });
+
+  // No hay nada que modificar: es un alta, y el alta va por el POST.
+  it("409 si esa versión todavía no tiene OC", async () => {
+    vi.mocked(modificarOcPosterior).mockRejectedValue(
+      new Error("La v1 todavía no tiene orden de compra; regístrala en vez de modificarla"),
+    );
+
+    const res = await PATCH_OC(pedir(cuerpo, "oc-posterior", "PATCH"), { params });
+    expect(res.status).toBe(409);
+  });
+
+  it("422 si no hay versión ASIGNADA con OT", async () => {
+    vi.mocked(modificarOcPosterior).mockRejectedValue(
+      new Error("La cotización COT#044-2026 no tiene una versión ASIGNADA con orden de trabajo"),
+    );
+
+    const res = await PATCH_OC(pedir(cuerpo, "oc-posterior", "PATCH"), { params });
+    expect(res.status).toBe(422);
   });
 });

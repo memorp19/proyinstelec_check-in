@@ -170,8 +170,8 @@ function AltaCliente({ onCreado }: { onCreado: () => void }) {
       </div>
 
       {candidatos && (
-        <div className="bg-amber-500/10 border border-amber-400/20 rounded-xl p-3 space-y-2">
-          <p className="font-mono text-xs text-amber-300">
+        <div className="bg-amber/10 border border-amber/20 rounded-xl p-3 space-y-2">
+          <p className="font-mono text-xs text-amber">
             Hay empresas con nombre parecido. ¿El contacto pertenece a alguna de estas?
           </p>
           {candidatos.map((c) => (

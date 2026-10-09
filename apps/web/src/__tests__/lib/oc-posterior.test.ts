@@ -5,7 +5,7 @@ vi.mock("@/src/lib/bitacora", () => ({ registrarBitacora: vi.fn() }));
 
 import { getDb } from "@/src/db";
 import { registrarBitacora } from "@/src/lib/bitacora";
-import { registrarOcPosterior } from "@/src/lib/cotizaciones-flujos";
+import { modificarOcPosterior, registrarOcPosterior } from "@/src/lib/cotizaciones-flujos";
 import { dbFalso } from "../helpers/db-falso";
 
 function usarDb(resultados: unknown[] = []) {
@@ -116,5 +116,93 @@ describe("registrarOcPosterior", () => {
       ).rejects.toThrow("obligatoria");
     }
     expect(db.llamadas).toHaveLength(0);
+  });
+});
+
+describe("modificarOcPosterior", () => {
+  const CON_OC = { version: 1, folioOt: "OT224261", ordenCompra: "82043" };
+
+  it("reemplaza la OC en las dos tablas y deja el antes y el después", async () => {
+    const db = usarDb([[CON_OC], []]);
+
+    const r = await modificarOcPosterior({
+      numero: 224,
+      anio: 2026,
+      ordenCompra: "  4501122596 ",
+      motivo: "El cliente la reemitió en planta",
+      usuario: "ana@proyinstelec.mx",
+    });
+
+    expect(r).toEqual({
+      version: 1,
+      folioOt: "OT224261",
+      anterior: "82043",
+      ordenCompra: "4501122596",
+    });
+    expect(db.metodos()).toContain("batch");
+    const sets = db.llamadas.filter((l) => l.metodo === "set").map((l) => l.args[0]);
+    expect(sets).toHaveLength(2);
+    for (const s of sets) {
+      expect((s as Record<string, unknown>).ordenCompra).toBe("4501122596");
+    }
+  });
+
+  // Sin el motivo, un cambio de OC es indistinguible de un error de captura.
+  it("la bitácora guarda la anterior, la nueva, el motivo y quién", async () => {
+    usarDb([[CON_OC], []]);
+
+    await modificarOcPosterior({
+      numero: 224,
+      anio: 2026,
+      ordenCompra: "4501122596",
+      motivo: "El cliente la reemitió en planta",
+      usuario: "ana@proyinstelec.mx",
+    });
+
+    const [arg] = vi.mocked(registrarBitacora).mock.calls[0];
+    expect(arg.accion).toBe("COTIZACION_OC_MODIFICADA");
+    expect(arg.usuario).toBe("ana@proyinstelec.mx");
+    expect(arg.detalle).toContain("82043");
+    expect(arg.detalle).toContain("4501122596");
+    expect(arg.detalle).toContain("El cliente la reemitió en planta");
+  });
+
+  it("exige motivo, y uno de verdad", async () => {
+    const db = usarDb([[CON_OC], []]);
+
+    for (const motivo of ["", "   ", "ok"]) {
+      await expect(
+        modificarOcPosterior({ numero: 224, anio: 2026, ordenCompra: "9140", motivo, usuario: "a@x.mx" }),
+      ).rejects.toThrow("motivo es obligatorio");
+    }
+    expect(db.metodos()).not.toContain("batch");
+  });
+
+  // Sin OC previa esto es un alta, y el alta tiene su propia ruta con un
+  // permiso más bajo: confundirlas dejaría entrar un alta por aquí.
+  it("si todavía no hay OC, no es una modificación", async () => {
+    const db = usarDb([[{ version: 1, folioOt: "OT224261", ordenCompra: null }]]);
+
+    await expect(
+      modificarOcPosterior({
+        numero: 224, anio: 2026, ordenCompra: "9140",
+        motivo: "corrección de captura", usuario: "a@x.mx",
+      }),
+    ).rejects.toThrow("todavía no tiene orden de compra");
+
+    expect(db.metodos()).not.toContain("batch");
+  });
+
+  it("sin versión ASIGNADA con OT, avisa y no escribe", async () => {
+    const db = usarDb([[]]);
+
+    await expect(
+      modificarOcPosterior({
+        numero: 44, anio: 2026, ordenCompra: "9140",
+        motivo: "corrección de captura", usuario: "a@x.mx",
+      }),
+    ).rejects.toThrow("no tiene una versión ASIGNADA");
+
+    expect(db.metodos()).not.toContain("batch");
   });
 });
