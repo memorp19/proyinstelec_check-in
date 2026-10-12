@@ -1,0 +1,301 @@
+# Recarga de 2026 desde los controles en Excel
+
+Cómo correr `pnpm importar:2026`, qué decide y qué queda pendiente.
+
+La base de `app-pruebas` se cargó el 5 de octubre de 2026 con `INSERT`
+generados fuera del repositorio. Quedó con 12 órdenes de compra perdidas, 20
+versiones faltantes, estatus desactualizados y la OC/OT de la 002 escritas en la
+versión equivocada. En vez de parchar fila por fila, se recarga desde la fuente
+con un importador que vive aquí y que sirve igual para producción.
+
+---
+
+## 1. Las tres fuentes
+
+Los Excel se copian a mano a `importacion/`, que está en `.gitignore`: traen
+clientes, montos, folios y órdenes de compra reales y **nunca se versionan**.
+
+| Archivo | Hoja | Qué aporta |
+|---|---|---|
+| `control-cotizaciones-2026.xlsx` | `Cotizaciones 2026` | **Manda.** Cotizaciones, versión aceptada, estatus, OC y folio de OT |
+| `control-proceso-2026.xlsx` | `Proceso 2026` | Solo valida. Una fila **por factura** |
+| `control-ot-2026.xlsx` | `Ordenes de Trabajo 2026` | Valida el folio de OT y aporta **el estatus de la OT**, que no está en ningún otro lado |
+
+En los tres: encabezados en la fila 8, datos desde la 9, y la columna B marca
+las filas de datos (`PCOTOP` en los dos primeros, `OT` en el tercero).
+
+Si Proceso o el Control de OT discrepan de Cotizaciones, **se carga lo que dice
+Cotizaciones y la diferencia se reporta**. La única excepción es el folio de OT:
+si el de Cotizaciones no corresponde a su propia cotización y otra fuente trae
+el correcto, se usa el correcto.
+
+---
+
+## 2. Correrlo
+
+Son cinco pasos y el orden importa. **El 0 es obligatorio antes de cargar
+producción. El 4 es obligatorio en producción y está prohibido en cualquier
+otra base.**
+
+```bash
+# 0. CORTE. No es un comando: es una decisión de operación. Ver abajo.
+
+# 1. REPORTE. No escribe nada, no necesita --destino.
+#    De aquí sale el número de clientes nuevos que pide el paso 2.
+pnpm importar:2026
+
+# 2. ENSAYO. Ejecuta TODAS las escrituras contra la base real y revierte la
+#    transacción al final: comprueba tipos, restricciones y llaves sin dejar un
+#    solo renglón. Exige --destino porque escribe, aunque luego lo deshaga.
+pnpm importar:2026 --ensayo --destino=ep-xxxx.neon.tech --limpiar --clientes-nuevos=7
+
+# 3. CARGA, cuando el ensayo sale limpio.
+pnpm importar:2026 --aplicar --destino=ep-xxxx.neon.tech --limpiar --clientes-nuevos=7
+
+# 4. CARPETAS DE DRIVE. SOLO EN PRODUCCIÓN. Ver la advertencia de abajo.
+pnpm backfill:carpetas --aplicar
+```
+
+### Paso 0: el corte — obligatorio antes de cargar producción
+
+**Los Excel son una foto, no un espejo.** Entre que se exportan y que se carga,
+cualquier captura en Apps Script queda fuera y se pierde al recargar el año.
+
+Por eso la carga de producción empieza por un corte, en este orden y sin saltos:
+
+1. **Se deja de capturar en Apps Script.** Avisado a todo el equipo, con hora.
+   Desde ese momento nadie abre el ERP viejo para escribir.
+2. **Se actualizan los tres Excel** con lo último que quedó en Apps Script —
+   Cotizaciones, Proceso y Órdenes de Trabajo— y se copian a `importacion/`.
+3. **Se corre el reporte** (paso 1) y se revisa que salga **sin bloqueantes**.
+   Si hay que corregir algo en los Excel, se corrige y se vuelve a correr.
+4. **Solo entonces se carga** (pasos 2 y 3).
+5. **Desde ese momento todo se captura en el ERP.** Apps Script queda como
+   consulta histórica, de solo lectura.
+
+**El caso que lo motivó:** la cotización **267 tenía una v1 y una v2 en Apps
+Script que no estaban en el Excel**. Sin el corte, la recarga las habría
+borrado — no quedan "sin actualizar", desaparecen: `--limpiar` reemplaza el año
+completo y lo que no está en el Excel no existe después.
+
+No hay forma de que el script detecte esto. Compara los Excel contra sí mismos
+y contra la base que va a reemplazar; lo que vive solo en Apps Script le es
+invisible. La única defensa es el orden.
+
+### Paso 4: obligatorio en producción, prohibido en pruebas
+
+El importador **no escribe `drive_folder_id` ni `drive_folder_url`**: esos datos
+no están en ningún Excel, salen de buscar la carpeta en Drive.
+
+- **En producción es obligatorio.** Sin él, ninguna cotización de 2026 se puede
+  enviar al cliente: `buscarPdfCotizacion` necesita la carpeta, y la regla
+  endurecida ya no acepta "el único PDF de la carpeta". La carga queda completa
+  pero el ciclo comercial, roto.
+- **En una rama de Neon o en una base de pruebas, NO se corre.** `backfill:carpetas`
+  **crea carpetas de verdad en Drive**, y Drive es uno solo: no tiene ramas. Una
+  corrida desde una base de prueba ensucia el Drive real de la empresa con
+  carpetas que no corresponden a nada.
+
+### Qué más falta después de cargar
+
+El importador tampoco escribe `monto_mxn`, `monto_usd` ni `fecha_envio`. Los
+montos se capturan al elaborar la cotización y no están en el Control de
+Cotizaciones; la fecha de envío real tampoco. Se capturan desde la app conforme
+se usen.
+
+### Las guardas
+
+**`--destino` es obligatorio para escribir y tiene que ser idéntico al host que
+el script imprime.** `DATABASE_URL` apunta a lo que tenga el `.env.local` de
+quien ejecuta, y esto borra y recarga un año entero: teclear el host es la
+confirmación de que quien corre el comando sabe dónde está parado.
+
+**`--clientes-nuevos=N` también es obligatorio para escribir.** Es el número que
+ya salió en el reporte. Teclearlo convierte un aviso fácil de pasar por alto en
+una afirmación: si el Excel cambió y aparecen clientes que nadie revisó, la
+carga se detiene en vez de crearlos en silencio.
+
+El script **se niega a correr** si:
+
+- el host coincide con `PRODUCTION_DATABASE_HOST`;
+- ya hay cotizaciones de 2026 y no se pasó `--limpiar`;
+- el número de clientes nuevos no coincide con `--clientes-nuevos`;
+- queda un solo hallazgo **bloqueante**.
+
+### La carga es todo o nada
+
+No hay salto por cotización. Un bloqueante detiene la corrida entera: se
+corrige en el Excel y se vuelve a correr. Cargar "todo menos tres" dejaría el
+año a medias y sin forma de saber qué falta sin releer el reporte.
+
+### Qué NO borra `--limpiar`
+
+Reemplaza **cotizaciones, órdenes de trabajo y sus responsables**, que salen del
+Excel. **No toca `bitacora` ni `aprobaciones`**, y es deliberado:
+
+- La **aprobación** es por versión exacta y la da una persona. No está en ningún
+  Excel: borrarla dejaría 346 versiones sin una sola aprobación registrada.
+- La **bitácora** guarda envíos al cliente, correos y cambios de estatus que
+  ocurrieron de verdad. Y el filtro obvio se pasa de largo: `cotPk()` genera
+  `COT#002-2026`, así que un `LIKE '%-2026'` barre toda la historia de la app y
+  la sustituye por una línea por cotización.
+
+El script cuenta cuántas sobreviven y lo dice antes de escribir. **Conviene
+mirar ese número**: una aprobación es por versión exacta, así que si la recarga
+cambia qué es cada versión, una aprobación vieja puede quedar apuntando a otra
+cosa.
+
+Cada corrida deja `importacion/reportes/<fecha>.json` con todo el detalle.
+
+### Para cargar producción
+
+**Primero el corte** (paso 0): sin él se pierde lo que se haya capturado en
+Apps Script después de exportar los Excel.
+
+No se apunta el script a producción. Se crea una rama de Neon, se carga ahí, se
+revisa, y se promueve la rama. `PRODUCTION_DATABASE_HOST` existe para que el
+error de teclear la URL equivocada no sea posible.
+
+---
+
+## 3. Qué decide el importador
+
+**Folios.** Se calculan con `folioCotizacion`, nunca se leen del Excel:
+`PCOTOP-002-2026` para la v0 y `PCOTOP-002-2026-1` para la v1. La notación `-v`
+que apareció en la carga anterior no puede volver a producirse.
+
+**Órdenes de compra.** Se leen crudas. Varias están guardadas como número con
+formato de fecha —`4501122596` se ve como una fecha de 1920— y el XML guarda las
+largas en notación científica. El `-` del Excel significa "no hay OC" y se
+carga como `NULL`. Una celda con ` / ` son dos OC y se guardan tal cual; ojo
+que `Co0001/150/26/255492` es **una sola** OC con diagonales dentro.
+
+**Estatus de OT.** Del Control de OT, con el mapeo `PROCESO → En Proceso`,
+`REVISIÓN → Revisión`, `TERMINADO → Cerrado`. Un valor fuera de ese catálogo no
+se adivina: esa OT no se carga, porque cargarla con un estatus inventado la
+dejaría inmovilizable desde la app.
+
+**Responsables de OT.** Vacíos. No hay fuente: ninguno de los tres Excel los
+trae, y `ot_responsables` estaba vacía también en la carga anterior.
+
+**Fecha de la OT.** Se escribe explícitamente con la **fecha de entrega** de la
+versión asignada, y si no la hay, con la de solicitud (se reporta). Dejarla al
+`defaultNow()` de la columna pondría a las 93 OT de 2026 la fecha del día de la
+carga, y cualquier "antigüedad de la OT" o "OT del mes" pasaría a medir cuándo
+se corrió el importador.
+
+**NO ASIGNADA.** Se aplica durante la carga: las versiones en ENVIADA de una
+cotización que ya tiene una ASIGNADA quedan en NO ASIGNADA. Si por encima de la
+asignada hay una versión viva (PROCESO, REVISION, DEPENDIENTE), no se toca —
+seguiría tapándola en el listado— y se reporta como bloqueante.
+
+**Clientes.** **Nunca** se descarta una fila porque el cliente no se resuelva.
+Así se perdieron nueve filas en la carga anterior: las 327 que entraron tienen
+`cliente_id` no nulo y las demás desaparecieron sin aviso. Si el cliente no está
+en el catálogo, se da de alta. `scripts/alias-clientes.json` lleva los renombres
+que no salen de normalizar texto, porque son decisiones humanas: CENTRO SANTA FE
+es ADMINISTRADORA DE CENTROS COMERCIALES SANTA FE, y los planteles UVM facturan
+a la matriz.
+
+**Fechas.** `fecha_solicitud` es `NOT NULL`. Si falta, **la carga se detiene**:
+rellenarla con la fecha de hoy es lo que dejó a la 002 v0 con un dato falso que
+parece bueno. El reporte distingue la celda vacía de la capturada como texto —
+la 136 v2 dice `19/5/0226`, con el año mal, y Excel nunca la convirtió.
+
+**Bitácora.** Una entrada por cotización, `COTIZACION_IMPORTADA`, con el detalle
+"carga inicial desde Control de Cotizaciones 2026". No una por versión: lo que
+pasó es una carga, no un cambio de estatus fila por fila.
+
+---
+
+## 4. Lo que se corrige en el Excel y lo que se ajusta aquí
+
+La línea está en quién tiene la razón.
+
+**Un error de captura se corrige en el Excel**, donde lo ve quien lo mantiene.
+El reporte tiene que salir **sin bloqueantes**, y esos bloqueantes son errores:
+una fecha escrita como texto, dos filas con la misma versión, dos cotizaciones
+reclamando el mismo folio de OT. Si el importador los "arreglara", el Excel
+seguiría mal y la próxima carga volvería a tropezar.
+
+**`scripts/ajustes-importacion-2026.json` es para lo contrario**: filas donde el
+Excel dice la verdad para su propio uso y aun así el ERP necesita otra cosa. Se
+lee después de los Excel y antes de que ninguna regla mire las filas.
+
+Cada entrada identifica la fila con `cotizacion`, `anio` y `version`, cambia
+solo los campos que nombra (`estatus`, `ordenCompra`, `folioOt`) y lleva un
+`motivo` **obligatorio** — es lo que se revisa en el PR; sin él esto sería una
+lista de excepciones sin dueño.
+
+Las cuatro entradas actuales son de dos clases:
+
+- **224, 232 y 254** pasan a `ASIGNADA` sin OC. El trabajo se ejecutó y la orden
+  de compra del cliente no ha llegado; en el control siguen en `ENVIADA` hasta
+  que llegue. No es un error del Excel: para el control comercial es correcto.
+- **La 178 v2** pasa a `ASIGNADA` con `OT178262`. Los controles conservan
+  `OT178261` —el folio de la v1, con el que ya se emitió el reporte
+  `PREPOP-OT178261`— así que el ajuste declara esa **equivalencia** con
+  `equivalenciaOt`. Sin ella, la validación cruzada vería una discrepancia y el
+  estatus de la OT se perdería, porque el Control de OT no tiene fila para la
+  v2. La v0 y la v1 quedan `NO ASIGNADA` por la regla normal.
+
+Un ajuste que apunta a una fila inexistente, o que ya no cambia nada, **avisa y
+no se aplica**: quiere decir que el Excel ya se corrigió y la entrada sobra. No
+bloquea —la carga no se detiene por una excepción que dejó de hacer falta— pero
+el archivo tampoco acumula entradas muertas en silencio. Aplicar dos veces el
+mismo archivo da el mismo resultado.
+
+### "ASIGNADA sin orden de compra" no es un problema
+
+Son 22 cotizaciones con el trabajo ejecutado y la OC pendiente del cliente. El
+reporte las enumera bajo **Informativo**, separadas de los avisos, para que no
+hagan ruido sobre lo que sí hay que mirar.
+
+**Ojo con lo que viene después:** hoy la app **no** permite capturar esa OC más
+tarde. `generarOT` exige que el estatus sea `ENVIADA`
+([`cotizaciones-flujos.ts`](../apps/web/src/lib/cotizaciones-flujos.ts)), y el
+botón "Ingresar OC" solo se dibuja para cotizaciones en `ENVIADA` sin OT. Una
+vez cargadas como `ASIGNADA`, esas 22 quedan sin vía para registrar su OC desde
+la aplicación. Está pendiente de decidir.
+
+---
+
+## 5. Facturas — pendiente, no está en este importador
+
+El Control de Proceso trae 476 filas, **una por factura**: 94 con OT y 88 con
+factura. No se cargan todavía porque **no existe tabla de facturas**.
+
+Propuesta para su propio PR:
+
+```
+facturas
+  folio            text PK        -- PFCOP-A115-OT001260
+  folio_ot         text NOT NULL  → ordenes_trabajo.folio
+  reporte          text           -- PREPOP-OT001260
+  reporte_gastos   text           -- PREGOP-OT001260
+  subtotal_mxn, iva_mxn, total_mxn   numeric(14,2)
+  subtotal_usd, iva_usd, total_usd   numeric(14,2)
+  complemento_pago text           -- B125
+  estatus_pago     text           -- PAGADA | PENDIENTE
+  fecha_pago       timestamptz
+```
+
+Cuatro decisiones que ya están tomadas y conviene no volver a discutir:
+
+1. **MXN y USD nunca se suman.** Son importes independientes —mano de obra
+   nacional y equipo importado— y sumarlos exigiría inventar un tipo de cambio.
+   En los datos de 2026 no hay una sola factura con las dos monedas: 84 en pesos
+   y 4 en dólares.
+2. **El monto facturado no es el monto cotizado.** Son columnas distintas en
+   tablas distintas; que coincidan es lo normal, pero no es una regla.
+3. **La factura se liga a la OT por la columna K de su fila, nunca parseando el
+   folio de la factura.** Las facturas A96 y A165 de la 002 dicen `OT002260` y
+   pertenecen a `OT002261`; la de la 254 dice `OT254250`, con el año anterior.
+   El folio de la factura es un nombre, no una llave foránea.
+4. **`PAGADA` y `PAGADO` son lo mismo**, y hoy la fecha viene pegada al estatus
+   en la misma celda (`"PAGADA 15/05/2026"`). Se separan en `estatus_pago` y
+   `fecha_pago`.
+
+Un caso que necesita a una persona antes de cargar nada: **la factura A230 está
+en las filas de la 089 pero cita `OT090260`, que no existe** — la 090 es
+`OT090261`.
