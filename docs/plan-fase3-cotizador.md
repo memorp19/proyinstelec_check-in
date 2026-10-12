@@ -22,9 +22,13 @@ captura en el ERP", y mientras el ERP no pueda sacar una cotización de
 principio a fin, esa frase no se puede cumplir. Apps Script sigue vivo hasta
 que el PDF salga de aquí.
 
-### Las cuatro decisiones que ya están tomadas
+### Las decisiones que ya están tomadas
 
-1. **El cotizador se migra completo.** No hay versión reducida.
+**De alcance:**
+
+1. **El cotizador se migra completo.** No hay versión reducida, y **el corte a
+   producción espera** a que el ERP pueda producir una cotización de principio
+   a fin.
 2. **Los importes se congelan al enviar una versión.** Cambiar un costo del
    catálogo después solo afecta a versiones nuevas. Es el pendiente que el
    propio Apps Script reconoce sin resolver (`PROCESO_COTIZACIONES.md:156`).
@@ -32,6 +36,43 @@ que el PDF salga de aquí.
    Apps Script, vía la API de Docs, para que el documento salga idéntico.
 4. **Se guarda el ID del PDF en la base.** El nombre queda de respaldo, no de
    llave.
+
+**De cálculo** — todas implementadas y probadas en `src/lib/cotizador/`:
+
+5. **Concepto**: `costo × cantidad × (1 + utilidad%)`. La utilidad es **por
+   concepto**; en la práctica solo se usa en materiales.
+6. **Gastos**: modos `IGUAL`, `PROPORCIONAL` y `MANUAL`. Se reparten primero en
+   su moneda y **después** se convierten. La última partida absorbe la
+   diferencia del redondeo. Una partida puede quedar **fuera** del reparto
+   general (`recibeGastosGenerales: false`) y un gasto puede ir **entero a una
+   partida** (`destino: { partida }`) — es lo que representa el caso de la 068.
+7. **Asesoría**: UN solo porcentaje global, repartido **siempre en proporción
+   al costo** de cada partida (conceptos con utilidad + gastos asignados), sin
+   importar el modo de gastos. Por omisión 0 %. **Esto cambia la regla de Apps
+   Script**, que la reparte por partes iguales en `IGUAL` y `MANUAL`
+   (`COT_03:684-688`); ver §2.6.
+8. **Ajuste por partida**: monto explícito y visible, nunca escondido en una
+   fórmula.
+9. **Redondeo** a dos decimales en cada paso.
+   `precioUnitario = round(total / cantidad)`, `importe = unitario × cantidad`,
+   `subtotal = Σ importes`, `iva = round(subtotal × 0.16)`,
+   `total = subtotal + iva`. **El total es siempre la suma de lo que ve el
+   cliente.**
+10. **IVA 16 % por bloque de moneda.** MXN y USD nunca se suman.
+11. **Tipo de cambio por versión**, con origen `BANXICO` o `PREFERENTE` (este
+    con motivo obligatorio). El motor lo recibe como dato: no consulta Banxico.
+    Sin tipo de cambio no reparte gastos a partidas de otra moneda, y avisa.
+12. **Estudios por horas**:
+    `horas = horas/día × días/semana × ingenieros × semanas`, y la regla de
+    nodos de `COT_03`. `BASE_NODOS` sale de la configuración (10 por omisión).
+    El motor **exige los parámetros explícitos**: nunca los toma del catálogo
+    por su cuenta.
+13. **Un solo total.** El subtotal por partida queda para un PR posterior.
+14. **Nombres**: *costo total* para el panel interno (costo + gastos, sin
+    asesoría) y *subtotal* solo para lo que ve el cliente.
+15. **Avisos, no errores**: concepto o gasto con costo 0.
+16. **Importe con letra**: función pura, en pesos y en dólares. Nunca se
+    escribe a mano.
 
 La cuarta merece una nota, porque corrige un defecto real: la app nueva busca el
 PDF **por nombre** y Apps Script lo busca **por ID** (`COT_05:667`), usando el
@@ -329,58 +370,62 @@ total, se avisa cuánto falta (`COT_03:625-634`).
 Sin esto, el total de los gastos no cuadra con la suma de lo repartido y el
 documento muestra dos números distintos para lo mismo.
 
-### 2.6 La asesoría va dentro del precio, no como renglón
+### 2.6 La asesoría va dentro del precio — y aquí cambiamos la regla
 
-`COT_03:656-702`. Es la regla que más sorprende y la que no se debe "mejorar".
+`COT_03:656-702`. La parte que no se debe "mejorar":
 
 > En el documento no aparece como renglón aparte: va dentro del precio unitario
 > que ve el cliente. Es lo que hacía el Excel con `X8*1.1`, y por eso ninguna de
 > las cotizaciones reales tiene una línea de asesoría.
 
-Por omisión **0 %** (`COT_03:154`). Si pasa de 100 se avisa, pero se respeta.
+Por omisión **0 %**. Si pasa de 100 se avisa, pero se respeta.
 
-Se calcula sobre el subtotal —costo directo + gasto asignado + ajuste— y se
-reparte con el **mismo criterio que los gastos** si el reparto es
-`PROPORCIONAL`; en `IGUAL` y `MANUAL` va por partes iguales, porque *"un reparto
-manual responde a dónde se gastó, y eso no aplica a la asesoría"*
-(`COT_03:684-688`).
+**Lo que sí cambia: cómo se reparte.** Apps Script la reparte con el mismo
+criterio que los gastos —proporcional si los gastos fueron proporcionales, y
+**por partes iguales** en `IGUAL` y `MANUAL` (`COT_03:684-688`)—. Aquí es
+**siempre proporcional al costo de la partida**.
 
-En modo `POR_PARTIDA` cada partida lleva su propio porcentaje y no hay reparto.
+El motivo es que la práctica manual en los Excel reales es poner el **mismo
+porcentaje a cada partida**, y un porcentaje plano sobre cada base es
+matemáticamente idéntico a repartir el total en proporción a esas bases. El
+reparto por partes iguales hace otra cosa: la partida barata subsidia a la cara.
 
-### 2.7 El subtotal y el total de cada partida
+Con dos partidas de 27,600 y 25,800 y 10 % de asesoría:
 
-`COT_03:674-676` y `COT_03:708-712`.
+| | Proporcional (esta regla) | Partes iguales (Apps Script) |
+|---|---|---|
+| Partida 1 | **30,360** | 30,270 |
+| Partida 2 | **28,380** | 28,470 |
+
+Está probado en el caso dorado C, que afirma las dos cifras: la que se adopta y
+la que se descarta.
+
+### 2.7 El cierre: el total es lo que el cliente puede sumar
 
 ```
-subtotal       = round(costoDirecto + gastoAsignado + ajuste)
-total          = round(subtotal + asesoria)
+costoTotal     = round(costoConceptos + gastoAsignado)     ← panel interno
+total          = round(costoTotal + asesoria + ajuste)
 precioUnitario = cantidad > 0 ? round(total / cantidad) : 0
+importe        = round(precioUnitario × cantidad)          ← lo que ve el cliente
+subtotal       = round(Σ importes)
+iva            = round(subtotal × 0.16)
+total          = round(subtotal + iva)
 ```
 
-> P1: directo $10,000.00 + gasto $2,250.00 + ajuste $0.00 = **$12,250.00**
-> asesoría 10 % repartida igual → $2,225.00 · total = **$14,475.00**
-> cantidad 1 → precio unitario **$14,475.00**
+**El importe se recompone desde el unitario redondeado**, y no es lo mismo que
+el total de la partida. Si el cliente multiplica lo que ve por la cantidad y
+suma, le tiene que dar el subtotal impreso. El Excel de la 070 sumaba los
+totales internos y daba **un centavo de diferencia** contra su propio PDF.
 
-### 2.8 IVA 16 % por bloque de moneda
+> Partida de 1,000.00 en cantidad 3 → unitario round(333.333…) = **333.33**
+> importe = 333.33 × 3 = **999.99**, no 1,000.00
 
-`COT_03:743-753`. Un bloque por cada moneda que aparezca. **MXN y USD nunca se
-suman.**
+**IVA 16 % por bloque de moneda**, y MXN y USD nunca se suman. Mientras el modo
+sea "un solo total" (decisión 13) hay un único bloque; el día que entre el
+modo por partida, cada moneda cierra el suyo.
 
-```
-baseGravable = round(subtotal + asesoria)
-iva          = round(baseGravable × 0.16)
-total        = round(baseGravable + iva)
-```
-
-> Bloque MXN: subtotal $44,500.00 + asesoría $4,450.00 = base **$48,950.00**
-> IVA = round(48,950 × 0.16) = **$7,832.00** · total = **$56,782.00**
-
-El `porcentajeAsesoria` del bloque se **recalcula** como
-`asesoria / subtotal × 100` en vez de arrastrar el capturado: con reparto
-proporcional y varias monedas, el efectivo del bloque no es el nominal.
-
-Los bloques **acumulan** lo que ya llevan las partidas; no vuelven a aplicar la
-asesoría. Hacerlo la aplicaría dos veces (`COT_03:740-742`).
+> Subtotal $1,046,113.00 → IVA round(× 0.16) = **$167,378.08**
+> total = **$1,213,491.08**  *(caso dorado A, al centavo contra el PDF)*
 
 ### 2.9 Avisos que no bloquean
 
@@ -664,18 +709,26 @@ importador desde `Cat_Servicios`, y pantalla de solo lectura.
 **Probable por sí mismo:** el catálogo se ve en pantalla y el importador reporta
 sin escribir. Nada más lo usa todavía.
 
-### PR 2 · El cálculo, puro
+### PR 2 · El cálculo, puro ✅ **hecho**
 
-`src/lib/cotizador-calculo.ts` con `calcularCotizacion` entera: costo de
-concepto en sus cuatro formas, prorrateo con sus tres repartos y su conversión,
-asesoría, bloques por moneda. **Sin base de datos y sin pantalla.**
+`src/lib/cotizador/` — `calculo.ts`, `letras.ts`, `tipos.ts`. Sin base de datos
+y sin pantalla.
 
-**Probable por sí mismo:** es el PR con más tests del proyecto. Cada regla de §2
-con su ejemplo numérico, y los casos límite — redondeo que no cuadra, partida
-sin tipo de cambio, gasto dentro de partida.
+Fue antes que el modelo a propósito: el cálculo es lo que hay que acertar, y se
+prueba sin decidir una sola columna. Está verificado contra cuatro
+**casos dorados** reconstruidos celda por celda desde los Excel reales —no desde
+los totales del PDF—, y cuadra **al centavo**:
 
-Va antes que el modelo a propósito: el cálculo es lo que hay que acertar, y
-puede probarse sin decidir una sola columna.
+| Caso | Qué prueba |
+|---|---|
+| **068** | Once partidas, dos monedas, gastos generales y propios, seis ajustes. Subtotal 1,046,113.00 · IVA 167,378.08 · total 1,213,491.08 |
+| **070** | Tres partidas, asesoría 10 %, ajuste de veinte centavos. Total 184,647.64 |
+| **450** | La regla nueva de asesoría contra la de Apps Script |
+| Estudios | AR001 = 9,600 y AR002 = 80,000 por horas |
+
+Más el importe con letra, que corrige dos defectos del sistema anterior: los
+dólares cerraban con `M.N.` y el redondeo del centavo no coincidía con el del
+cálculo.
 
 ### PR 3 · El modelo y el armado
 
