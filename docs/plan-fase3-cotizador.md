@@ -74,6 +74,30 @@ que el PDF salga de aquí.
 16. **Importe con letra**: función pura, en pesos y en dólares. Nunca se
     escribe a mano.
 
+### El importe con letra corrige tres defectos del sistema anterior
+
+Es el renglón que el cliente compara contra la cifra y el que un revisor usa
+para cazar un dedazo, así que las tres cosas importan:
+
+1. **Los dólares cerraban con `M.N.`** — `… DÓLARES AMERICANOS 24/100 M.N.`
+   (`COT_05:276`). *M.N.* es **moneda nacional**: decirlo de un importe en
+   dólares afirma dos monedas distintas en el mismo renglón, y es el tipo de
+   contradicción que invalida un documento. Ahora cierra con `USD`:
+   `… DÓLARES 50/100 USD`.
+2. **Los veintipico perdían el acento.** `'VEINTI' + UNIDADES[u]`
+   (`COT_05:243`) produce `VEINTIUN` y `VEINTIDOS`; se escriben **VEINTIÚN**,
+   **VEINTIDÓS**, **VEINTITRÉS** y **VEINTISÉIS**. En esa misma línea hay un
+   `.toLowerCase().toUpperCase()` que no hace nada, señal de que alguien ya
+   había intentado arreglarlo. El PDF de la 250 llega más lejos y escribe
+   "VEINTE Y UN".
+3. **El centavo se redondeaba distinto que el cálculo.** La letra y la cifra
+   usan ahora la misma función: si cada una redondeara por su cuenta, la letra
+   podría decir 67 centavos debajo de una cifra que dice 68.
+
+Los doce totales de 2026 están en el test, y **dos traen la letra mal impresa**
+—la 068 y la 269 con el importe equivocado, la 250 con "VEINTE Y UN"—. El test
+espera la forma correcta: es exactamente para lo que existe la función.
+
 La cuarta merece una nota, porque corrige un defecto real: la app nueva busca el
 PDF **por nombre** y Apps Script lo busca **por ID** (`COT_05:667`), usando el
 nombre solo como respaldo (`COT_01:1228`). Por eso a Apps Script nunca le dolió

@@ -75,9 +75,12 @@ const entrada068: EntradaCotizacion = {
   // El "+5%" que el Excel aplica en la columna AD.
   asesoriaPct: 5,
   partidas: [
-    // Las filas del Excel van en el comentario. El orden del arreglo es el del
-    // PDF, que NO coincide con la columna A de la hoja: ahí la de tierras es la
-    // 9 y en el documento sale en séptimo lugar.
+    // Las filas del Excel van en el comentario.
+    //
+    // El orden del arreglo es el del PDF, que es el bueno: es lo que vio el
+    // cliente. NO coincide con la columna A de la hoja —ahí la de tierras es la
+    // 9 y en el documento sale en séptimo lugar—, así que esa columna no es la
+    // que ordena el documento y no sirve para reconstruirlo.
     {
       id: "P1", orden: 1, titulo: "Transformadores de potencia", cantidad: 2, unidad: "servicios",
       // Filas 8-19. R8 = 2.

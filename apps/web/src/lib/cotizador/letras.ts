@@ -15,9 +15,23 @@ const UNIDADES = [
   "DIECISIETE", "DIECIOCHO", "DIECINUEVE", "VEINTE",
 ];
 
+/** El hueco del veinte lo cubre `VEINTIS`, que va pegado. */
 const DECENAS = [
-  "", "", "VEINTI", "TREINTA", "CUARENTA", "CINCUENTA", "SESENTA", "SETENTA",
+  "", "", "", "TREINTA", "CUARENTA", "CINCUENTA", "SESENTA", "SETENTA",
   "OCHENTA", "NOVENTA",
+];
+
+/**
+ * Del veintiuno al veintinueve se escriben en una sola palabra, y cuatro llevan
+ * acento: veintiún, veintidós, veintitrés y veintiséis.
+ *
+ * El sistema anterior los armaba con `'VEINTI' + UNIDADES[u]`, lo que daba
+ * VEINTIUN y VEINTIDOS sin acento (`COT_05:243`, donde además hay un
+ * `.toLowerCase().toUpperCase()` que no hace nada). Van escritos.
+ */
+const VEINTIS = [
+  "", "VEINTIÚN", "VEINTIDÓS", "VEINTITRÉS", "VEINTICUATRO", "VEINTICINCO",
+  "VEINTISÉIS", "VEINTISIETE", "VEINTIOCHO", "VEINTINUEVE",
 ];
 
 const CENTENAS = [
@@ -46,8 +60,8 @@ export function centenaEnLetra(n: number): string {
     } else {
       const d = Math.floor(resto / 10);
       const u = resto % 10;
-      // El veintipico va pegado: VEINTIUNO, VEINTIDÓS… y no "VEINTI Y DOS".
-      texto += d === 2 ? (u ? "VEINTI" + UNIDADES[u] : "VEINTE") : DECENAS[d] + (u ? " Y " + UNIDADES[u] : "");
+      // El veintipico va pegado y con su acento; del treinta en adelante, con Y.
+      texto += d === 2 ? (u ? VEINTIS[u] : "VEINTE") : DECENAS[d] + (u ? " Y " + UNIDADES[u] : "");
     }
   }
   return texto;
@@ -60,9 +74,9 @@ export function centenaEnLetra(n: number): string {
  * facturas: `… PESOS 08/100 M.N.`
  *
  * **Corrige un defecto del sistema anterior**, que cerraba con `M.N.` también
- * en dólares (`… DÓLARES AMERICANOS 24/100 M.N.`). M.N. es *moneda nacional*:
- * decirlo de un importe en dólares es afirmar dos monedas distintas en el mismo
- * renglón. Aquí los dólares cierran con `USD`.
+ * en dólares (`… DÓLARES AMERICANOS 24/100 M.N.`, `COT_05:276`). M.N. es
+ * *moneda nacional*: decirlo de un importe en dólares afirma dos monedas
+ * distintas en el mismo renglón. Aquí los dólares cierran con `USD`.
  */
 export function importeEnLetra(monto: number, moneda: Moneda = "MXN"): string {
   // Se redondea con la MISMA función que el cálculo. Si cada uno redondeara a
@@ -73,7 +87,8 @@ export function importeEnLetra(monto: number, moneda: Moneda = "MXN"): string {
   const centavos = Math.round((v - entero) * 100);
   const cc = String(centavos).padStart(2, "0");
 
-  const sufijo = moneda === "USD" ? " DÓLARES AMERICANOS " + cc + "/100 USD" : " PESOS " + cc + "/100 M.N.";
+  const sufijo =
+    moneda === "USD" ? " DÓLARES " + cc + "/100 USD" : " PESOS " + cc + "/100 M.N.";
 
   if (entero === 0) return "CERO" + sufijo;
 
