@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { importeEnLetra, centenaEnLetra } from "@/src/lib/cotizador";
+import { importeEnLetra, centenaEnLetra, MONTO_MAXIMO_EN_LETRA } from "@/src/lib/cotizador";
 
 /**
  * Los doce totales de los PDF de 2026, verificados contra el documento.
@@ -11,6 +11,7 @@ import { importeEnLetra, centenaEnLetra } from "@/src/lib/cotizador";
  */
 const TOTALES: Array<[string, number, string]> = [
   ["068", 1213491.08, "UN MILLÓN DOSCIENTOS TRECE MIL CUATROCIENTOS NOVENTA Y UN PESOS 08/100 M.N."],
+  ["070", 184647.64, "CIENTO OCHENTA Y CUATRO MIL SEISCIENTOS CUARENTA Y SIETE PESOS 64/100 M.N."],
   ["165", 58940.76, "CINCUENTA Y OCHO MIL NOVECIENTOS CUARENTA PESOS 76/100 M.N."],
   ["189", 54213.76, "CINCUENTA Y CUATRO MIL DOSCIENTOS TRECE PESOS 76/100 M.N."],
   ["228", 87754.0, "OCHENTA Y SIETE MIL SETECIENTOS CINCUENTA Y CUATRO PESOS 00/100 M.N."],
@@ -24,18 +25,14 @@ const TOTALES: Array<[string, number, string]> = [
 ];
 
 describe("importeEnLetra · los doce totales de los PDF", () => {
+  it("son doce", () => expect(TOTALES).toHaveLength(12));
+
   it.each(TOTALES)("%s — %d", (_folio, monto, letra) => {
     expect(importeEnLetra(monto)).toBe(letra);
   });
 });
 
 describe("importeEnLetra · los totales calculados", () => {
-  it("184,647.64 — el total de la 070", () => {
-    expect(importeEnLetra(184647.64)).toBe(
-      "CIENTO OCHENTA Y CUATRO MIL SEISCIENTOS CUARENTA Y SIETE PESOS 64/100 M.N.",
-    );
-  });
-
   it("65,841.60 — el total de la 450", () => {
     expect(importeEnLetra(65841.6)).toBe(
       "SESENTA Y CINCO MIL OCHOCIENTOS CUARENTA Y UN PESOS 60/100 M.N.",
@@ -45,8 +42,52 @@ describe("importeEnLetra · los totales calculados", () => {
 
 describe("importeEnLetra · las formas que se equivocan a mano", () => {
   it("un millón es singular; de dos en adelante, MILLONES", () => {
-    expect(importeEnLetra(1000000)).toBe("UN MILLÓN PESOS 00/100 M.N.");
-    expect(importeEnLetra(2000000)).toBe("DOS MILLONES PESOS 00/100 M.N.");
+    expect(importeEnLetra(1000000)).toBe("UN MILLÓN DE PESOS 00/100 M.N.");
+    expect(importeEnLetra(2000000)).toBe("DOS MILLONES DE PESOS 00/100 M.N.");
+  });
+
+  /**
+   * Los millones exactos piden la preposición: "UN MILLÓN DE PESOS". Con algo
+   * en medio, no: "UN MILLÓN DOSCIENTOS MIL PESOS".
+   */
+  it("el DE aparece solo cuando los millones son exactos", () => {
+    expect(importeEnLetra(1000000)).toContain("MILLÓN DE PESOS");
+    expect(importeEnLetra(1200000)).toBe("UN MILLÓN DOSCIENTOS MIL PESOS 00/100 M.N.");
+    expect(importeEnLetra(1000001)).toBe("UN MILLÓN UN PESOS 00/100 M.N.");
+    // Los centavos no rompen la exactitud del entero.
+    expect(importeEnLetra(1000000.5)).toBe("UN MILLÓN DE PESOS 50/100 M.N.");
+  });
+
+  // El sistema anterior hacía `Math.floor(entero / 1000000)` y con mil millones
+  // obtenía 1000, produciendo "MIL MILLÓN".
+  it("los miles de millones se dicen MIL MILLONES", () => {
+    expect(importeEnLetra(1_000_000_000)).toBe("MIL MILLONES DE PESOS 00/100 M.N.");
+    expect(importeEnLetra(2_000_000_000)).toBe("DOS MIL MILLONES DE PESOS 00/100 M.N.");
+    expect(importeEnLetra(1_500_000_000)).toBe("MIL QUINIENTOS MILLONES DE PESOS 00/100 M.N.");
+  });
+
+  it("llega hasta el máximo sin romperse", () => {
+    expect(importeEnLetra(MONTO_MAXIMO_EN_LETRA)).toBe(
+      "NOVECIENTOS NOVENTA Y NUEVE MIL NOVECIENTOS NOVENTA Y NUEVE MILLONES " +
+        "NOVECIENTOS NOVENTA Y NUEVE MIL NOVECIENTOS NOVENTA Y NUEVE PESOS 99/100 M.N.",
+    );
+  });
+
+  // Un billón en una cotización es un dedazo. Escribirlo mal en el documento
+  // es peor que no escribirlo.
+  it("por encima del máximo lanza, con el importe en el mensaje", () => {
+    expect(() => importeEnLetra(1e12)).toThrow(/1000000000000/);
+    expect(() => importeEnLetra(MONTO_MAXIMO_EN_LETRA + 0.01)).toThrow();
+  });
+
+  // El legacy no contemplaba el singular y decía "UN PESOS".
+  it("uno exacto va en singular", () => {
+    expect(importeEnLetra(1)).toBe("UN PESO 00/100 M.N.");
+    expect(importeEnLetra(1, "USD")).toBe("UN DÓLAR 00/100 USD");
+    expect(importeEnLetra(1.5)).toBe("UN PESO 50/100 M.N.");
+    // Y solo el uno exacto: el veintiuno es plural.
+    expect(importeEnLetra(21)).toBe("VEINTIÚN PESOS 00/100 M.N.");
+    expect(importeEnLetra(2)).toBe("DOS PESOS 00/100 M.N.");
   });
 
   // "UN MIL" no se dice. El millar solo lleva número a partir de dos mil.
@@ -118,7 +159,7 @@ describe("importeEnLetra · los centavos", () => {
     expect(importeEnLetra(2.675)).toBe("DOS PESOS 68/100 M.N.");
   });
 
-  it("cero es CERO PESOS, no una cadena vacía", () => {
+  it("cero es CERO PESOS en plural", () => {
     expect(importeEnLetra(0)).toBe("CERO PESOS 00/100 M.N.");
     expect(importeEnLetra(0.07)).toBe("CERO PESOS 07/100 M.N.");
   });
@@ -139,6 +180,7 @@ describe("importeEnLetra · dólares", () => {
       "SESENTA Y DOS MIL NOVECIENTOS SETENTA Y CINCO DÓLARES 24/100 USD",
     );
     expect(importeEnLetra(1250.5, "USD")).toBe("MIL DOSCIENTOS CINCUENTA DÓLARES 50/100 USD");
+    expect(importeEnLetra(1000000, "USD")).toBe("UN MILLÓN DE DÓLARES 00/100 USD");
     expect(importeEnLetra(100, "USD")).not.toContain("M.N.");
   });
 });

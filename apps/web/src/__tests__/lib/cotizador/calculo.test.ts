@@ -24,14 +24,36 @@ describe("redondear", () => {
     expect(redondear(1 / 3)).toBe(0.33);
   });
 
-  // El binario deja algunos valores un pelo por debajo del medio centavo.
-  it("el medio centavo sube, aunque el binario diga lo contrario", () => {
+  // El binario guarda 2.675 como 2.67499999999999982. El redondeo trabaja
+  // sobre la representación decimal más corta, que es lo que el usuario
+  // escribió.
+  it("el medio centavo se aleja de cero, aunque el binario diga lo contrario", () => {
     expect(redondear(2.675)).toBe(2.68);
     expect(redondear(1.005)).toBe(1.01);
+    expect(redondear(0.005)).toBe(0.01);
+    expect(redondear(-2.675)).toBe(-2.68);
+    expect(redondear(-0.005)).toBe(-0.01);
   });
 
-  it("los negativos redondean en su propio sentido", () => {
-    expect(redondear(-2.675)).toBe(-2.68);
+  /**
+   * Los casos que tumbaban al parche del épsilon.
+   *
+   * `Math.round((n + Number.EPSILON) * 100)` acierta en los valores chicos y
+   * falla en los grandes: el épsilon es fijo y el error del binario crece con
+   * la magnitud. `2666666.675` daba **2666666.67**.
+   */
+  it("acierta en toda la escala, no solo en los valores chicos", () => {
+    expect(redondear(10000.005)).toBe(10000.01);
+    expect(redondear(80.195)).toBe(80.2);
+    expect(redondear(2666666.675)).toBe(2666666.68);
+    expect(redondear(-10000.005)).toBe(-10000.01);
+    expect(redondear(999999.995)).toBe(1000000);
+  });
+
+  it("un valor que ya tiene dos decimales no se mueve", () => {
+    for (const n of [20000.02, 10000.01, 0.01, -0.01, 1046113, 167378.08]) {
+      expect(redondear(n)).toBe(n);
+    }
   });
 
   it("lo que no es número da 0, no NaN", () => {
@@ -353,10 +375,13 @@ describe("asesoría", () => {
     expect(r.partidas).toHaveLength(1);
   });
 
-  it("un porcentaje mayor a 100 se respeta, pero se avisa", () => {
-    const r = conAsesoria(150, [1000]);
-    expect(r.partidas[0].total).toBe(2500);
-    expect(r.avisos.some((a) => a.includes("parece demasiado"))).toBe(true);
+  it("un porcentaje fuera de 0-100 se respeta, pero se avisa", () => {
+    const alto = conAsesoria(150, [1000]);
+    expect(alto.partidas[0].total).toBe(2500);
+    expect(alto.avisos.some((a) => a.includes("fuera del rango"))).toBe(true);
+
+    const bajo = conAsesoria(-10, [1000]);
+    expect(bajo.avisos.some((a) => a.includes("fuera del rango"))).toBe(true);
   });
 });
 
@@ -430,5 +455,135 @@ describe("avisos de captura", () => {
     expect(r.avisos.some((a) => a.includes("no tiene conceptos"))).toBe(true);
     expect(r.avisos.some((a) => a.includes("no tiene título"))).toBe(true);
     expect(r.subtotal).toBe(0);
+  });
+});
+
+/**
+ * Prueba de propiedad del redondeo.
+ *
+ * Miles de valores terminados en medio centavo, en todos los rangos de una
+ * cotización real, comparados contra el half-up exacto calculado con enteros.
+ * Es la red que el parche del épsilon no tenía: ahí cada caso había que
+ * descubrirlo a mano.
+ */
+describe("redondear · medio centavo en toda la escala", () => {
+  const RANGOS: Array<[string, number, number]> = [
+    ["0 a 999", 0, 999],
+    ["1,000 a 9,999", 1000, 9999],
+    ["10,000 a 99,999", 10000, 99999],
+    ["100,000 a 999,999", 100000, 999999],
+  ];
+
+  /** `<entero>.<cc>5` → lo que debe dar, en centavos enteros. */
+  const esperado = (entero: number, cc: number) => (entero * 100 + cc + 1) / 100;
+
+  it.each(RANGOS)("%s — el medio centavo siempre sube", (_nombre, desde, hasta) => {
+    let probados = 0;
+    for (let entero = desde; entero <= hasta; entero += Math.max(1, Math.floor((hasta - desde) / 250))) {
+      for (const cc of [0, 1, 9, 19, 49, 50, 98]) {
+        const texto = `${entero}.${String(cc).padStart(2, "0")}5`;
+        const valor = Number(texto);
+        // Solo se prueban los valores cuya representación más corta sigue
+        // siendo la que se escribió: fuera de eso el "medio centavo" ya no
+        // existe en el dato.
+        if (String(valor) !== texto) continue;
+        expect([texto, redondear(valor)]).toEqual([texto, esperado(entero, cc)]);
+        expect([texto, redondear(-valor)]).toEqual([texto, -esperado(entero, cc)]);
+        probados++;
+      }
+    }
+    expect(probados).toBeGreaterThan(500);
+  });
+});
+
+// ── Revisión · gastos negativos, ids y monedas ───────────────────────────────
+
+describe("lo que el motor no deja pasar", () => {
+  // Un descuento se hace con el ajuste de la partida, que es explícito y sale
+  // en el reporte. Metido como gasto se repartiría entre partidas y nadie
+  // entendería de dónde salió.
+  it("un gasto negativo es un error, con el código del gasto", () => {
+    expect(() =>
+      calcularCotizacion(
+        base({
+          partidas: [partida({ id: "A", conceptos: [{ codigo: "x", cantidad: 1, costo: 100 }] })],
+          gastos: [{ codigo: "DESCUENTO", cantidad: 1, costo: -500 }],
+        }),
+      ),
+    ).toThrow(/DESCUENTO/);
+  });
+
+  it("también si lo negativo es la cantidad", () => {
+    expect(() =>
+      calcularCotizacion(
+        base({
+          partidas: [partida({ id: "A", conceptos: [{ codigo: "x", cantidad: 1, costo: 100 }] })],
+          gastos: [{ codigo: "G", cantidad: -2, costo: 500 }],
+        }),
+      ),
+    ).toThrow(/negativo/);
+  });
+
+  it("el descuento sí se puede hacer con el ajuste de la partida", () => {
+    const r = calcularCotizacion(
+      base({ partidas: [partida({ id: "A", conceptos: [{ codigo: "x", cantidad: 1, costo: 1000 }], ajuste: -500 })] }),
+    );
+    expect(r.partidas[0].total).toBe(500);
+  });
+
+  // El id es la llave con la que un gasto apunta a su partida: duplicado, el
+  // resultado dependería del orden del arreglo.
+  it("dos partidas con el mismo id son un error", () => {
+    expect(() =>
+      calcularCotizacion(
+        base({
+          partidas: [
+            partida({ id: "MISMA", orden: 1, conceptos: [{ codigo: "x", cantidad: 1, costo: 1 }] }),
+            partida({ id: "MISMA", orden: 2, conceptos: [{ codigo: "x", cantidad: 1, costo: 1 }] }),
+          ],
+        }),
+      ),
+    ).toThrow(/"MISMA"/);
+  });
+});
+
+describe("un gasto con su costo en otra moneda", () => {
+  const conGasto = (tipoCambio?: number) =>
+    calcularCotizacion(
+      base({
+        moneda: "MXN",
+        monedaGastos: "MXN",
+        ...(tipoCambio ? { tipoCambio: { valor: tipoCambio, origen: "BANXICO" as const } } : {}),
+        partidas: [partida({ id: "A", conceptos: [{ codigo: "x", cantidad: 1, costo: 1000 }] })],
+        gastos: [{ codigo: "G", cantidad: 1, costo: 100, monedaCosto: "USD" }],
+      }),
+    );
+
+  it("se convierte con el tipo de cambio, igual que un concepto", () => {
+    expect(conGasto(18).partidas[0].gastoAsignado).toBe(1800);
+  });
+
+  it("sin tipo de cambio se toma como 0 y se avisa, igual que un concepto", () => {
+    const r = conGasto();
+    expect(r.partidas[0].gastoAsignado).toBe(0);
+    expect(r.avisos.some((a) => a.includes("no hay tipo de cambio"))).toBe(true);
+  });
+});
+
+describe("avisos de importes en negativo", () => {
+  it("una partida que cierra en negativo se avisa", () => {
+    const r = calcularCotizacion(
+      base({ partidas: [partida({ id: "A", orden: 1, conceptos: [{ codigo: "x", cantidad: 1, costo: 100 }], ajuste: -500 })] }),
+    );
+    expect(r.partidas[0].total).toBe(-400);
+    expect(r.avisos.some((a) => a.includes("en negativo"))).toBe(true);
+  });
+
+  it("un subtotal en negativo se avisa aparte", () => {
+    const r = calcularCotizacion(
+      base({ partidas: [partida({ id: "A", orden: 1, conceptos: [{ codigo: "x", cantidad: 1, costo: 100 }], ajuste: -500 })] }),
+    );
+    expect(r.subtotal).toBe(-400);
+    expect(r.avisos.some((a) => a.includes("El subtotal cierra"))).toBe(true);
   });
 });

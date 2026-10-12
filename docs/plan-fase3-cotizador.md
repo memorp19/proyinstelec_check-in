@@ -52,7 +52,11 @@ que el PDF salga de aquí.
    Script**, que la reparte por partes iguales en `IGUAL` y `MANUAL`
    (`COT_03:684-688`); ver §2.6.
 8. **Ajuste por partida**: monto explícito y visible, nunca escondido en una
-   fórmula.
+   fórmula. **Es el único lugar donde se resta.** Un gasto negativo es un
+   error: se repartiría entre partidas y nadie entendería de dónde salió el
+   descuento. Un descuento al cliente se captura como ajuste negativo de la
+   partida, que es explícito, sale en el reporte y queda junto a lo que
+   descuenta.
 9. **Redondeo** a dos decimales en cada paso.
    `precioUnitario = round(total / cantidad)`, `importe = unitario × cantidad`,
    `subtotal = Σ importes`, `iva = round(subtotal × 0.16)`,
@@ -247,6 +251,21 @@ importes se recalculan siempre, que es justo el defecto que se corrige.
 | `congelado_por` | `text NOT NULL` | Quién |
 | `calculo` | `jsonb NOT NULL` | El resultado completo de `calcularCotizacion` |
 | `total_mxn`, `total_usd` | `numeric(14,2)` | Extraídos para poder filtrar y sumar |
+
+**La tasa de IVA se guarda por versión**, en `cot_armado.iva_pct`
+(`numeric(5,2) NOT NULL DEFAULT 16`). Hoy es 16 % en todo el país y parece una
+constante, pero no lo es: la franja fronteriza tuvo 8 % y la tasa cambia por
+decreto. Una cotización enviada tiene que poder reimprimirse con el IVA que se
+le aplicó, no con el vigente el día que alguien la reabre — por la misma razón
+que se congelan los importes. El motor la recibirá como parámetro en ese PR;
+hoy la lleva como constante.
+
+**El resultado es de UNA sola moneda** mientras rija el modo "un solo total"
+(decisión 13), así que al congelar llena `total_mxn` **o** `total_usd`, nunca
+los dos. `cotizaciones.monto_mxn` y `monto_usd` se derivan de ahí y dejan de
+capturarse a mano. El día que entre el modo por partida, un mismo congelado
+podrá llenar los dos — y por eso son dos columnas desde ahora y no un par
+(monto, moneda).
 
 **Cómo funciona.** Mientras la versión está en `PROCESO` o `REVISION`, los
 importes se calculan al vuelo desde el catálogo vigente, igual que hoy. **Al

@@ -27,25 +27,86 @@ export const IVA = 0.16;
 export const BASE_NODOS_POR_OMISION = 10;
 
 /**
+ * El valor como decimal exacto: `digitos × 10^exp`, con su signo.
+ *
+ * Parte de `String(n)`, que es la representación decimal MÁS CORTA que vuelve
+ * a dar exactamente ese número. Es lo que convierte el redondeo en una
+ * operación determinista: el usuario escribió `2.675` y eso es lo que se
+ * redondea, no el `2.67499999999999982236…` que el binario guarda por dentro.
+ */
+function aDecimal(n: number): { negativo: boolean; digitos: bigint; exp: number } {
+  let s = String(Math.abs(n));
+  let exp = 0;
+
+  // Notación científica: `1e-7`, `1.5e+21`.
+  const e = s.indexOf("e");
+  if (e >= 0) {
+    exp = parseInt(s.slice(e + 1), 10);
+    s = s.slice(0, e);
+  }
+  const punto = s.indexOf(".");
+  if (punto >= 0) {
+    exp -= s.length - punto - 1;
+    s = s.slice(0, punto) + s.slice(punto + 1);
+  }
+  return { negativo: n < 0, digitos: BigInt(s), exp };
+}
+
+const DIEZ = 10n;
+
+function potencia(n: number): bigint {
+  let r = 1n;
+  for (let i = 0; i < n; i++) r *= DIEZ;
+  return r;
+}
+
+/**
  * Redondeo a dos decimales, aplicado en CADA paso.
  *
- * No es cosmético. Redondear solo al final da diferencias de centavos contra
+ * No es cosmético: redondear solo al final da diferencias de centavos contra
  * lo que el cliente ya recibió, y una cotización que no cuadra con su PDF no
  * sirve para cobrar.
+ *
+ * ARITMÉTICA EXACTA, NO FLOTANTE
+ * ------------------------------
+ * Se pasa el valor a centavos enteros con `BigInt` y se redondea ahí. La
+ * versión anterior hacía `Math.round((Math.abs(n) + Number.EPSILON) * 100)`, y
+ * esa suma de un épsilon es un parche con dos agujeros: el épsilon es fijo
+ * mientras el error del binario crece con la magnitud, así que acierta en
+ * `2.675` y falla en `2666666.675`; y donde el binario ya estaba por encima
+ * del medio centavo, empuja de más.
+ *
+ * Con enteros no hay nada que empujar. `BigInt` es parte del lenguaje —no
+ * entra una dependencia— y aquí basta de sobra: una cotización cabe en catorce
+ * dígitos y las operaciones son unas pocas por partida.
+ *
+ * El medio centavo **se aleja de cero** en los dos sentidos, que es la regla de
+ * los importes: `2.675 → 2.68` y `-2.675 → -2.68`. `Math.round` de JavaScript
+ * no sirve para esto porque manda el medio hacia +infinito.
  */
 export function redondear(n: number): number {
   if (!Number.isFinite(n)) return 0;
-  // Se redondea la MAGNITUD y se reaplica el signo: `Math.round` de JavaScript
-  // manda el medio hacia +infinito, así que -2.675 daría -2.67 mientras 2.675
-  // da 2.68. En dinero el medio se aleja de cero, en los dos sentidos.
-  //
-  // El +EPSILON corrige el caso en que el binario deja el valor un ulp por
-  // debajo del medio centavo: 2.675 se guarda como 2.67499999999999982.
-  const signo = n < 0 ? -1 : 1;
-  const redondeado = (signo * Math.round((Math.abs(n) + Number.EPSILON) * 100)) / 100;
-  // `-0` existe en JavaScript y no es igual a `0` para `Object.is`, que es lo
-  // que usan las aserciones de los tests.
-  return redondeado === 0 ? 0 : redondeado;
+  if (n === 0) return 0;
+
+  const { negativo, digitos, exp } = aDecimal(n);
+
+  // El valor en centavos es `digitos × 10^(exp + 2)`.
+  const k = exp + 2;
+  let centavos: bigint;
+  if (k >= 0) {
+    // Ya es entero de centavos: no hay nada que redondear.
+    centavos = digitos * potencia(k);
+  } else {
+    const divisor = potencia(-k);
+    const q = digitos / divisor;
+    const resto = digitos % divisor;
+    // Medio o más sube. Como se trabaja con la magnitud, "subir" es alejarse
+    // de cero.
+    centavos = resto * 2n >= divisor ? q + 1n : q;
+  }
+
+  if (centavos === 0n) return 0;
+  return Number(negativo ? -centavos : centavos) / 100;
 }
 
 /**
@@ -148,26 +209,54 @@ function calcularConcepto(
   };
 }
 
-/** El importe de un gasto, en la moneda de los gastos. */
-function calcularGasto(g: Gasto, monedaGastos: string, avisos: string[]): GastoCalculado {
+/**
+ * El importe de un gasto, en la moneda de los gastos.
+ *
+ * Si su costo viene en otra moneda se convierte aquí, con la misma regla que
+ * los conceptos: sin tipo de cambio no se inventa uno, se toma como 0 y se
+ * avisa.
+ */
+function calcularGasto(
+  g: Gasto,
+  monedaGastos: string,
+  tipoCambio: number | null,
+  avisos: string[],
+): GastoCalculado {
   const cantidad = Number(g.cantidad) || 0;
   const costo = Number(g.costo) || 0;
   const utilidad = 1 + (Number(g.utilidadPct) || 0) / 100;
   const etiqueta = g.codigo || g.descripcion || "(sin código)";
 
-  if (costo === 0) avisos.push(`El gasto "${etiqueta}" tiene costo 0.`);
-  if (g.monedaCosto && g.monedaCosto !== monedaGastos) {
-    avisos.push(
-      `El gasto "${etiqueta}" dice estar en ${g.monedaCosto} y los gastos se llevan en ` +
-        `${monedaGastos}. Se tomó como ${monedaGastos}.`,
+  // Un gasto negativo no es un gasto. Un descuento al cliente se hace con el
+  // ajuste de la partida, que es explícito y sale en el reporte; metido aquí
+  // se repartiría entre partidas y nadie entendería de dónde salió.
+  if (costo < 0 || cantidad < 0) {
+    throw new Error(
+      `El gasto "${etiqueta}" tiene un importe negativo. Un descuento se captura ` +
+        "como ajuste negativo de la partida, no como gasto.",
     );
+  }
+  if (costo === 0) avisos.push(`El gasto "${etiqueta}" tiene costo 0.`);
+
+  const monedaCosto = g.monedaCosto ?? monedaGastos;
+  let factorMoneda = 1;
+  if (monedaCosto !== monedaGastos) {
+    if (!tipoCambio) {
+      avisos.push(
+        `El gasto "${etiqueta}" tiene su costo en ${monedaCosto} y los gastos se llevan en ` +
+          `${monedaGastos}, pero no hay tipo de cambio. Se tomó como 0.`,
+      );
+      factorMoneda = 0;
+    } else {
+      factorMoneda = monedaCosto === "USD" ? tipoCambio : 1 / tipoCambio;
+    }
   }
 
   return {
     codigo: g.codigo,
     descripcion: g.descripcion,
     cantidad,
-    importe: redondear(costo * cantidad * utilidad),
+    importe: redondear(costo * cantidad * utilidad * factorMoneda),
     destino: g.destino ?? "GENERAL",
   };
 }
@@ -206,8 +295,22 @@ export function calcularCotizacion(entrada: EntradaCotizacion): ResultadoCotizac
   if (entrada.tipoCambio?.origen === "PREFERENTE" && !entrada.tipoCambio.motivo?.trim()) {
     avisos.push("El tipo de cambio preferente no trae motivo. Sin él nadie puede revisarlo.");
   }
-  if (asesoriaPct > 100) {
-    avisos.push(`El ${asesoriaPct} % de asesoría parece demasiado. Revísalo.`);
+  // El id es la llave con la que un gasto apunta a su partida y con la que se
+  // religa el armado al releerlo. Duplicado, el gasto iría a parar a cualquiera
+  // de las dos y el resultado dependería del orden del arreglo.
+  const vistos = new Set<string>();
+  for (const p of entrada.partidas) {
+    if (vistos.has(p.id)) {
+      throw new Error(`Hay dos partidas con el id "${p.id}". El id tiene que ser único.`);
+    }
+    vistos.add(p.id);
+  }
+
+  // ── 6. Avisos sobre lo capturado ──────────────────────────────────────────
+  if (asesoriaPct > 100 || asesoriaPct < 0) {
+    avisos.push(
+      `La asesoría es ${asesoriaPct} %, fuera del rango razonable de 0 a 100. Revísala.`,
+    );
   }
 
   // ── 1. Los conceptos de cada partida ────────────────────────────────────────
@@ -242,7 +345,9 @@ export function calcularCotizacion(entrada: EntradaCotizacion): ResultadoCotizac
   const porId = new Map(partidas.map((p) => [p.id, p]));
 
   // ── 2. Los gastos, en SU moneda ─────────────────────────────────────────────
-  const gastos = (entrada.gastos ?? []).map((g) => calcularGasto(g, monedaGastos, avisos));
+  const gastos = (entrada.gastos ?? []).map((g) =>
+    calcularGasto(g, monedaGastos, tipoCambio, avisos),
+  );
   const totalGastos = redondear(gastos.reduce((s, g) => s + g.importe, 0));
 
   // Los que van a una partida concreta no se reparten: se cargan enteros.
@@ -338,7 +443,21 @@ export function calcularCotizacion(entrada: EntradaCotizacion): ResultadoCotizac
     p.importe = redondear(p.precioUnitario * p.cantidad);
   }
 
+  for (const p of partidas) {
+    if (p.total < 0) {
+      avisos.push(
+        `La partida ${p.orden} cierra en ${p.total.toFixed(2)}, en negativo. ` +
+          "Revisa su ajuste: una partida que resta no se le puede cobrar a nadie.",
+      );
+    }
+  }
+
   const subtotal = redondear(partidas.reduce((s, p) => s + p.importe, 0));
+  if (subtotal < 0) {
+    avisos.push(
+      `El subtotal cierra en ${subtotal.toFixed(2)}, en negativo. La cotización no es cobrable así.`,
+    );
+  }
   const iva = redondear(subtotal * IVA);
 
   return {

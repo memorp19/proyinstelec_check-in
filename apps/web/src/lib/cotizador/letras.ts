@@ -67,40 +67,78 @@ export function centenaEnLetra(n: number): string {
   return texto;
 }
 
+/** Un número menor a un millón, en letra. */
+function milesEnLetra(n: number): string {
+  const miles = Math.floor(n / 1000);
+  const resto = n % 1000;
+  const partes: string[] = [];
+  // "MIL" y no "UN MIL": el millar solo lleva número a partir de dos mil.
+  if (miles) partes.push(miles === 1 ? "MIL" : centenaEnLetra(miles) + " MIL");
+  if (resto) partes.push(centenaEnLetra(resto));
+  return partes.join(" ");
+}
+
+/** Lo más alto que se puede decir: 999,999,999,999.99. */
+export const MONTO_MAXIMO_EN_LETRA = 999_999_999_999.99;
+
 /**
  * El importe completo en letra.
  *
  * Los centavos van en quebrado sobre cien, que es la convención de las
  * facturas: `… PESOS 08/100 M.N.`
  *
- * **Corrige un defecto del sistema anterior**, que cerraba con `M.N.` también
- * en dólares (`… DÓLARES AMERICANOS 24/100 M.N.`, `COT_05:276`). M.N. es
- * *moneda nacional*: decirlo de un importe en dólares afirma dos monedas
- * distintas en el mismo renglón. Aquí los dólares cierran con `USD`.
+ * **Corrige tres defectos del sistema anterior.**
+ *
+ * 1. Cerraba con `M.N.` también en dólares (`… DÓLARES AMERICANOS 24/100 M.N.`,
+ *    `COT_05:276`). *M.N.* es **moneda nacional**: decirlo de un importe en
+ *    dólares afirma dos monedas distintas en el mismo renglón.
+ * 2. Se rompía en los miles de millones: `Math.floor(entero / 1000000)` daba
+ *    `1000` y producía "MIL MILLÓN". Se dice **MIL MILLONES**.
+ * 3. Decía "UN MILLÓN PESOS". Un millón exacto pide la preposición:
+ *    **UN MILLÓN DE PESOS**.
+ *
+ * Y se añade el singular, que el legacy no contemplaba: **UN PESO**, no "UN
+ * PESOS".
+ *
+ * Por encima de `MONTO_MAXIMO_EN_LETRA` lanza. Un billón en una cotización es
+ * un dedazo, y escribirlo mal en el documento es peor que no escribirlo.
  */
 export function importeEnLetra(monto: number, moneda: Moneda = "MXN"): string {
   // Se redondea con la MISMA función que el cálculo. Si cada uno redondeara a
   // su manera, la letra podría decir 67 centavos debajo de una cifra que dice
   // 68 — y es el renglón que existe precisamente para detectar ese desacuerdo.
   const v = redondear(Math.abs(Number(monto) || 0));
+
+  if (v > MONTO_MAXIMO_EN_LETRA) {
+    throw new Error(
+      `No se puede escribir ${v} en letra: el máximo es ${MONTO_MAXIMO_EN_LETRA.toLocaleString("es-MX")}. ` +
+        "Revisa el importe antes de generar el documento.",
+    );
+  }
+
   const entero = Math.floor(v);
   const centavos = Math.round((v - entero) * 100);
   const cc = String(centavos).padStart(2, "0");
 
-  const sufijo =
-    moneda === "USD" ? " DÓLARES " + cc + "/100 USD" : " PESOS " + cc + "/100 M.N.";
+  // El sustantivo va en singular solo cuando el entero es exactamente uno.
+  const unidad =
+    moneda === "USD" ? (entero === 1 ? "DÓLAR" : "DÓLARES") : entero === 1 ? "PESO" : "PESOS";
+  const cierre = moneda === "USD" ? "/100 USD" : "/100 M.N.";
 
-  if (entero === 0) return "CERO" + sufijo;
+  if (entero === 0) return `CERO ${unidad} ${cc}${cierre}`;
 
   const millones = Math.floor(entero / 1_000_000);
-  const miles = Math.floor((entero % 1_000_000) / 1000);
-  const resto = entero % 1000;
+  const resto = entero % 1_000_000;
 
   const partes: string[] = [];
-  // "UN MILLÓN" y no "UN MILLONES"; "MIL" y no "UN MIL".
-  if (millones) partes.push(millones === 1 ? "UN MILLÓN" : centenaEnLetra(millones) + " MILLONES");
-  if (miles) partes.push(miles === 1 ? "MIL" : centenaEnLetra(miles) + " MIL");
-  if (resto) partes.push(centenaEnLetra(resto));
+  if (millones) {
+    partes.push(milesEnLetra(millones) + (millones === 1 ? " MILLÓN" : " MILLONES"));
+  }
+  if (resto) partes.push(milesEnLetra(resto));
 
-  return partes.join(" ") + sufijo;
+  // "DE" solo cuando los millones son exactos y el sustantivo los sigue de
+  // inmediato: UN MILLÓN DE PESOS, pero UN MILLÓN DOSCIENTOS MIL PESOS.
+  const de = millones > 0 && resto === 0 ? " DE" : "";
+
+  return `${partes.join(" ")}${de} ${unidad} ${cc}${cierre}`;
 }

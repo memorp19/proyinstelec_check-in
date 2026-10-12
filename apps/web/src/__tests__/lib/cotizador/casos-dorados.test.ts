@@ -1,13 +1,19 @@
 import { describe, it, expect } from "vitest";
-import { calcularCotizacion } from "@/src/lib/cotizador";
+import { calcularCotizacion, importeEnLetra } from "@/src/lib/cotizador";
 import type { EntradaCotizacion } from "@/src/lib/cotizador";
 
 /**
- * CASOS DORADOS — cotizaciones reales, al centavo.
+ * Dos clases de prueba, y conviene no confundirlas.
  *
- * Cada entrada sale de la celda del Excel que la produjo, NO de los totales del
- * PDF. Si se reconstruyeran desde el resultado, el test solo demostraría que
- * sabemos copiar un número.
+ * **CASOS DORADOS** — la 068 y la 070. Están ancladas a un PDF que el cliente
+ * recibió: cada entrada sale de la celda del Excel que la produjo, y el
+ * resultado se compara contra el documento impreso. Si fallan, o el motor está
+ * mal o el PDF lo estaba. Las entradas NO se reconstruyen desde los totales: si
+ * se hiciera, el test solo demostraría que sabemos copiar un número.
+ *
+ * **ESCENARIOS** — la 450 y los estudios. No hay PDF detrás: se derivan de las
+ * reglas acordadas y existen para fijar una decisión. Si fallan, cambió una
+ * regla; puede estar bien, pero tiene que ser a propósito.
  *
  * Los archivos viven fuera del repositorio (`Downloads/casos-dorados/`) porque
  * traen datos de clientes. Aquí quedan únicamente las cifras y la referencia a
@@ -15,7 +21,7 @@ import type { EntradaCotizacion } from "@/src/lib/cotizador";
  */
 
 // ══════════════════════════════════════════════════════════════════════════════
-// A · Cotización 068 — once partidas, dos monedas, gastos generales y propios
+// CASOS DORADOS — cada uno contra el PDF que recibió el cliente
 // ══════════════════════════════════════════════════════════════════════════════
 
 /**
@@ -67,6 +73,28 @@ const cUsd = (codigo: string, cantidad: number) => ({
 /** Un concepto con utilidad pero en pesos: la fórmula lleva `*V3` y no `*T3`. */
 const cUtil = (codigo: string, cantidad: number) => ({ ...c(codigo, cantidad), utilidadPct: 20 });
 
+/**
+ * Los ajustes de la 068, con la celda de la que salen.
+ *
+ * En el Excel viven dentro de las fórmulas de la columna AD, sumados al final
+ * de cada partida. El `+0.5` es distinto: está dentro de `AD53`
+ * —`((SUM(V53:V57))*1.05/10)+0.5`—, que es la celda del gasto general, y por
+ * eso lo lleva **cada una** de las diez partidas que reciben gastos, no una.
+ */
+const AJUSTES_068: Record<string, { monto: number; celda: string; nota: string }> = {
+  P1: { monto: 0.5, celda: "AD53", nota: "el +0.5 del reparto de gastos" },
+  P2: { monto: 0.44, celda: "AD20", nota: "AD53 más un -0.06 al cierre" },
+  P3: { monto: 10.5, celda: "AD36", nota: "AD53 más un +10" },
+  P4: { monto: 10.5, celda: "AD40", nota: "AD53 más un +10" },
+  P5: { monto: 10.5, celda: "AD43", nota: "AD53 más un +10" },
+  P6: { monto: 55.5, celda: "AD46", nota: "AD53 más un +55" },
+  TIERRAS: { monto: 0, celda: "AD58", nota: "no suma AD53: no recibe gastos generales" },
+  P7: { monto: 10.5, celda: "AD48", nota: "AD53 más un +10" },
+  P8: { monto: 0.5, celda: "AD49", nota: "solo el +0.5 de AD53" },
+  P9: { monto: 0.5, celda: "AD50", nota: "solo el +0.5 de AD53" },
+  P10: { monto: 0.46, celda: "AD51", nota: "AD53 más un -0.04 al cierre" },
+};
+
 const entrada068: EntradaCotizacion = {
   moneda: "MXN",
   monedaGastos: "MXN",
@@ -90,7 +118,7 @@ const entrada068: EntradaCotizacion = {
         c("SP011", 2), c("SP012", 2),
       ],
       // AD53 lleva un `+0.5` que se suma a cada partida que recibe gastos.
-      ajuste: 0.5,
+      ajuste: AJUSTES_068.P1.monto,
     },
     {
       id: "P2", orden: 2, titulo: "Suministro e instalación de boquillas", cantidad: 1, unidad: "piezas",
@@ -102,27 +130,27 @@ const entrada068: EntradaCotizacion = {
         c("SP013", 1), c("SP014", 1), c("SP015", 1), c("SP016", 1), c("SP017", 1),
         c("SP011", 1), c("SP012", 1),
       ],
-      ajuste: 0.5 - 0.06, // AD20 cierra con `-0.06`
+      ajuste: AJUSTES_068.P2.monto, // AD20 cierra con `-0.06`
     },
     {
       id: "P3", orden: 3, titulo: "Interruptores de media tensión", cantidad: 9, unidad: "servicios",
       conceptos: [c("SP018", 9), c("SP019", 9), c("SP020", 9), c("SP048", 2)], // filas 36-39
-      ajuste: 0.5 + 10, // AD36 cierra con `+10`
+      ajuste: AJUSTES_068.P3.monto, // AD36 cierra con `+10`
     },
     {
       id: "P4", orden: 4, titulo: "Interruptores de baja tensión", cantidad: 6, unidad: "servicios",
       conceptos: [c("SP018", 6), c("SP019", 6), c("SP045", 6)], // filas 40-42
-      ajuste: 0.5 + 10, // AD40
+      ajuste: AJUSTES_068.P4.monto, // AD40
     },
     {
       id: "P5", orden: 5, titulo: "Transformadores de instrumento", cantidad: 57, unidad: "servicios",
       conceptos: [c("SP032", 57), c("SP033", 57), c("SP034", 57)], // filas 43-45
-      ajuste: 0.5 + 10, // AD43
+      ajuste: AJUSTES_068.P5.monto, // AD43
     },
     {
       id: "P6", orden: 6, titulo: "Transformadores de instrumento II", cantidad: 33, unidad: "servicios",
       conceptos: [c("SP032", 33), c("SP033", 33)], // filas 46-47
-      ajuste: 0.5 + 55, // AD46 cierra con `+55`
+      ajuste: AJUSTES_068.P6.monto, // AD46 cierra con `+55`
     },
     {
       id: "TIERRAS", orden: 7, titulo: "Sistema de tierras", cantidad: 1, unidad: "servicio",
@@ -132,28 +160,28 @@ const entrada068: EntradaCotizacion = {
       // propio equipo y sus propios viáticos, así que cargarle además la parte
       // del gasto general la cobraría dos veces.
       recibeGastosGenerales: false,
-      ajuste: 0,
+      ajuste: AJUSTES_068.TIERRAS.monto,
     },
     {
       id: "P7", orden: 8, titulo: "Exactitud de medidores", cantidad: 7, unidad: "servicios",
       conceptos: [c("PR017", 7)], // fila 48
-      ajuste: 0.5 + 10, // AD48
+      ajuste: AJUSTES_068.P7.monto, // AD48
     },
     {
       id: "P8", orden: 9, titulo: "Potencial aplicado a cable de potencia", cantidad: 5, unidad: "juegos",
       conceptos: [c("SP044", 5)], // fila 49
-      ajuste: 0.5, // AD49
+      ajuste: AJUSTES_068.P8.monto, // AD49
     },
     {
       id: "P9", orden: 10, titulo: "Renta de generador portátil", cantidad: 1, unidad: "servicio",
       conceptos: [c("COSTO_DISPONIBLE_002", 1)], // fila 50
-      ajuste: 0.5, // AD50
+      ajuste: AJUSTES_068.P9.monto, // AD50
     },
     {
       id: "P10", orden: 11, titulo: "Equipo de protección personal", cantidad: 1, unidad: "pieza",
       // Filas 51-52: llevan `*V3` (utilidad) pero no `*T3`.
       conceptos: [cUtil("COSTO_DISPONIBLE_003", 1), cUtil("COSTO_DISPONIBLE_007", 1)],
-      ajuste: 0.5 - 0.04, // AD51 cierra con `-0.04`
+      ajuste: AJUSTES_068.P10.monto, // AD51 cierra con `-0.04`
     },
   ],
   gastos: [
@@ -172,7 +200,7 @@ const entrada068: EntradaCotizacion = {
   ],
 };
 
-describe("caso dorado A · cotización 068", () => {
+describe("CASO DORADO · cotización 068 (anclada a su PDF)", () => {
   const r = calcularCotizacion(entrada068);
 
   it("los gastos generales se reparten entre las diez partidas que los reciben", () => {
@@ -215,10 +243,30 @@ describe("caso dorado A · cotización 068", () => {
     }
   });
 
+  // Los ajustes salen de las fórmulas, no de cuadrar el resultado. Fijarlos
+  // aparte impide que alguien "arregle" un desajuste moviéndolos.
+  it("cada ajuste es el de su celda del Excel", () => {
+    for (const p of r.partidas) {
+      const esperado = AJUSTES_068[p.id];
+      expect([p.id, p.ajuste]).toEqual([p.id, esperado.monto]);
+    }
+    // Diez partidas llevan el +0.5 de AD53; la de tierras no.
+    const conMedio = r.partidas.filter((p) => AJUSTES_068[p.id].celda !== "AD58");
+    expect(conMedio).toHaveLength(10);
+  });
+
   it("subtotal, IVA y total cuadran al centavo con el PDF", () => {
     expect(r.subtotal).toBe(1046113.0);
     expect(r.iva).toBe(167378.08);
     expect(r.total).toBe(1213491.08);
+  });
+
+  // El renglón que el cliente compara contra la cifra, compuesto desde el
+  // resultado y no desde una constante: si el total cambiara, la letra también.
+  it("la letra del total sale del propio resultado", () => {
+    expect(importeEnLetra(r.total)).toBe(
+      "UN MILLÓN DOSCIENTOS TRECE MIL CUATROCIENTOS NOVENTA Y UN PESOS 08/100 M.N.",
+    );
   });
 
   // El subtotal es la suma de lo que el cliente ve, no el costo interno: si
@@ -233,7 +281,13 @@ describe("caso dorado A · cotización 068", () => {
 // B · Cotización 070 — tres partidas, asesoría 10 %, un ajuste de 20 centavos
 // ══════════════════════════════════════════════════════════════════════════════
 
-describe("caso dorado B · cotización 070", () => {
+/**
+ * El único ajuste de la 070, que en el Excel vive dentro de la fórmula de la
+ * primera partida.
+ */
+const AJUSTE_070 = { monto: 0.2, celda: "partida 1", nota: "veinte centavos al cierre" };
+
+describe("CASO DORADO · cotización 070 (anclada a su PDF)", () => {
   const r = calcularCotizacion({
     moneda: "MXN",
     asesoriaPct: 10,
@@ -242,7 +296,7 @@ describe("caso dorado B · cotización 070", () => {
         id: "B1", orden: 1, titulo: "Partida 1", cantidad: 1,
         conceptos: [{ codigo: "X1", cantidad: 1, costo: 75028 }],
         // En el Excel este ajuste vive dentro de la fórmula; aquí es explícito.
-        ajuste: 0.2,
+        ajuste: AJUSTE_070.monto,
       },
       { id: "B2", orden: 2, titulo: "Partida 2", cantidad: 1, conceptos: [{ codigo: "X2", cantidad: 1, costo: 48430 }] },
       { id: "B3", orden: 3, titulo: "Partida 3", cantidad: 1, conceptos: [{ codigo: "X3", cantidad: 1, costo: 21250 }] },
@@ -253,6 +307,10 @@ describe("caso dorado B · cotización 070", () => {
     expect(r.partidas.map((p) => p.importe)).toEqual([82531, 53273, 23375]);
   });
 
+  it("el ajuste es el de su celda, y solo lo lleva la primera partida", () => {
+    expect(r.partidas.map((p) => p.ajuste)).toEqual([AJUSTE_070.monto, 0, 0]);
+  });
+
   // El Excel daba un centavo de diferencia aquí: sumaba los totales internos en
   // vez de los importes que ve el cliente.
   it("subtotal, IVA y total cuadran al centavo", () => {
@@ -260,10 +318,16 @@ describe("caso dorado B · cotización 070", () => {
     expect(r.iva).toBe(25468.64);
     expect(r.total).toBe(184647.64);
   });
+
+  it("la letra del total sale del propio resultado", () => {
+    expect(importeEnLetra(r.total)).toBe(
+      "CIENTO OCHENTA Y CUATRO MIL SEISCIENTOS CUARENTA Y SIETE PESOS 64/100 M.N.",
+    );
+  });
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// C · Cotización 450 — la que cambia respecto de Apps Script
+// ESCENARIOS — derivados de las reglas, sin PDF detrás
 // ══════════════════════════════════════════════════════════════════════════════
 
 /** Dos partidas iguales, tres conceptos de 2,000 × 2, y 27,600 de gastos. */
@@ -286,7 +350,7 @@ const entrada450 = (utilidadP1: number): EntradaCotizacion => ({
   gastos: [{ codigo: "G1", cantidad: 1, costo: 27600 }],
 });
 
-describe("caso dorado C · cotización 450", () => {
+describe("ESCENARIO · cotización 450, el reparto de la asesoría", () => {
   it("sin utilidad, las dos partidas salen iguales", () => {
     const r = calcularCotizacion(entrada450(0));
     expect(r.partidas.map((p) => p.importe)).toEqual([28380, 28380]);
@@ -314,11 +378,7 @@ describe("caso dorado C · cotización 450", () => {
   });
 });
 
-// ══════════════════════════════════════════════════════════════════════════════
-// D · Estudios por esfuerzo, con los parámetros del Excel
-// ══════════════════════════════════════════════════════════════════════════════
-
-describe("caso dorado D · estudios por horas", () => {
+describe("ESCENARIO · estudios por horas, con los parámetros del Excel", () => {
   const estudio = (p: {
     horasPorDia: number; diasPorSemana: number; ingenieros: number; semanas: number; tarifaHora: number;
   }) =>
