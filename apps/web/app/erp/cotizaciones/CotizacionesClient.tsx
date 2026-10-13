@@ -57,6 +57,12 @@ const BADGE: Record<string, string> = {
 };
 const badge = (e: string) => BADGE[e] ?? "bg-white/10 border-white/20 text-white/50";
 
+/**
+ * Estatus en los que la cotización todavía se arma. Los dependientes son una
+ * espera, no un cierre: se siguen editando.
+ */
+const ARMABLES = ["PROCESO", "DEPENDIENTE PROVEEDOR", "DEPENDIENTE CLIENTE"];
+
 const input =
   "w-full bg-white/10 border border-white/20 rounded-lg px-3 py-2 font-mono text-sm text-white placeholder-white/30 outline-none focus:border-blue";
 const btnPrimary =
@@ -433,6 +439,11 @@ function Buscador({
               </div>
 
               <div className="mt-3 pt-3 border-t border-white/10 flex items-center gap-1.5 flex-wrap">
+                {/* Mientras se puede tocar se "arma"; después solo se "ve". El
+                    botón dice lo que de verdad va a pasar al entrar. */}
+                <a href={`/erp/cotizaciones/${key(c)}/armar?version=${c.version}`} className={btnGhost}>
+                  {ARMABLES.includes(c.estatus) ? "Armar" : "Ver armado"}
+                </a>
                 <button onClick={() => abrirModal({ tipo: "editar", cot: c })} className={btnGhost}>Editar</button>
                 <button onClick={() => abrirModal({ tipo: "version", cot: c })} className={btnGhost}>Nueva Versión</button>
                 <button onClick={() => abrirModal({ tipo: "versiones", cot: c })} className={btnGhost}>Versiones</button>
