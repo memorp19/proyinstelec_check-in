@@ -77,6 +77,26 @@ const ESTATUS_MANUALES: EstatusCotizacion[] = [
   "PROCESO",
 ];
 
+/**
+ * Lo único que este PATCH edita — exactamente los campos del formulario de la
+ * pantalla, más el estatus manual.
+ *
+ * Es una lista blanca y no una negra: lo que se quiere impedir no son tres
+ * campos concretos sino que cualquier columna nueva del esquema quede
+ * escribible por accidente desde aquí. `orden_compra` y `folio_ot` tienen sus
+ * propios flujos, con su permiso y su escritura en la OT.
+ */
+const CAMPOS_EDITABLES = [
+  "titulo",
+  "dirigidaA",
+  "prioridad",
+  "elaboro",
+  "fechaEntrega",
+  "montoMxn",
+  "montoUsd",
+  "estatus",
+] as const;
+
 export async function PATCH(req: NextRequest, { params }: { params: { key: string } }) {
   const session = await auth();
   const rechazo = exigirPermiso(session?.user, "modulo.cotizaciones");
@@ -100,6 +120,22 @@ export async function PATCH(req: NextRequest, { params }: { params: { key: strin
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Body inválido" }, { status: 400 });
+  }
+
+  // El tipo de arriba es solo de compilación: `req.json()` devuelve cualquier
+  // cosa y el resto del body se le pasa entero a `updateCotizacion`. Sin esta
+  // lista, un PATCH con `ordenCompra` o `folioOt` escribía esos campos con el
+  // permiso `modulo.cotizaciones` —mucho más laxo que `ot.crear`— y además
+  // sobre la VIGENTE, que no tiene por qué ser la versión asignada. La OC se
+  // registra por su propia ruta, que escribe también en la OT.
+  const rechazado = Object.keys(body as Record<string, unknown>).find(
+    (campo) => !(CAMPOS_EDITABLES as readonly string[]).includes(campo),
+  );
+  if (rechazado) {
+    return NextResponse.json(
+      { error: `El campo "${rechazado}" no se edita por aquí` },
+      { status: 400 },
+    );
   }
 
   try {

@@ -1,3 +1,6 @@
+import { and, desc, eq, isNotNull } from "drizzle-orm";
+import { getDb } from "../db";
+import { cotizaciones, ordenesTrabajo } from "../db/schema";
 import { registrarBitacora } from "./bitacora";
 import { getConfigErp } from "./config-erp";
 import {
@@ -707,7 +710,9 @@ export async function ingresarOrdenCompra(params: {
 
 /**
  * OT de una cotización aceptada sin orden de compra. Mismo flujo salvo la OC:
- * la cotización queda ASIGNADA y la OC puede capturarse después.
+ * la cotización queda ASIGNADA y la OC se captura después con
+ * `registrarOcPosterior`, que escribe en la versión de la OT y actualiza las
+ * dos tablas.
  */
 export async function generarOTSinOrdenCompra(params: {
   numero: number;
@@ -719,4 +724,190 @@ export async function generarOTSinOrdenCompra(params: {
   usuario: string;
 }): Promise<{ folioOt: string; avisos: string[] }> {
   return generarOT({ ...params, ordenCompra: null });
+}
+
+
+// ── Orden de compra posterior a la asignación ─────────────────────────────────
+
+/**
+ * Registra la OC de una cotización que ya está ASIGNADA y ya tiene su OT.
+ *
+ * Es el caso de negocio que `generarOTSinOrdenCompra` promete y que no estaba
+ * implementado: el trabajo se ejecuta porque el cliente lo autorizó de palabra
+ * y la orden de compra llega semanas después. Tras la recarga de 2026 son 22
+ * cotizaciones en esa situación.
+ *
+ * No se puede hacer por el flujo normal: `generarOT` exige estatus ENVIADA y
+ * volvería a intentar crear la OT, que ya existe — 422 por un lado y 409 por
+ * el otro.
+ *
+ * Escribe en **la versión que tiene la OT**, no en la vigente. No son lo mismo:
+ * se puede aceptar la v0 y levantar una v1 después, y entonces la vigente es
+ * otra fila. Escribir en la vigente dejaría la OC en una versión que el cliente
+ * nunca aceptó, en silencio.
+ */
+export async function registrarOcPosterior(params: {
+  numero: number;
+  anio: number;
+  ordenCompra: string;
+  usuario: string;
+}): Promise<{ version: number; folioOt: string; ordenCompra: string }> {
+  const oc = params.ordenCompra.trim();
+  if (!oc) throw new Error("La orden de compra es obligatoria");
+
+  // La versión asignada con OT. Si hubiera varias —no debería: hay un índice
+  // único por (numero_cotizacion, anio) en `ordenes_trabajo`— se toma la más
+  // alta, que es la que el ERP considera vigente entre las asignadas.
+  const [asignada] = await getDb()
+    .select({
+      version: cotizaciones.version,
+      folioOt: cotizaciones.folioOt,
+      ordenCompra: cotizaciones.ordenCompra,
+    })
+    .from(cotizaciones)
+    .where(
+      and(
+        eq(cotizaciones.numero, params.numero),
+        eq(cotizaciones.anio, params.anio),
+        eq(cotizaciones.estatus, "ASIGNADA"),
+        isNotNull(cotizaciones.folioOt),
+      ),
+    )
+    .orderBy(desc(cotizaciones.version))
+    .limit(1);
+
+  if (!asignada?.folioOt) {
+    throw new Error(
+      `La cotización ${cotPk(params.numero, params.anio)} no tiene una versión ASIGNADA con orden de trabajo`,
+    );
+  }
+  if (asignada.ordenCompra) {
+    throw new Error(
+      `La v${asignada.version} ya tiene la orden de compra ${asignada.ordenCompra}`,
+    );
+  }
+
+  // Las dos tablas en un solo lote: el driver HTTP de Neon no tiene
+  // transacciones interactivas, pero `batch` ejecuta el arreglo como una sola
+  // transacción. Importa porque dejar la OC en la cotización y no en la OT
+  // —o al revés— deja las dos pantallas contradiciéndose.
+  const db = getDb();
+  await db.batch([
+    db
+      .update(cotizaciones)
+      .set({ ordenCompra: oc, updatedAt: new Date() })
+      .where(
+        and(
+          eq(cotizaciones.numero, params.numero),
+          eq(cotizaciones.anio, params.anio),
+          eq(cotizaciones.version, asignada.version),
+        ),
+      ),
+    db
+      .update(ordenesTrabajo)
+      .set({ ordenCompra: oc, updatedAt: new Date() })
+      .where(eq(ordenesTrabajo.folio, asignada.folioOt)),
+  ]);
+
+  await registrarBitacora({
+    accion: "COTIZACION_OC_POSTERIOR",
+    usuario: params.usuario,
+    referencia: cotPk(params.numero, params.anio),
+    detalle: `OC registrada después de asignar: ${oc} (v${asignada.version}, ${asignada.folioOt})`,
+  });
+
+  return { version: asignada.version, folioOt: asignada.folioOt, ordenCompra: oc };
+}
+
+
+/** Lo mínimo que explica por qué se cambió una OC ya registrada. */
+export const MOTIVO_MINIMO = 5;
+
+/**
+ * Corrige una orden de compra YA registrada.
+ *
+ * Distinto de `registrarOcPosterior`, que llena un hueco: aquí se reescribe un
+ * número que ya está en uso para facturar y cobrar. Pasa por errores de captura
+ * y por cambios que el cliente hace en planta, y siempre deja en bitácora la OC
+ * anterior, la nueva y el motivo — sin eso, un cambio de OC es indistinguible
+ * de un error.
+ *
+ * Escribe sobre la misma versión que tiene la OT, por la misma razón que
+ * `registrarOcPosterior`: la vigente puede ser otra.
+ */
+export async function modificarOcPosterior(params: {
+  numero: number;
+  anio: number;
+  ordenCompra: string;
+  motivo: string;
+  usuario: string;
+}): Promise<{ version: number; folioOt: string; anterior: string; ordenCompra: string }> {
+  const oc = params.ordenCompra.trim();
+  const motivo = params.motivo.trim();
+  if (!oc) throw new Error("La orden de compra es obligatoria");
+  if (motivo.length < MOTIVO_MINIMO) {
+    throw new Error(
+      `El motivo es obligatorio y debe tener al menos ${MOTIVO_MINIMO} caracteres`,
+    );
+  }
+
+  const [asignada] = await getDb()
+    .select({
+      version: cotizaciones.version,
+      folioOt: cotizaciones.folioOt,
+      ordenCompra: cotizaciones.ordenCompra,
+    })
+    .from(cotizaciones)
+    .where(
+      and(
+        eq(cotizaciones.numero, params.numero),
+        eq(cotizaciones.anio, params.anio),
+        eq(cotizaciones.estatus, "ASIGNADA"),
+        isNotNull(cotizaciones.folioOt),
+      ),
+    )
+    .orderBy(desc(cotizaciones.version))
+    .limit(1);
+
+  if (!asignada?.folioOt) {
+    throw new Error(
+      `La cotización ${cotPk(params.numero, params.anio)} no tiene una versión ASIGNADA con orden de trabajo`,
+    );
+  }
+  // Sin OC previa esto no es una corrección: es un alta, y tiene su propia ruta
+  // con su propio permiso. Confundirlas dejaría entrar un alta sin el permiso
+  // más alto que esta operación exige.
+  if (!asignada.ordenCompra) {
+    throw new Error(
+      `La v${asignada.version} todavía no tiene orden de compra; regístrala en vez de modificarla`,
+    );
+  }
+  const anterior = asignada.ordenCompra;
+
+  const db = getDb();
+  await db.batch([
+    db
+      .update(cotizaciones)
+      .set({ ordenCompra: oc, updatedAt: new Date() })
+      .where(
+        and(
+          eq(cotizaciones.numero, params.numero),
+          eq(cotizaciones.anio, params.anio),
+          eq(cotizaciones.version, asignada.version),
+        ),
+      ),
+    db
+      .update(ordenesTrabajo)
+      .set({ ordenCompra: oc, updatedAt: new Date() })
+      .where(eq(ordenesTrabajo.folio, asignada.folioOt)),
+  ]);
+
+  await registrarBitacora({
+    accion: "COTIZACION_OC_MODIFICADA",
+    usuario: params.usuario,
+    referencia: cotPk(params.numero, params.anio),
+    detalle: `OC ${anterior} → ${oc} (v${asignada.version}, ${asignada.folioOt}). Motivo: ${motivo}`,
+  });
+
+  return { version: asignada.version, folioOt: asignada.folioOt, anterior, ordenCompra: oc };
 }

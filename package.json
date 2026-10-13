@@ -19,7 +19,7 @@
     "import:erp": "tsx scripts/importar-erp.ts",
     "backfill:carpetas": "tsx scripts/backfill-carpetas-cotizaciones.ts",
     "auditar:pdfs": "tsx scripts/auditar-pdfs-cotizaciones.ts",
-    "marcar:no-asignadas": "tsx scripts/marcar-no-asignadas-importadas.ts"
+    "importar:2026": "tsx scripts/importar-excel-2026.ts"
   },
   "devDependencies": {
     "dotenv": "^16.4.7",

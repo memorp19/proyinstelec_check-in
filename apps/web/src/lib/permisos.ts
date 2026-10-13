@@ -53,6 +53,16 @@ export const PERMISOS = [
    * a jefes de área sin darles también el alta de OT.
    */
   "ot.reasignar",
+  /**
+   * Corregir una orden de compra YA registrada.
+   *
+   * Más alto que `ot.crear` a propósito: registrar una OC que falta completa
+   * un dato; cambiar una que ya está reescribe el número con el que se
+   * factura y se cobra, en la cotización y en su OT a la vez. Son errores de
+   * captura y cambios que el cliente hace en planta, no operación diaria, así
+   * que lo tiene menos gente y siempre deja motivo en bitácora.
+   */
+  "ot.oc.modificar",
   "ot.documentos",
   "control.operativo.crear",
 ] as const;
@@ -103,7 +113,13 @@ export const GRUPOS_PERMISOS: Array<{ titulo: string; permisos: Permiso[] }> = [
   },
   {
     titulo: "Órdenes de Trabajo",
-    permisos: ["ot.crear", "ot.reasignar", "ot.documentos", "control.operativo.crear"],
+    permisos: [
+      "ot.crear",
+      "ot.reasignar",
+      "ot.oc.modificar",
+      "ot.documentos",
+      "control.operativo.crear",
+    ],
   },
 ];
 
