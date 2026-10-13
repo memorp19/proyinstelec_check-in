@@ -84,6 +84,15 @@ export interface Partida {
    */
   ajuste?: number;
   /**
+   * El precio al que se decidió vender, fijado a mano.
+   *
+   * Cuando está, manda sobre el cálculo y el `ajuste` **se deriva**:
+   * `precio × cantidad − total calculado`. No sustituye al ajuste, lo produce
+   * — así sigue viéndose de dónde sale la diferencia en vez de aparecer un
+   * precio sin explicación.
+   */
+  precioUnitarioFinal?: number;
+  /**
    * `false` saca a la partida del reparto de gastos generales.
    *
    * Es el caso de una partida que trae su propio equipo y sus propios
@@ -121,6 +130,14 @@ export interface EntradaCotizacion {
   reparto?: RepartoGastos;
   /** Un solo porcentaje global. Por omisión 0. */
   asesoriaPct?: number;
+  /**
+   * El IVA de ESTA versión, en por ciento. Por omisión, el vigente.
+   *
+   * Se guarda por versión y no se lee de una constante al imprimir: una
+   * cotización de hace tres años se reimprime con el IVA que llevaba, no con
+   * el de hoy.
+   */
+  ivaPct?: number;
   /** Nodos que cubre el costo base de un estudio, de la configuración. */
   baseNodosPorOmision?: number;
   partidas: Partida[];
@@ -169,7 +186,10 @@ export interface PartidaCalculada {
    */
   costoTotal: number;
   asesoria: number;
+  /** Derivado cuando la partida trae precio final; capturado en los demás casos. */
   ajuste: number;
+  /** `true` si el ajuste salió de un precio final fijado a mano. */
+  ajusteDerivado: boolean;
   /** `costoTotal + asesoria + ajuste`. */
   total: number;
   /** `total / cantidad`, redondeado. Es lo que ve el cliente. */
@@ -180,6 +200,8 @@ export interface PartidaCalculada {
 
 export interface ResultadoCotizacion {
   moneda: Moneda;
+  /** El porcentaje de IVA con el que se calculó. */
+  ivaPct: number;
   partidas: PartidaCalculada[];
   gastos: GastoCalculado[];
   /** Conceptos + gastos de todas las partidas, sin asesoría. Panel interno. */
