@@ -20,6 +20,9 @@
  *   --archivo=<ruta>   el .xlsx a leer (default: importacion/catalogo-2026.xlsx)
  *   --usuario=<quien>  queda en `updated_by` y en el historial (default: importador)
  *   --motivo=<texto>   el motivo del cambio, obligatorio en el historial
+ *   --dar-de-baja      pone activo = false en los códigos que ya no vienen en
+ *                      el Excel (solo con --aplicar; sin esto se reportan y no
+ *                      se tocan)
  *
  * Variables: DATABASE_URL y, opcionalmente, PRODUCTION_DATABASE_HOST.
  */
@@ -52,6 +55,20 @@ const MOTIVO = opcion("motivo") ?? "Carga del catálogo 2026 (PFAD-024-2026)";
 const MONEDA = "MXN";
 
 const banderas = leerBanderas();
+
+/**
+ * Dar de baja los códigos que ya no vienen en el Excel.
+ *
+ * Es una bandera aparte de `--aplicar` a propósito. El reporte SIEMPRE lista
+ * los sobrantes, pero apagarlos es otra cosa: una corrida con el archivo
+ * equivocado —una versión vieja, una hoja a medio llenar— dejaría medio
+ * catálogo inactivo de una sola pasada. Que haya que teclearlo convierte el
+ * descuido en una decisión.
+ *
+ * Nunca borra: un código inactivo sigue existiendo porque hay cotizaciones
+ * viejas que lo citan.
+ */
+const DAR_DE_BAJA = process.argv.includes("--dar-de-baja");
 
 if (!process.env.DATABASE_URL) {
   console.error("❌  Falta DATABASE_URL (apps/web/.env.local)");
@@ -240,7 +257,10 @@ function sentencias(servicios: Servicio[], cambios: Array<Campo & { codigo: stri
         ingenieros = EXCLUDED.ingenieros,
         semanas = EXCLUDED.semanas,
         tarifa_hora = EXCLUDED.tarifa_hora,
-        activo = true,
+        -- La columna activo NO se toca al actualizar: un alta entra activa,
+        -- pero un código que alguien apagó a mano no revive por volver a
+        -- cargar el Excel. Encenderlo y apagarlo son decisiones de una
+        -- persona, no efectos de una corrida.
         updated_at = now(),
         updated_by = EXCLUDED.updated_by
     `);
@@ -255,6 +275,30 @@ function sentencias(servicios: Servicio[], cambios: Array<Campo & { codigo: stri
     `);
   }
 
+  return lote;
+}
+
+/**
+ * Las bajas: `activo = false` y su renglón en el historial, con motivo.
+ *
+ * No se borra el código. Hay cotizaciones de años anteriores que lo citan, y
+ * un catálogo que pierde un renglón deja esas cotizaciones hablando de algo
+ * que ya no existe.
+ */
+function bajas(codigos: string[]) {
+  const lote: unknown[] = [];
+  for (const codigo of codigos) {
+    lote.push(sql`
+      UPDATE cat_servicios
+         SET activo = false, updated_at = now(), updated_by = ${USUARIO}
+       WHERE codigo = ${codigo} AND activo = true
+    `);
+    lote.push(sql`
+      INSERT INTO cat_servicios_cambios (id, codigo, campo, antes, despues, usuario, motivo)
+      VALUES (${randomUUID()}, ${codigo}, ${"activo"}, ${"true"}, ${"false"}, ${USUARIO},
+              ${`${MOTIVO} — el código ya no viene en el Excel`})
+    `);
+  }
   return lote;
 }
 
@@ -334,6 +378,22 @@ async function main() {
   }
 
   const enExcel = new Set(servicios.map((s) => s.codigo));
+
+  // Están en el Excel y apagados en la base: la carga ya no los enciende sola,
+  // así que hay que poder verlos.
+  const apagadosEnBase = servicios
+    .map((s) => s.codigo)
+    .filter((c) => base.has(c) && !base.get(c)!.activo);
+  if (apagadosEnBase.length) {
+    console.log(
+      `
+    ${apagadosEnBase.length} vienen en el Excel pero están inactivos en la base:
+` +
+        `      ${apagadosEnBase.join(", ")}
+` +
+        "      Se actualizan sus datos y siguen inactivos. Encenderlos es a mano.",
+    );
+  }
   const soloEnBase = [...base.keys()].filter((c) => !enExcel.has(c));
 
   console.log(`\n🗃️  Contra ${HOST}:`);
@@ -344,11 +404,22 @@ async function main() {
   for (const c of cambios) {
     console.log(`    ~ ${c.codigo.padEnd(24)} ${c.campo}: ${c.antes ?? "—"} → ${c.despues ?? "—"}`);
   }
+  // Los sobrantes se listan SIEMPRE, vengan o no acompañados de --dar-de-baja:
+  // un servicio retirado del catálogo que se sigue ofreciendo es justo lo que
+  // nadie nota hasta que aparece en una cotización.
+  const activosSobrantes = soloEnBase.filter((c) => base.get(c)?.activo);
   if (soloEnBase.length) {
     console.log(
-      `    ${soloEnBase.length} códigos están en la base y no en el Excel; se quedan como están:\n` +
-        `      ${soloEnBase.join(", ")}\n` +
-        "      Darlos de baja es una decisión de alguien, no de un script.",
+      `\n    ${soloEnBase.length} códigos están en la base y no vienen en el Excel ` +
+        `(${activosSobrantes.length} siguen activos):`,
+    );
+    for (const c of soloEnBase) {
+      console.log(`    ${base.get(c)?.activo ? "·" : "×"} ${c.padEnd(24)} ${base.get(c)?.descripcion ?? ""}`);
+    }
+    console.log(
+      DAR_DE_BAJA
+        ? `      Se van a dar de baja los ${activosSobrantes.length} activos (activo = false).`
+        : "      Se quedan como están. Para apagarlos: --dar-de-baja (además de --aplicar).",
     );
   }
 
@@ -358,6 +429,7 @@ async function main() {
   }
 
   const lote = sentencias(servicios, cambios);
+  if (DAR_DE_BAJA && activosSobrantes.length) lote.push(...bajas(activosSobrantes));
   const { aplicado } = await ejecutarLote(sql, lote, banderas);
 
   if (!aplicado) {
@@ -369,7 +441,8 @@ async function main() {
   }
   console.log(
     `\n✅  Catálogo cargado: ${servicios.length} servicios` +
-      `${cambios.length ? ` y ${cambios.length} cambios en el historial` : ""}.\n`,
+      `${cambios.length ? ` y ${cambios.length} cambios en el historial` : ""}` +
+      `${DAR_DE_BAJA && activosSobrantes.length ? ` · ${activosSobrantes.length} dados de baja` : ""}.\n`,
   );
 }
 
