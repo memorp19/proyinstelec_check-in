@@ -138,7 +138,7 @@ export function RevisionClient() {
                       </button>
                       <button
                         onClick={() => { setCorrigiendo(c); setComentario(""); }}
-                        className="font-mono text-[10px] font-bold text-amber-300 border border-amber-400/30 rounded-lg px-3 py-1.5 transition-colors hover:border-amber-300"
+                        className="font-mono text-[10px] font-bold text-amber border border-amber/30 rounded-lg px-3 py-1.5 transition-colors hover:border-amber"
                       >
                         Solicitar corrección
                       </button>

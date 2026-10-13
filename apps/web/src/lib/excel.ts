@@ -54,6 +54,7 @@ function entradasZip(buf: Buffer): Map<string, Buffer> {
         "Vuelve a guardarlo desde Excel como .xlsx normal.",
     );
   }
+
   const fuera = new Map<string, Buffer>();
 
   for (let n = 0; n < total; n++) {
