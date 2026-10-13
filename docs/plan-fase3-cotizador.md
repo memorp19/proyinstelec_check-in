@@ -105,6 +105,8 @@ que el PDF salga de aquí.
     `origen_monto` diciendo de dónde salió: `COTIZADOR`, `MANUAL` u `OC`.
 25. **`config_erp`** guarda `ASESORIA_PCT_DEFAULT = 10`,
     `BASE_NODOS_ESTUDIO = 10` y `HORAS_DIA_ESTUDIO = 8`. Resuelve §6.8.
+26. **Las entradas se guardan con su precisión completa y solo los resultados
+    se redondean** (§1.7). Lo aprendimos rompiéndolo: ver más abajo.
 
 ### El importe con letra corrige tres defectos del sistema anterior
 
@@ -366,7 +368,56 @@ porque sumarlas exigiría inventar un tipo de cambio. Las históricas conservan
 su monto con `origen_monto` en `MANUAL` u `OC`: hay que poder saber que ese
 número no es un cálculo.
 
-### 1.7 Qué se migra y cómo
+### 1.7 La precisión de los montos, y cómo nos enteramos
+
+Dos escalas, y la regla que las separa es de una línea:
+
+| | Tipo | Qué va ahí |
+|---|---|---|
+| **Entra** al motor | `numeric(18,6)` | costos del catálogo y de los conceptos, `costo_catalogo`, costos de gastos, cantidades, ajuste, precio unitario final, gasto manual, tarifa por hora |
+| **Porcentajes** | `numeric(9,6)` | asesoría, IVA, utilidad |
+| **Sale** del motor | `numeric(14,2)` | subtotal, IVA y total de `cot_importes` |
+
+El tipo de cambio va en `numeric(12,6)`: Banxico publica el FIX con cuatro
+decimales, pero un tipo pactado con un cliente puede traer los que traiga, y esa
+no es una decisión que deba tomar una columna.
+
+**La primera versión de la 0006 guardaba los costos en `numeric(14,2)` y estuvo
+mal.** Se vio corriendo `prueba-068.ts` contra la base: el motor, solo, daba el
+total del PDF al centavo; pasando por la base daba diez centavos de más.
+
+El concepto `COSTO_DISPONIBLE_006` de la 068 cuesta **2,671.885 USD**. Guardado
+en una columna de dos decimales, Postgres lo redondea a 2,671.89 **sin decir
+nada**. Después se multiplica por su utilidad (1.2), por el tipo de cambio (18)
+y por la asesoría (1.05), y los cinco milésimos de la entrada se vuelven diez
+centavos en el importe de la partida:
+
+| | Entrada correcta | Recortada a dos decimales |
+|---|---|---|
+| Costo | 2,671.885 | 2,671.89 |
+| Importe del concepto | 57,712.72 | 57,712.82 |
+| Partida P2 | 273,870.00 | 273,870.10 |
+| Subtotal | 1,046,113.00 | 1,046,113.10 |
+| Total | **1,213,491.08** | 1,213,491.20 |
+
+La lección no es "poner más decimales". Es que **un costo de catálogo no es
+dinero todavía**: es el dato con el que se calcula el dinero. El dinero aparece
+al final, y ahí sí se redondea a centavos, en cada paso, como el motor ya hace.
+Confundir las dos cosas es lo que produce un documento que no cuadra con su
+propia suma.
+
+Dos consecuencias prácticas:
+
+- **El importador del catálogo se niega** si una celda trae más decimales de los
+  que la columna guarda. No carga recortando: para y lo dice. Los decimales se
+  cuentan sobre el **texto** de la celda, porque sobre el número ya convertido
+  no se distingue lo que traía de lo que el binario le hizo.
+- **El test de ida y vuelta escribe como escribe la columna.** El anterior
+  formateaba con cuatro decimales mientras la columna guardaba dos, así que el
+  redondeo no aparecía en memoria: solo salía contra la base. Ahora hay un test
+  que reproduce el fallo —el total 1,213,491.20— para que no vuelva en silencio.
+
+### 1.8 Qué se migra y cómo
 
 | Origen | Destino | Cómo |
 |---|---|---|
