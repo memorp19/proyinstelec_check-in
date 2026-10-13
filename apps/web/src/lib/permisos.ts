@@ -36,6 +36,20 @@ export const PERMISOS = [
    * Cada cambio exige motivo y queda en `cat_servicios_cambios`.
    */
   "catalogo.servicios.editar",
+  /**
+   * Armar CUALQUIER cotización, no solo las propias.
+   *
+   * Por omisión una cotización la arma quien la dio de alta: se le reconoce
+   * por `created_by` (las del ERP nuevo) o por `elaboro` contra sus iniciales
+   * (las importadas, donde `created_by` dice "importador"). Este permiso es la
+   * excepción, para el gerente de operaciones: necesita poder entrar a la de
+   * cualquiera sin que nadie le pase el control.
+   *
+   * Es un permiso y no la columna `gerencia` porque esa es texto libre que se
+   * teclea en el panel de admin —"Operación", "Operaciones", "operacion"
+   * pasarían las tres— y una autorización no se decide con un rótulo.
+   */
+  "cotizaciones.armar.todas",
 
   // Actividades / Weekly
   "actividades.asignar",
@@ -92,7 +106,12 @@ export const GRUPOS_PERMISOS: Array<{ titulo: string; permisos: Permiso[] }> = [
   },
   {
     titulo: "Comercial",
-    permisos: ["cotizaciones.enviar", "cotizaciones.aprobar", "catalogo.servicios.editar"],
+    permisos: [
+      "cotizaciones.enviar",
+      "cotizaciones.aprobar",
+      "catalogo.servicios.editar",
+      "cotizaciones.armar.todas",
+    ],
   },
   {
     titulo: "Actividades y seguimiento",
