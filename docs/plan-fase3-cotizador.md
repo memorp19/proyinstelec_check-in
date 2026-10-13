@@ -78,6 +78,34 @@ que el PDF salga de aquí.
 16. **Importe con letra**: función pura, en pesos y en dólares. Nunca se
     escribe a mano.
 
+**De modelo** — cerradas al armar el PR del modelo, todas implementadas:
+
+17. **El catálogo es una tabla propia** con historial aparte
+    (`cat_servicios_cambios`), **motivo obligatorio** en cada cambio y permiso
+    propio para editarlo (`catalogo.servicios.editar`). Un solo precio para
+    todos los clientes.
+18. **El concepto copia su costo al agregarse.** Un cambio de catálogo no mueve
+    una cotización abierta. Se guardan **dos** costos —el usado y el del
+    catálogo al copiarlo— para distinguir "el catálogo se movió" de "alguien
+    negoció este precio". Actualizar es explícito y devuelve el antes y el
+    después (§1.5).
+19. **Los gastos van en tabla propia**, con destino opcional a una partida; la
+    partida guarda si recibe los generales. Es lo que hace representable la 068.
+20. **Precio unitario final** por partida: cuando está, el ajuste **se deriva**
+    y queda visible, y avisa si la venta queda por debajo del costo (§1.4).
+21. **Por versión** se guardan asesoría, IVA, tipo de cambio con origen y
+    motivo, moneda, los ids de Drive y los bloques de condiciones y documento,
+    **validados y con versión de esquema** (§1.3).
+22. **Se congela al mandar a revisión**, no al enviar: es cuando los números
+    dejan de moverse porque alguien más los va a mirar. Después, la versión no
+    se edita (§1.6). Resuelve §6.2.
+23. **La versión nueva copia todo con sus costos tal cual** y avisa si el
+    catálogo cambió. No reprecia nada por su cuenta (§5).
+24. **Las históricas conservan su monto** en `monto_mxn` / `monto_usd`, con
+    `origen_monto` diciendo de dónde salió: `COTIZADOR`, `MANUAL` u `OC`.
+25. **`config_erp`** guarda `ASESORIA_PCT_DEFAULT = 10`,
+    `BASE_NODOS_ESTUDIO = 10` y `HORAS_DIA_ESTUDIO = 8`. Resuelve §6.8.
+
 ### El importe con letra corrige tres defectos del sistema anterior
 
 Es el renglón que el cliente compara contra la cifra y el que un revisor usa
@@ -114,92 +142,135 @@ de ninguna v0**. Guardar el id elimina la clase de problema.
 
 ## 1. Modelo de datos
 
-Cinco tablas nuevas. Todas cuelgan de una **versión** de cotización, no de la
-cotización: la llave es `(numero, anio, version)`, que es la primaria de
-`cotizaciones`.
+> **Actualizado al cerrar el PR del modelo.** Lo que sigue es el esquema que se
+> implementó, no el que se propuso: siete tablas y no cinco. Las diferencias
+> contra la propuesta original están señaladas donde aparecen, con su motivo.
+
+Todas cuelgan de una **versión** de cotización, no de la cotización: la llave es
+`(numero, anio, version)`, que es la primaria de `cotizaciones`.
 
 ```
-cotizaciones (numero, anio, version)  ← ya existe
+cotizaciones (numero, anio, version)  ← ya existe, + origen_monto
       │
-      ├── cot_armado        1:1   encabezado, modo, moneda, condiciones, documento
+      ├── cot_armado        1:1   encabezado, monedas, condiciones, documento
       │        ├── cot_partidas     1:N
-      │        │        └── cot_conceptos  1:N   (tipo PARTIDA)
-      │        └── cot_conceptos    1:N         (tipo GASTO, sin partida)
-      └── cot_importes      1:1   los números congelados al enviar
+      │        │        └── cot_conceptos  1:N
+      │        └── cot_gastos       1:N   (con destino opcional a una partida)
+      └── cot_importes      1:1   los números congelados al mandar a revisión
 
-cat_servicios   catálogo, independiente de las cotizaciones
+cat_servicios            catálogo, independiente de las cotizaciones
+      └── cat_servicios_cambios   historial, con motivo obligatorio
 ```
 
 ### 1.1 `cat_servicios` — el catálogo
 
-Migra desde la hoja `Cat_Servicios` (`COT_03:71-78`).
+Migra desde la hoja `Cat_Servicios` (`COT_03:71-78`) y se carga del formato
+`PFAD-024-2026` con `scripts/importar-catalogo-2026.ts`.
 
 | Columna | Tipo | Notas |
 |---|---|---|
-| `codigo` | `text` PK | En mayúsculas. `SP-01`, `AR-03`… |
+| `codigo` | `text` PK | En mayúsculas. `SP001`, `AR003`, `COSTO_AYUDANTE`… |
+| `familia` | `text NOT NULL` | `SP`, `PR`, `AR`, `IN`, `BT`, `COSTO` |
 | `descripcion` | `text NOT NULL` | |
-| `costo` | `numeric(14,2)` | Costo de venta: ya trae margen dentro |
 | `unidad` | `text NOT NULL DEFAULT 'servicio'` | |
-| `familia` | `text NOT NULL` | `SP`, `PR`, `AR`, `IN`, `BT`, `AD` (`COT_03:84-91`) |
-| `tipo` | `text NOT NULL` | `SERVICIO` \| `GASTO` |
+| `costo` | `numeric(14,2)` | Costo de venta: ya trae margen dentro |
+| `moneda` | `text NOT NULL DEFAULT 'MXN'` | |
+| `tipo` | `text NOT NULL` | `SERVICIO` \| `ESTUDIO` \| `GASTO` |
+| `horas_por_dia`, `dias_por_semana`, `ingenieros`, `semanas` | `integer` | Solo `ESTUDIO` |
+| `tarifa_hora` | `numeric(14,2)` | Solo `ESTUDIO` |
+| `base_nodos` | `integer` | Solo `ESTUDIO`; sin él, el de `config_erp` |
 | `activo` | `boolean NOT NULL DEFAULT true` | |
-| `dias`, `ingenieros`, `semanas` | `integer` | Solo familia `AR` |
-| `tarifa_hora` | `numeric(14,2)` | Solo familia `AR` |
-| `base_nodos` | `integer` | Solo familia `AR`, por omisión 10 |
-| `actualizado_por`, `updated_at` | | |
+| `updated_by`, `created_at`, `updated_at` | | |
 
-La familia `AR` (Análisis de Redes) es el caso raro: **un estudio no tiene
-precio de lista, se estima por esfuerzo**, y esas cinco columnas son la
-propuesta que el catálogo ofrece. Cada cotización las puede ajustar.
+**`ESTUDIO` es un tipo y no una familia** (la propuesta tenía dos valores). La
+familia `AR` es el caso raro: un estudio no tiene precio de lista, **se estima
+por esfuerzo**, y esas cinco columnas son la propuesta que el catálogo ofrece.
+Cada cotización las puede ajustar.
 
-**Bitácora de cambios.** Apps Script lleva `Cat_Servicios_Cambios` precisamente
-porque recargar el catálogo desde el Excel borraba lo editado a mano
-(`PROCESO_COTIZACIONES.md:157`). Aquí no hace falta tabla nueva: se registra en
-`bitacora` con acción `CATALOGO_SERVICIO_CAMBIO`.
+**Un solo precio para todos los clientes.** No hay precios por cliente, y es una
+decisión y no una omisión: un descuento vive en la cotización que lo concede
+—como utilidad del concepto o como ajuste de la partida—, donde se ve y se puede
+explicar. Pegado al catálogo se volvería invisible.
 
-### 1.2 `cot_armado` — el encabezado de la versión
-
-Migra desde `Cot_Encabezado` (`COT_04:48-67`).
-
-| Columna | Tipo | Notas |
-|---|---|---|
-| `numero`, `anio`, `version` | `integer` | PK compuesta, FK a `cotizaciones` |
-| `modo` | `text NOT NULL DEFAULT 'GENERAL'` | `GENERAL` \| `POR_PARTIDA` |
-| `moneda` | `text NOT NULL DEFAULT 'MXN'` | La general |
-| `moneda_gastos` | `text NOT NULL DEFAULT 'MXN'` | Los gastos llevan la suya |
-| `tipo_cambio` | `numeric(10,4)` | Solo si conviven monedas |
-| `reparto_gastos` | `text NOT NULL DEFAULT 'IGUAL'` | `IGUAL` \| `PROPORCIONAL` \| `MANUAL` |
-| `asesoria_pct` | `numeric(5,2) NOT NULL DEFAULT 0` | |
-| `condiciones_pago` | `text` | |
-| `tiempo_entrega` | `text` | |
-| `lugar_entrega` | `text` | |
-| `vigencia_dias` | `integer NOT NULL DEFAULT 30` | |
-| `documento` | `jsonb` | Contacto corregido, normas, párrafos, reporte |
-| `created_by`, `created_at`, `updated_at` | | |
-
-`documento` queda como JSON igual que en Apps Script: son los textos que cambian
-entre cotizaciones y no tienen estructura fija. Modelarlos en columnas obligaría
-a una migración cada vez que la plantilla gane un párrafo.
-
-### 1.3 `cot_partidas`
-
-Migra desde `Cot_Partidas` (`COT_04:92-110`).
+### 1.2 `cat_servicios_cambios` — el historial
 
 | Columna | Tipo | Notas |
 |---|---|---|
 | `id` | `text` PK | uuid |
-| `numero`, `anio`, `version` | `integer` | FK a `cot_armado`, `ON DELETE CASCADE` |
-| `orden` | `integer NOT NULL` | 1, 2, 3… Es el "Numero" de la hoja |
-| `titulo` | `text NOT NULL` | |
+| `codigo` | `text NOT NULL` | FK a `cat_servicios`, `ON DELETE CASCADE` |
+| `campo`, `antes`, `despues` | `text` | Qué cambió y de qué a qué |
+| `usuario` | `text NOT NULL` | |
+| `motivo` | `text NOT NULL` | **Obligatorio**: sin él el renglón no se escribe |
+| `fecha` | `timestamptz NOT NULL DEFAULT now()` | |
+
+Es tabla propia y no un renglón de `bitacora` —como proponía la versión anterior
+de este plan— porque el motivo es **obligatorio** y la bitácora no puede
+exigirlo, y porque la pregunta que hay que poder contestar es "qué le ha pasado
+a este código", que contra `bitacora` sería una búsqueda de texto.
+
+Apps Script lleva `Cat_Servicios_Cambios` precisamente porque recargar el
+catálogo desde el Excel borraba lo editado a mano
+(`PROCESO_COTIZACIONES.md:157`).
+
+**Editarlo exige permiso propio**: `catalogo.servicios.editar`, en el grupo
+Comercial. Cotizar no es lo mismo que mover el precio de lista de toda la
+empresa.
+
+### 1.3 `cot_armado` — el encabezado de la versión
+
+| Columna | Tipo | Notas |
+|---|---|---|
+| `numero`, `anio`, `version` | `integer` | PK compuesta |
+| `moneda` | `text NOT NULL DEFAULT 'MXN'` | La del resultado |
+| `moneda_gastos` | `text NOT NULL DEFAULT 'MXN'` | Los gastos llevan la suya |
+| `reparto_gastos` | `text NOT NULL DEFAULT 'IGUAL'` | `IGUAL` \| `PROPORCIONAL` \| `MANUAL` |
+| `asesoria_pct` | `numeric(5,2) NOT NULL DEFAULT 10` | De `config_erp` al crear |
+| `iva_pct` | `numeric(5,2) NOT NULL DEFAULT 16` | Por versión, ver §1.6 |
+| `tipo_cambio` | `numeric(10,4)` | Solo si conviven monedas |
+| `tipo_cambio_origen` | `text` | `BANXICO` \| `PREFERENTE` |
+| `tipo_cambio_motivo` | `text` | Obligatorio si es `PREFERENTE` |
+| `condiciones` | `jsonb` | Bloque validado, con versión de esquema |
+| `documento` | `jsonb` | Bloque validado, con versión de esquema |
+| `pdf_drive_id`, `doc_drive_id` | `text` | El PDF enviado y el Doc que lo generó |
+| `created_by`, `created_at`, `updated_at` | | |
+
+**No hay columna `modo`.** El modo `POR_PARTIDA` quedó fuera del alcance
+(decisión 13) y una columna para un modo que no existe solo invita a leerla.
+
+**Las condiciones son un bloque y no cuatro columnas.** Pago, entrega, lugar y
+vigencia crecen con la plantilla, no con el modelo. Pero `jsonb` sin validar es
+texto: todo lo que entra pasa por `normalizarCondiciones` /
+`normalizarDocumento`, que devuelven el bloque en forma válida y **una lista de
+avisos**, nunca un error — una cotización a medio armar tiene que poder
+guardarse (§2.9). Cada bloque lleva su `esquema`: uno más nuevo del que el
+código entiende se deja intacto y se avisa, en vez de "arreglarlo" perdiendo
+datos.
+
+### 1.4 `cot_partidas`
+
+| Columna | Tipo | Notas |
+|---|---|---|
+| `id` | `text` PK | uuid, **nuevo en cada versión** |
+| `numero`, `anio`, `version` | `integer` | |
+| `orden` | `integer NOT NULL` | 1, 2, 3… el renglón del documento |
+| `titulo` | `text NOT NULL DEFAULT ''` | |
 | `descripcion` | `text` | El alcance completo, **con saltos de línea** |
 | `cantidad` | `numeric(14,4) NOT NULL DEFAULT 1` | |
 | `unidad` | `text NOT NULL DEFAULT 'servicio'` | |
-| `moneda` | `text` | Solo en modo `POR_PARTIDA` |
-| `asesoria_pct` | `numeric(5,2)` | Solo en modo `POR_PARTIDA` |
-| `ajuste` | `numeric(14,2) NOT NULL DEFAULT 0` | Suma o resta sobre el subtotal |
+| `ajuste` | `numeric(14,2) NOT NULL DEFAULT 0` | Suma o resta, visible |
+| `precio_unitario_final` | `numeric(14,2)` | El precio al que se decidió vender |
+| `recibe_gastos_generales` | `boolean NOT NULL DEFAULT true` | `false` la saca del reparto |
 | `gasto_manual` | `numeric(14,2)` | Solo con reparto `MANUAL` |
 | `formato` | `text NOT NULL DEFAULT 'NORMAL'` | `NORMAL` \| `NEGRITAS` \| `OCULTO` |
 | `notas` | `text` | Interna, no sale en el documento |
+
+**`precio_unitario_final` no sustituye al ajuste: lo produce.** Cuando está, el
+motor deriva `ajuste = precio × cantidad − total calculado` y lo marca como
+derivado. Así el documento enseña el precio que se decidió **y** sigue viéndose
+de dónde sale la diferencia, en vez de aparecer un número sin explicación. Si el
+precio queda por debajo del costo de la partida —conceptos con utilidad más
+gastos asignados— sale un aviso con el faltante: vender con pérdida puede ser
+una decisión, pero tiene que ser una decisión y no un descuido.
 
 `descripcion` es `text` y no `varchar`: algunas llegan a cincuenta líneas con
 viñetas, y los saltos se conservan tal cual (`COT_04:99-107`).
@@ -207,88 +278,102 @@ viñetas, y los saltos se conservan tal cual (`COT_04:99-107`).
 Índice único en `(numero, anio, version, orden)` para que no haya dos partidas
 compitiendo por el renglón 3 del documento.
 
-### 1.4 `cot_conceptos`
+### 1.5 `cot_conceptos` y `cot_gastos`
 
-Migra desde `Cot_Conceptos` (`COT_04:112-122`). **Guarda las dos cosas**: los
-conceptos de una partida y los gastos del proyecto, distinguidos por `tipo`. Es
-como lo hace Apps Script y tiene sentido: los dos salen del mismo catálogo y
-comparten costo, margen y cantidad.
+**Son dos tablas y no una con `tipo`**, como proponía la versión anterior. El
+motivo es la 068: sus gastos no son todos del proyecto —la partida de tierras
+trae los suyos— y eso pide una columna `destino_partida_id` que en un concepto
+de partida no significa nada. Dos tablas dicen la verdad; una con la mitad de
+las columnas en `NULL`, no.
+
+`cot_conceptos`:
 
 | Columna | Tipo | Notas |
 |---|---|---|
 | `id` | `text` PK | uuid |
-| `numero`, `anio`, `version` | `integer` | FK a `cot_armado`, `ON DELETE CASCADE` |
-| `partida_id` | `text` | FK a `cot_partidas`. **NULL cuando `tipo = 'GASTO'`** |
-| `tipo` | `text NOT NULL` | `PARTIDA` \| `GASTO` |
-| `codigo` | `text` | Del catálogo, o `LIBRE` |
+| `partida_id` | `text NOT NULL` | FK a `cot_partidas`, `ON DELETE CASCADE` |
+| `numero`, `anio`, `version` | `integer` | Para consultar la versión sin unir |
+| `codigo` | `text` | Del catálogo, o nulo si es libre |
 | `descripcion_libre` | `text` | Cuando no hay catálogo detrás |
 | `cantidad` | `numeric(14,4) NOT NULL DEFAULT 0` | |
 | `unidad` | `text` | |
-| `costo` | `numeric(14,2)` | Capturado; manda sobre el del catálogo |
-| `margen_pct` | `numeric(5,2) NOT NULL DEFAULT 0` | |
-| `nodos`, `base_nodos`, `dias`, `ingenieros`, `semanas` | `integer` | Estudios AR |
-| `tarifa_hora` | `numeric(14,2)` | Estudios AR |
+| `costo` | `numeric(14,2)` | **El que se está usando** |
+| `costo_catalogo` | `numeric(14,2)` | **Lo que el catálogo decía al copiarlo** |
+| `utilidad_pct` | `numeric(5,2) NOT NULL DEFAULT 0` | |
+| `moneda_costo` | `text` | Si difiere, se convierte con el tipo de cambio |
+| `horas_por_dia`, `dias_por_semana`, `ingenieros`, `semanas`, `nodos`, `base_nodos` | `integer` | Estudios |
+| `tarifa_hora` | `numeric(14,2)` | Estudios |
 | `orden` | `integer NOT NULL` | |
 | `notas` | `text` | |
 
-**`CHECK (tipo = 'GASTO') = (partida_id IS NULL)`** — un gasto no cuelga de una
-partida y un concepto de partida siempre lo hace. La base lo impone, no el
-código.
+`cot_gastos` repite lo pertinente y añade:
 
-`costo` y `margen_pct` viven aquí y no en el catálogo porque son decisiones de
-**esta** cotización: un descuento a un cliente no debe quedarse pegado al
-catálogo (`COT_03:370-384`).
+| Columna | Tipo | Notas |
+|---|---|---|
+| `destino_partida_id` | `text` | **NULL = general**, se reparte. Con valor, va entero a esa partida |
 
-### 1.5 `cot_importes` — los números congelados
+**Dos columnas de costo, y es el centro del asunto.** El concepto **copia** su
+costo al agregarse: un cambio de catálogo no mueve una cotización abierta. Con
+las dos columnas se distingue "el catálogo se movió" de "alguien negoció este
+precio", que es la diferencia entre actualizar sin pensar y borrarle el
+descuento a un cliente. `detectarDesfases` compara contra `costo_catalogo` y
+marca aparte los negociados; `actualizarDesdeCatalogo` recibe los ids que se
+decidió mover y devuelve el antes y el después de cada uno. Actualizar es un
+acto explícito, nunca un efecto de abrir la versión.
+
+Es lo contrario de lo que hace Apps Script, donde los importes se recalculan al
+leer y cambiar un costo base mueve cotizaciones ya enviadas
+(`PROCESO_COTIZACIONES.md:156`).
+
+### 1.6 `cot_importes` — los números congelados
 
 Es la tabla que materializa la decisión 2. **No existe en Apps Script**: ahí los
 importes se recalculan siempre, que es justo el defecto que se corrige.
 
 | Columna | Tipo | Notas |
 |---|---|---|
-| `numero`, `anio`, `version` | `integer` | PK compuesta, FK a `cotizaciones` |
-| `congelado_at` | `timestamptz NOT NULL` | Cuándo |
+| `numero`, `anio`, `version` | `integer` | PK compuesta |
+| `congelado_at` | `timestamptz NOT NULL DEFAULT now()` | Cuándo |
 | `congelado_por` | `text NOT NULL` | Quién |
-| `calculo` | `jsonb NOT NULL` | El resultado completo de `calcularCotizacion` |
-| `total_mxn`, `total_usd` | `numeric(14,2)` | Extraídos para poder filtrar y sumar |
+| `resultado` | `jsonb NOT NULL` | El resultado completo de `calcularCotizacion` |
+| `parametros` | `jsonb NOT NULL` | La entrada con la que se calculó |
+| `moneda` | `text NOT NULL` | |
+| `subtotal`, `iva`, `total` | `numeric(14,2) NOT NULL` | Fuera del jsonb, para listar sin abrirlo |
+| `letra` | `text NOT NULL` | El renglón que el cliente compara contra la cifra |
 
-**La tasa de IVA se guarda por versión**, en `cot_armado.iva_pct`
-(`numeric(5,2) NOT NULL DEFAULT 16`). Hoy es 16 % en todo el país y parece una
-constante, pero no lo es: la franja fronteriza tuvo 8 % y la tasa cambia por
-decreto. Una cotización enviada tiene que poder reimprimirse con el IVA que se
-le aplicó, no con el vigente el día que alguien la reabre — por la misma razón
-que se congelan los importes. El motor la recibirá como parámetro en ese PR;
-hoy la lleva como constante.
+**Se congela al mandar a revisión**, no al enviar: es el momento en que los
+números dejan de moverse porque alguien más los va a mirar. De ahí en adelante
+la versión no se edita; lo que sigue es una **versión nueva**.
 
-**El resultado es de UNA sola moneda** mientras rija el modo "un solo total"
-(decisión 13), así que al congelar llena `total_mxn` **o** `total_usd`, nunca
-los dos. `cotizaciones.monto_mxn` y `monto_usd` se derivan de ahí y dejan de
-capturarse a mano. El día que entre el modo por partida, un mismo congelado
-podrá llenar los dos — y por eso son dos columnas desde ahora y no un par
-(monto, moneda).
+**Se guarda el resultado completo y también los parámetros.** El resultado,
+porque el PDF enseña cada partida con su precio unitario y reimprimirlo
+recalculando daría otros números en cuanto el catálogo se mueva. Los
+parámetros, porque sin ellos no se puede rehacer el cálculo para comparar: con
+los dos, cualquiera puede comprobar que el documento sale de lo que dice que
+sale. `scripts/prueba-068.ts` hace exactamente eso contra un PDF real.
 
-**Cómo funciona.** Mientras la versión está en `PROCESO` o `REVISION`, los
-importes se calculan al vuelo desde el catálogo vigente, igual que hoy. **Al
-pasar a `ENVIADA` se escribe `cot_importes` y a partir de ahí es la fuente.**
-Una versión enviada no cambia de precio nunca más.
+**La tasa de IVA se guarda por versión**, en `cot_armado.iva_pct`. Hoy es 16 %
+en todo el país y parece una constante, pero no lo es: la franja fronteriza tuvo
+8 % y la tasa cambia por decreto. Una cotización enviada tiene que poder
+reimprimirse con el IVA que se le aplicó, no con el vigente el día que alguien
+la reabre — por la misma razón que se congelan los importes. El motor la recibe
+como parámetro (`ivaPct`) y usa el vigente solo si no viene.
 
-`calculo` guarda el objeto entero —partidas con su costo directo, gasto
-asignado, asesoría y total; bloques por moneda; avisos— y no solo los totales,
-porque el documento se tiene que poder regenerar idéntico meses después.
-`total_mxn` y `total_usd` se duplican fuera del JSON para que el listado y el
-dashboard no tengan que abrirlo.
+**Y resuelve el `monto_mxn` / `monto_usd` de `cotizaciones`**: al congelar se
+llena el de la moneda del resultado —`montoDeCongelado`— y `origen_monto` queda
+en `COTIZADOR`. Son dos columnas independientes y no un par (monto, moneda)
+porque sumarlas exigiría inventar un tipo de cambio. Las históricas conservan
+su monto con `origen_monto` en `MANUAL` u `OC`: hay que poder saber que ese
+número no es un cálculo.
 
-**Y resuelve el `monto_mxn` / `monto_usd` de `cotizaciones`**: dejan de
-capturarse a mano y pasan a derivarse de aquí al congelar.
-
-### 1.6 Qué se migra y cómo
+### 1.7 Qué se migra y cómo
 
 | Origen | Destino | Cómo |
 |---|---|---|
 | `Cat_Servicios` | `cat_servicios` | Directo, una fila por código activo. Los inactivos entran con `activo = false`: hay cotizaciones viejas que los referencian |
 | `Cot_Encabezado` | `cot_armado` | Directo. `Documento` (JSON) pasa tal cual a `documento` |
 | `Cot_Partidas` | `cot_partidas` | `Numero` → `orden`; el `ID` de la hoja se conserva para poder religar los conceptos |
-| `Cot_Conceptos` | `cot_conceptos` | `Partida ID` resuelve el FK. `Tipo` distingue gasto de concepto |
+| `Cot_Conceptos` | `cot_conceptos` **o** `cot_gastos` | `Partida ID` resuelve el FK. El `Tipo` de la hoja decide a qué tabla va |
 | — | `cot_importes` | **No se migra.** Se calcula una vez con el catálogo actual y se congela para las versiones ya `ENVIADA` o `ASIGNADA`, dejando constancia de que es un congelado retroactivo |
 
 Esa última fila es una decisión incómoda y conviene verla de frente: **los
@@ -657,10 +742,21 @@ gastos.
   cambió, así que el documento ya no corresponde.
 - **La aprobación.** Es por versión exacta; la nueva nace sin aprobar.
 
-**El matiz que importa:** los costos **capturados a mano** se copian tal cual;
-los que venían del catálogo se quedan "del catálogo" y se re-resuelven con el
-precio vigente (`PROCESO_COTIZACIONES.md:74`). Así una versión nueva recoge los
-aumentos de lista pero respeta los descuentos que alguien negoció.
+**El matiz que importa, y aquí cambiamos la regla de Apps Script.** Allá los
+costos que venían del catálogo se re-resuelven con el precio vigente
+(`PROCESO_COTIZACIONES.md:74`). Aquí **no se reprecia nada**: la versión nueva
+arranca siendo la anterior, costo por costo, y si el catálogo se movió sale un
+aviso por cada línea con el precio de entonces y el de ahora.
+
+El motivo es que reprecias en silencio o avisas, pero no las dos. Una versión
+nueva se hace casi siempre para cambiar una cosa —una cantidad, una partida—, y
+que de paso se le muevan ocho costos que nadie pidió es cómo se manda una
+cotización con un número que su autor no reconoce. Actualizar al precio vigente
+está a un clic (`actualizarDesdeCatalogo`), con el antes y el después a la
+vista.
+
+Los ids de partidas y conceptos **se renuevan**: son la llave de esa versión, y
+conservarlos haría que un gasto de la v1 apuntara a la partida de la v0.
 
 La versión anterior no se toca.
 
@@ -685,21 +781,20 @@ no existe. Tres caminos:
 Mi recomendación es la **3 para el histórico y la 1 solo si alguien necesita el
 desglose**, pero es tu decisión y condiciona el importador.
 
-### 6.2 🔴 Qué pasa si se edita el catálogo con cotizaciones en REVISION
+### 6.2 ✅ Qué pasa si se edita el catálogo con cotizaciones en REVISION
 
 Una versión en `REVISION` todavía no congela. Si alguien cambia un costo base
 mientras el revisor la mira, **el revisor aprueba un número y se envía otro**.
 
-Opciones: congelar al **enviar a revisión** en vez de al enviar al cliente;
-avisar al revisor si el cálculo cambió desde que se le mandó; o no hacer nada y
-aceptar la ventana.
+**Cerrada:** se congela al **mandar a revisión**. El revisor mira números que
+ya no se mueven, y lo que se envía al cliente es exactamente lo aprobado.
 
-### 6.3 🔴 Permisos del catálogo de servicios
+### 6.3 ✅ Permisos del catálogo de servicios
 
-Apps Script usa `cotizaciones.costos` para la pantalla de Costos base. Hace
-falta decidir el equivalente aquí y, sobre todo, **quién puede cambiar un costo
-que afecta a todas las cotizaciones no enviadas**. No está en el catálogo de
-`src/lib/permisos.ts`.
+**Cerrada:** `catalogo.servicios.editar`, en el grupo Comercial de
+`src/lib/permisos.ts`. Es permiso aparte de `modulo.cotizaciones` a propósito:
+cotizar no es lo mismo que mover el precio de lista de toda la empresa. Se
+asigna a los cotizadores y al gerente de operaciones.
 
 ### 6.4 🟡 La plantilla de Google Docs es un punto único de fallo
 
@@ -713,12 +808,13 @@ Mientras dure la fase, las dos herramientas pueden cotizar. ¿Se corta de golpe
 al terminar el PR 6, o conviven un tiempo? Si conviven, el catálogo se edita en
 dos lados y diverge.
 
-### 6.6 🟡 `monto_mxn` / `monto_usd` de `cotizaciones`
+### 6.6 ✅ `monto_mxn` / `monto_usd` de `cotizaciones`
 
-Hoy se capturan a mano; con `cot_importes` se derivan. ¿Se eliminan, se derivan
-como columna generada, o se quedan como captura manual para lo que nunca pase
-por el cotizador (las cotizaciones con tabulador en Excel que menciona
-`COT_01:2347`)?
+**Cerrada:** se quedan como columnas normales y se llenan de tres maneras, que
+ahora se distinguen con `origen_monto`: `COTIZADOR` al congelar, `OC` al
+registrar la orden de compra, `MANUAL` si alguien lo tecleó. No son columna
+generada porque las históricas nunca van a tener un congelado detrás, y hay que
+poder saber que ese número no es un cálculo.
 
 ### 6.7 🟡 Modo `POR_PARTIDA` — ¿cuánto se usa?
 
@@ -727,15 +823,19 @@ totales. Si en 2026 no lo usó nadie, podría quedar fuera del PR 2 y entrar
 después. **Se puede medir** contando filas de `Cot_Encabezado` con
 `Modo = 'POR_PARTIDA'`.
 
-### 6.8 🔵 La familia AR y los nodos
+### 6.8 ✅ La familia AR y los nodos
 
-`BASE_NODOS_ESTUDIO = 10` y `HORAS_DIA_ESTUDIO = 8` están escritos en el código.
-¿Van al catálogo, a `config_erp`, o se quedan como constantes?
+**Cerrada:** a `config_erp`, junto con `ASESORIA_PCT_DEFAULT`. Son valores que
+cambian con el negocio y no deberían necesitar un despliegue. El catálogo puede
+además traer su propio `base_nodos` por código: el de la configuración es el
+punto de partida, no un techo.
 
-### 6.9 🔵 Qué se hace con `Cat_Servicios_Cambios`
+### 6.9 🟡 Qué se hace con `Cat_Servicios_Cambios`
 
-¿Se migra el historial de cambios del catálogo, o se empieza en limpio
-registrando en `bitacora` de aquí en adelante?
+La tabla destino ya existe (`cat_servicios_cambios`, §1.2). Queda por decidir si
+se migra el historial viejo o se empieza en limpio. La carga del catálogo 2026
+escribe un renglón por cada costo que cambia, así que el historial arranca con
+lo que esa carga mueva.
 
 ---
 
@@ -744,13 +844,14 @@ registrando en `bitacora` de aquí en adelante?
 Siete, en orden. Cada uno se puede probar solo y ninguno deja la app peor que
 antes.
 
-### PR 1 · El catálogo de servicios
+> **El orden real cambió.** El cálculo fue primero y el catálogo entró con el
+> modelo, porque el modelo no se podía cerrar sin decidir cómo se copia un costo
+> del catálogo. Lo que sigue refleja lo que se hizo.
 
-Tabla `cat_servicios` + migración, lectura en `src/lib/catalogo-servicios.ts`,
-importador desde `Cat_Servicios`, y pantalla de solo lectura.
+### PR 1 · El catálogo de servicios — *entró con el PR 3*
 
-**Probable por sí mismo:** el catálogo se ve en pantalla y el importador reporta
-sin escribir. Nada más lo usa todavía.
+Tabla `cat_servicios`, historial y permiso. La pantalla de solo lectura queda
+para el PR de la pantalla del cotizador, que es donde se va a usar.
 
 ### PR 2 · El cálculo, puro ✅ **hecho**
 
@@ -773,13 +874,23 @@ Más el importe con letra, que corrige dos defectos del sistema anterior: los
 dólares cerraban con `M.N.` y el redondeo del centavo no coincidía con el del
 cálculo.
 
-### PR 3 · El modelo y el armado
+### PR 3 · El modelo ✅ **hecho**
 
-Tablas `cot_armado`, `cot_partidas`, `cot_conceptos` + migración. Lectura y
-escritura del armado en `src/lib/cotizador.ts`. Rutas `GET` y `PUT`.
+Las siete tablas + migración `0006`, el puente con el motor
+(`src/lib/cotizador/persistencia.ts`), el catálogo y sus desfases
+(`catalogo.ts`), los bloques del documento (`documento.ts`) y el permiso.
 
-**Probable por sí mismo:** se guarda y se relee un armado completo por API, y el
-cálculo del PR 2 produce números sobre él.
+**Probado por sí mismo** de dos maneras. En memoria, con la 068 escrita como
+filas de la base y vuelta a leer. Y contra una base de verdad, con
+`scripts/prueba-068.ts`: escribe la cotización **9068/2099**, la relee, la
+calcula, la congela y compara contra el PDF del cliente. Si el total cambia un
+centavo, el modelo perdió algo por el camino.
+
+El catálogo real se carga con `scripts/importar-catalogo-2026.ts` desde el
+formato `PFAD-024-2026`: 87 códigos de los 176 que trae el archivo —el resto son
+huecos reservados— y los siete estudios con su desglose de esfuerzo.
+
+Quedan para el PR siguiente las rutas `GET` y `PUT` del armado.
 
 ### PR 4 · El importador del armado histórico
 
@@ -807,8 +918,9 @@ Script para la misma cotización. Es la prueba de aceptación de toda la fase.
 
 ### PR 7 · Congelar los importes
 
-Tabla `cot_importes`, el congelado al pasar a `ENVIADA`, y la lectura que
-prefiere lo congelado sobre lo calculado.
+La tabla `cot_importes` y `congelar()` ya están (PR 3). Falta engancharlo al
+flujo: congelar al pasar a `REVISION`, bloquear la edición después, y la lectura
+que prefiere lo congelado sobre lo calculado.
 
 **Probable por sí mismo:** se envía una versión, se cambia un costo del
 catálogo, y la versión enviada no se mueve mientras una nueva sí.
