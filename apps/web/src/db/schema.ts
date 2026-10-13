@@ -551,6 +551,32 @@ export const configErp = pgTable("config_erp", {
 // ── ERP: el cotizador (Fase 3) ────────────────────────────────────────────────
 
 /**
+ * La precisión de los montos del cotizador, y por qué son dos.
+ *
+ * **Lo que ENTRA al motor se guarda completo**: `numeric(18,6)`. Un costo de
+ * catálogo no es dinero todavía, es el dato con el que se calcula el dinero, y
+ * recortarlo mueve el resultado. Pasó de verdad: el concepto
+ * `COSTO_DISPONIBLE_006` de la 068 cuesta **2,671.885 USD**, y guardado en
+ * `numeric(14,2)` se volvía 2,671.89; multiplicado por su utilidad y por el
+ * tipo de cambio, esos cinco milésimos crecían hasta diez centavos y movían el
+ * total de la cotización contra el PDF que recibió el cliente.
+ *
+ * **Lo que SALE del motor se guarda en centavos**: `numeric(14,2)`. El
+ * subtotal, el IVA y el total son dinero que alguien va a sumar a mano, y el
+ * motor ya redondea en cada paso. Guardarlos con seis decimales solo invitaría
+ * a que alguien los volviera a redondear por su cuenta.
+ *
+ * Seis decimales y no cuatro porque la franja entre lo que un proveedor cotiza
+ * por unidad y lo que vale una pieza no la decide esta columna: doce dígitos
+ * enteros llegan a los billones y el margen sobra.
+ */
+const MONTO = { precision: 18, scale: 6 } as const;
+/** Los porcentajes son entradas igual que los costos: 12.3456 % es válido. */
+const PORCENTAJE = { precision: 9, scale: 6 } as const;
+/** Lo que el motor produce y el cliente suma. */
+const IMPORTE = { precision: 14, scale: 2 } as const;
+
+/**
  * El catálogo de servicios: un solo precio para todos los clientes.
  *
  * No hay precios por cliente, y es una decisión, no una omisión: un descuento
@@ -571,7 +597,7 @@ export const catServicios = pgTable(
      * se compra a un proveedor entra con su costo real y la utilidad se le
      * pone en el concepto.
      */
-    costo: numeric("costo", { precision: 14, scale: 2 }),
+    costo: numeric("costo", MONTO),
     moneda: text("moneda", { enum: ["MXN", "USD"] })
       .notNull()
       .default("MXN"),
@@ -588,7 +614,7 @@ export const catServicios = pgTable(
     diasPorSemana: integer("dias_por_semana"),
     ingenieros: integer("ingenieros"),
     semanas: integer("semanas"),
-    tarifaHora: numeric("tarifa_hora", { precision: 14, scale: 2 }),
+    tarifaHora: numeric("tarifa_hora", MONTO),
     baseNodos: integer("base_nodos"),
 
     /** Los inactivos no se ofrecen, pero no se borran: hay cotizaciones que los citan. */
@@ -653,14 +679,18 @@ export const cotArmado = pgTable(
     repartoGastos: text("reparto_gastos", { enum: ["IGUAL", "PROPORCIONAL", "MANUAL"] })
       .notNull()
       .default("IGUAL"),
-    asesoriaPct: numeric("asesoria_pct", { precision: 5, scale: 2 }).notNull().default("10"),
+    asesoriaPct: numeric("asesoria_pct", PORCENTAJE).notNull().default("10"),
     /**
      * Parece una constante y no lo es: la franja fronteriza tuvo 8 % y la tasa
      * cambia por decreto.
      */
-    ivaPct: numeric("iva_pct", { precision: 5, scale: 2 }).notNull().default("16"),
+    ivaPct: numeric("iva_pct", PORCENTAJE).notNull().default("16"),
 
-    tipoCambio: numeric("tipo_cambio", { precision: 10, scale: 4 }),
+    /**
+     * Banxico publica el FIX con cuatro decimales, pero un tipo pactado con un
+     * cliente puede traer los que traiga: la columna no es quien decide eso.
+     */
+    tipoCambio: numeric("tipo_cambio", { precision: 12, scale: 6 }),
     /** `PREFERENTE` exige motivo: usar un tipo distinto del oficial es una decisión comercial. */
     tipoCambioOrigen: text("tipo_cambio_origen", { enum: ["BANXICO", "PREFERENTE"] }),
     tipoCambioMotivo: text("tipo_cambio_motivo"),
@@ -697,7 +727,7 @@ export const cotPartidas = pgTable(
     titulo: text("titulo").notNull().default(""),
     /** El alcance, con sus saltos de línea y viñetas. Algunas llegan a cincuenta líneas. */
     descripcion: text("descripcion"),
-    cantidad: numeric("cantidad", { precision: 14, scale: 4 }).notNull().default("1"),
+    cantidad: numeric("cantidad", MONTO).notNull().default("1"),
     unidad: text("unidad").notNull().default("servicio"),
 
     /**
@@ -707,12 +737,12 @@ export const cotPartidas = pgTable(
      * Con `precio_unitario_final` capturado, este campo guarda el ajuste
      * **derivado**, para que siga siendo visible de dónde sale la diferencia.
      */
-    ajuste: numeric("ajuste", { precision: 14, scale: 2 }).notNull().default("0"),
+    ajuste: numeric("ajuste", MONTO).notNull().default("0"),
     /**
      * El precio al que se decidió vender, cuando se fija a mano. El ajuste se
      * deriva de él: `precio × cantidad − total calculado`.
      */
-    precioUnitarioFinal: numeric("precio_unitario_final", { precision: 14, scale: 2 }),
+    precioUnitarioFinal: numeric("precio_unitario_final", MONTO),
 
     /**
      * `false` la saca del reparto de gastos generales: es la partida que trae
@@ -721,7 +751,7 @@ export const cotPartidas = pgTable(
      */
     recibeGastosGenerales: boolean("recibe_gastos_generales").notNull().default(true),
     /** Lo que le toca con reparto MANUAL, en la moneda de los gastos. */
-    gastoManual: numeric("gasto_manual", { precision: 14, scale: 2 }),
+    gastoManual: numeric("gasto_manual", MONTO),
 
     /** Cómo sale el título en el documento. */
     formato: text("formato", { enum: ["NORMAL", "NEGRITAS", "OCULTO"] })
@@ -763,13 +793,13 @@ export const cotConceptos = pgTable(
     codigo: text("codigo"),
     /** Para los conceptos libres, que no tienen catálogo detrás. */
     descripcionLibre: text("descripcion_libre"),
-    cantidad: numeric("cantidad", { precision: 14, scale: 4 }).notNull().default("0"),
+    cantidad: numeric("cantidad", MONTO).notNull().default("0"),
     unidad: text("unidad"),
 
-    costo: numeric("costo", { precision: 14, scale: 2 }),
-    costoCatalogo: numeric("costo_catalogo", { precision: 14, scale: 2 }),
+    costo: numeric("costo", MONTO),
+    costoCatalogo: numeric("costo_catalogo", MONTO),
     /** Utilidad POR CONCEPTO: en la misma partida puede haber material con margen e instalación sin él. */
-    utilidadPct: numeric("utilidad_pct", { precision: 5, scale: 2 }).notNull().default("0"),
+    utilidadPct: numeric("utilidad_pct", PORCENTAJE).notNull().default("0"),
     monedaCosto: text("moneda_costo", { enum: ["MXN", "USD"] }),
 
     /** Parámetros del estudio en ESTA cotización. */
@@ -777,7 +807,7 @@ export const cotConceptos = pgTable(
     diasPorSemana: integer("dias_por_semana"),
     ingenieros: integer("ingenieros"),
     semanas: integer("semanas"),
-    tarifaHora: numeric("tarifa_hora", { precision: 14, scale: 2 }),
+    tarifaHora: numeric("tarifa_hora", MONTO),
     nodos: integer("nodos"),
     baseNodos: integer("base_nodos"),
 
@@ -810,10 +840,10 @@ export const cotGastos = pgTable(
 
     codigo: text("codigo"),
     descripcionLibre: text("descripcion_libre"),
-    cantidad: numeric("cantidad", { precision: 14, scale: 4 }).notNull().default("0"),
-    costo: numeric("costo", { precision: 14, scale: 2 }).notNull().default("0"),
-    costoCatalogo: numeric("costo_catalogo", { precision: 14, scale: 2 }),
-    utilidadPct: numeric("utilidad_pct", { precision: 5, scale: 2 }).notNull().default("0"),
+    cantidad: numeric("cantidad", MONTO).notNull().default("0"),
+    costo: numeric("costo", MONTO).notNull().default("0"),
+    costoCatalogo: numeric("costo_catalogo", MONTO),
+    utilidadPct: numeric("utilidad_pct", PORCENTAJE).notNull().default("0"),
     monedaCosto: text("moneda_costo", { enum: ["MXN", "USD"] }),
 
     /** Null = general, se reparte. Con valor = entero a esa partida. */
@@ -853,9 +883,9 @@ export const cotImportes = pgTable(
     parametros: jsonb("parametros").notNull(),
 
     moneda: text("moneda", { enum: ["MXN", "USD"] }).notNull(),
-    subtotal: numeric("subtotal", { precision: 14, scale: 2 }).notNull(),
-    iva: numeric("iva", { precision: 14, scale: 2 }).notNull(),
-    total: numeric("total", { precision: 14, scale: 2 }).notNull(),
+    subtotal: numeric("subtotal", IMPORTE).notNull(),
+    iva: numeric("iva", IMPORTE).notNull(),
+    total: numeric("total", IMPORTE).notNull(),
     /** El importe con letra, tal como sale en el documento. */
     letra: text("letra").notNull(),
   },

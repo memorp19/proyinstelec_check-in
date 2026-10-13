@@ -27,6 +27,40 @@ import type {
 /** `numeric` llega como texto; `integer` como número. */
 type Dec = string | number | null;
 
+/**
+ * Decimales que guardan las columnas de monto y de porcentaje del cotizador
+ * (`numeric(18,6)` y `numeric(9,6)`). Están aquí y no en el esquema porque
+ * quien escribe tiene que poder comprobar **antes** si un valor cabe.
+ *
+ * Postgres no avisa cuando no cabe: redondea en silencio. Así se perdió el
+ * `2671.885` de la 068, que guardado como `2671.89` movía el total de la
+ * cotización diez centavos contra el PDF del cliente.
+ */
+export const ESCALA_MONTO = 6;
+
+/**
+ * Cuántos decimales tiene de verdad un valor.
+ *
+ * Se cuenta sobre el **texto**, no sobre el número: `0.1 + 0.2` en binario
+ * tiene diecisiete decimales y ninguno de ellos es real. Para un número se usa
+ * `String(n)`, que da la representación decimal más corta que vuelve a ese
+ * mismo número, y se entiende la notación científica porque es como JavaScript
+ * escribe los valores pequeños.
+ */
+export function decimalesDe(valor: string | number): number {
+  const texto = typeof valor === "number" ? String(valor) : valor.trim();
+  const m = /^[+-]?(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(texto);
+  if (!m) return 0;
+  const fraccion = (m[2] ?? "").replace(/0+$/, "").length;
+  const exponente = m[3] ? parseInt(m[3], 10) : 0;
+  return Math.max(0, fraccion - exponente);
+}
+
+/** `true` si el valor se guarda tal cual, sin que Postgres lo redondee. */
+export function cabeEnEscala(valor: string | number, escala = ESCALA_MONTO): boolean {
+  return decimalesDe(valor) <= escala;
+}
+
 export interface FilaArmado {
   numero: number;
   anio: number;

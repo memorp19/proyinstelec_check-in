@@ -4,7 +4,10 @@ import {
   congelar,
   copiarAVersion,
   dec,
+  decimalesDe,
+  cabeEnEscala,
   entradaDesdeFilas,
+  ESCALA_MONTO,
   importeEnLetra,
   montoDeCongelado,
   type ServicioCatalogo,
@@ -47,6 +50,17 @@ const gasto = (sobre: Partial<FilaGasto> = {}): FilaGasto => ({
   moneda_costo: null, destino_partida_id: null, orden: 1,
   ...sobre,
 });
+
+/**
+ * Un número tal como lo devuelve Postgres desde `numeric(18,6)`: con sus seis
+ * decimales y en texto.
+ *
+ * Importa que la prueba escriba **como escribe la columna** y no mejor. La
+ * versión anterior de este archivo formateaba con cuatro decimales mientras la
+ * columna guardaba dos, así que el redondeo que movía el total de la 068 no
+ * aparecía aquí: solo salía al correr contra la base.
+ */
+const comoLaColumna = (n: number) => n.toFixed(ESCALA_MONTO);
 
 describe("dec", () => {
   it("convierte el texto que devuelve Postgres", () => {
@@ -152,14 +166,9 @@ describe("entradaDesdeFilas", () => {
   });
 });
 
-/**
- * La prueba que de verdad importa: lo que se guarda tiene que volver a producir
- * el mismo PDF. Es la misma que corre `scripts/prueba-068.ts` contra la base;
- * aquí se hace con las filas en memoria, sin conexión.
- */
-describe("ida y vuelta de la 068", () => {
-  /** La 068, escrita como filas de la base. */
-  const filas = {
+/** La 068, escrita como la escribe la base: `numeric(18,6)` en texto. */
+function filas068() {
+  return {
     armado: armado({
       moneda: "MXN", moneda_gastos: "MXN", reparto_gastos: "IGUAL",
       asesoria_pct: "5.00", iva_pct: "16.00",
@@ -173,7 +182,7 @@ describe("ida y vuelta de la 068", () => {
         titulo: p.titulo!,
         cantidad: String(p.cantidad),
         unidad: p.unidad ?? null,
-        ajuste: (p.ajuste ?? 0).toFixed(2),
+        ajuste: comoLaColumna(p.ajuste ?? 0),
         recibe_gastos_generales: p.recibeGastosGenerales !== false,
       }),
     ),
@@ -184,8 +193,9 @@ describe("ida y vuelta de la 068", () => {
           partida_id: p.id,
           codigo: c.codigo!,
           cantidad: String(c.cantidad),
-          costo: (c.costo ?? 0).toFixed(4),
-          utilidad_pct: (c.utilidadPct ?? 0).toFixed(2),
+          costo: comoLaColumna(c.costo ?? 0),
+          costo_catalogo: comoLaColumna(c.costo ?? 0),
+          utilidad_pct: comoLaColumna(c.utilidadPct ?? 0),
           moneda_costo: c.monedaCosto ?? null,
           orden: i + 1,
         }),
@@ -196,15 +206,23 @@ describe("ida y vuelta de la 068", () => {
         id: `G${i}`,
         codigo: g.codigo!,
         cantidad: String(g.cantidad),
-        costo: g.costo.toFixed(2),
+        costo: comoLaColumna(g.costo),
+        costo_catalogo: comoLaColumna(g.costo),
         destino_partida_id:
           g.destino && g.destino !== "GENERAL" ? g.destino.partida : null,
         orden: i + 1,
       }),
     ),
   };
+}
 
-  const r = calcularCotizacion(entradaDesdeFilas(filas));
+/**
+ * La prueba que de verdad importa: lo que se guarda tiene que volver a producir
+ * el mismo PDF. Es la misma que corre `scripts/prueba-068.ts` contra la base;
+ * aquí se hace con las filas en memoria, sin conexión.
+ */
+describe("ida y vuelta de la 068", () => {
+  const r = calcularCotizacion(entradaDesdeFilas(filas068()));
 
   it("las once partidas salen con el precio unitario del PDF", () => {
     expect(r.partidas.map((p) => p.id)).toEqual(PDF_068.partidas.map(([id]) => id));
@@ -322,5 +340,101 @@ describe("montoDeCongelado", () => {
   it("llena la columna de su moneda y deja la otra en null", () => {
     expect(montoDeCongelado(congelado("MXN"))).toEqual({ montoMxn: 1000, montoUsd: null, origenMonto: "COTIZADOR" });
     expect(montoDeCongelado(congelado("USD"))).toEqual({ montoMxn: null, montoUsd: 1000, origenMonto: "COTIZADOR" });
+  });
+});
+
+// ── La precisión de las entradas ─────────────────────────────────────────────
+
+/**
+ * La regla: lo que ENTRA al motor se guarda completo, lo que SALE se redondea
+ * a dos. Un costo de catálogo no es dinero todavía — es el dato con el que se
+ * calcula el dinero — y recortarlo mueve el resultado.
+ */
+describe("decimalesDe", () => {
+  it("cuenta los decimales que el valor tiene de verdad", () => {
+    expect(decimalesDe("2671.885")).toBe(3);
+    expect(decimalesDe(2671.885)).toBe(3);
+    expect(decimalesDe("2000")).toBe(0);
+    expect(decimalesDe("0.000001")).toBe(6);
+  });
+
+  // Los ceros de la derecha no son decimales: `2.50` cabe donde quepa `2.5`.
+  it("no cuenta los ceros de relleno", () => {
+    expect(decimalesDe("2671.880000")).toBe(2);
+    expect(decimalesDe("2000.00")).toBe(0);
+  });
+
+  it("entiende la notación científica, que es como JS escribe lo pequeño", () => {
+    expect(decimalesDe(1e-7)).toBe(7);
+    expect(decimalesDe("1.5e-3")).toBe(4);
+    expect(decimalesDe(1.5e3)).toBe(0);
+  });
+
+  it("lo que no es un número no inventa decimales", () => {
+    expect(decimalesDe("por definir")).toBe(0);
+  });
+});
+
+describe("cabeEnEscala", () => {
+  it("2,671.885 cabe en seis decimales y no cabría en dos", () => {
+    expect(cabeEnEscala(2671.885)).toBe(true);
+    expect(cabeEnEscala(2671.885, 2)).toBe(false);
+  });
+
+  it("el límite es exacto", () => {
+    expect(cabeEnEscala("1.123456")).toBe(true);
+    expect(cabeEnEscala("1.1234567")).toBe(false);
+  });
+});
+
+/**
+ * La prueba que faltaba cuando esto falló: las entradas de la 068 escritas como
+ * las escribe la columna y leídas de vuelta, decimal por decimal.
+ */
+describe("ida y vuelta sin perder decimales", () => {
+  it("un costo de tres decimales vuelve igual", () => {
+    const e = entradaDesdeFilas({
+      armado: armado(),
+      partidas: [partida()],
+      conceptos: [concepto({ costo: comoLaColumna(2671.885), costo_catalogo: comoLaColumna(2671.885) })],
+      gastos: [],
+    });
+    expect(e.partidas[0].conceptos[0].costo).toBe(2671.885);
+  });
+
+  it("ninguna entrada de la 068 pierde un decimal al pasar por las filas", () => {
+    const vuelta = entradaDesdeFilas(filas068());
+    const original = ENTRADA_068;
+
+    for (const [i, p] of original.partidas.entries()) {
+      const pv = vuelta.partidas[i];
+      expect([p.id, pv.cantidad]).toEqual([p.id, p.cantidad]);
+      expect([p.id, pv.ajuste ?? 0]).toEqual([p.id, p.ajuste ?? 0]);
+      for (const [j, c] of p.conceptos.entries()) {
+        expect([p.id, c.codigo, pv.conceptos[j].costo]).toEqual([p.id, c.codigo, c.costo]);
+        expect([p.id, c.codigo, pv.conceptos[j].cantidad]).toEqual([p.id, c.codigo, c.cantidad]);
+      }
+    }
+    for (const [i, g] of (original.gastos ?? []).entries()) {
+      expect([g.codigo, vuelta.gastos![i].costo]).toEqual([g.codigo, g.costo]);
+    }
+
+    // Y el que lo destapó, por su nombre.
+    const p2 = vuelta.partidas.find((p) => p.id === "P2")!;
+    expect(p2.conceptos[1].costo).toBe(2671.885);
+  });
+
+  // Era el síntoma: el 2,671.885 recortado a 2,671.89 subía el importe del
+  // concepto de 57,712.72 a 57,712.82, y esos diez centavos llegaban al total.
+  it("guardado con dos decimales, el total se separa del PDF", () => {
+    const recortadas = filas068();
+    const r = calcularCotizacion(
+      entradaDesdeFilas({
+        ...recortadas,
+        conceptos: recortadas.conceptos.map((c) => ({ ...c, costo: Number(c.costo).toFixed(2) })),
+      }),
+    );
+    expect(r.total).toBe(1213491.2);
+    expect(r.total).not.toBe(PDF_068.total);
   });
 });
