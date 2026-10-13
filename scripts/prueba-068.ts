@@ -26,8 +26,10 @@ import { config } from "dotenv";
 import { randomUUID } from "node:crypto";
 import { neon } from "@neondatabase/serverless";
 import {
+  cabeEnEscala,
   calcularCotizacion,
   congelar,
+  ESCALA_MONTO,
   CONDICIONES_POR_OMISION,
   DOCUMENTO_POR_OMISION,
   normalizarCondiciones,
@@ -241,6 +243,22 @@ async function main() {
         : `✅  Ensayo del borrado: corrió y revirtió. La ${NUMERO}/${ANIO} sigue ahí.\n`,
     );
     return;
+  }
+
+  // Antes de escribir: que ningún costo pierda decimales al guardarse. El
+  // 2,671.885 de la P2 es justo el que cabía en numeric(14,2) recortado.
+  const noCaben = [
+    ...ENTRADA_068.partidas.flatMap((p) =>
+      p.conceptos.map((c) => ({ donde: `${p.id} · ${c.codigo}`, valor: c.costo ?? 0 })),
+    ),
+    ...(ENTRADA_068.gastos ?? []).map((g) => ({ donde: `gasto ${g.codigo}`, valor: g.costo })),
+  ].filter((x) => !cabeEnEscala(x.valor));
+
+  if (noCaben.length) {
+    console.error(`\n❌  Estos costos no caben en numeric(…,${ESCALA_MONTO}) y se guardarían redondeados:`);
+    for (const x of noCaben) console.error(`    ${x.donde}: ${x.valor}`);
+    console.error("");
+    process.exit(1);
   }
 
   const lote = escribir();

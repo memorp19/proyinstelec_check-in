@@ -20,6 +20,14 @@ export interface FilaCatalogo {
   descripcion: string;
   /** `null` si la celda viene vacía o no es un número. */
   costo: number | null;
+  /**
+   * El texto de la celda, sin convertir.
+   *
+   * Se conserva para poder contar los decimales **de verdad**: sobre el número
+   * ya convertido no se distingue `2671.885` de lo que el binario le haga, y
+   * ese conteo es lo que decide si la columna lo guarda entero o lo redondea.
+   */
+  costoCrudo: string;
 }
 
 /** Por qué un renglón del Excel no es un servicio del catálogo. */
@@ -61,7 +69,8 @@ export function leerFilaCatalogo(fila: number, celdas: Fila): FilaCatalogo | Des
     return { fila, codigo, motivo: "HUECO" };
   }
 
-  return { fila, codigo, descripcion, costo: numero(texto(celdas.ZK)) };
+  const crudo = texto(celdas.ZK);
+  return { fila, codigo, descripcion, costo: numero(crudo), costoCrudo: crudo.trim() };
 }
 
 export const esDescarte = (r: FilaCatalogo | Descarte): r is Descarte => "motivo" in r;
@@ -164,7 +173,10 @@ export interface ResumenFamilia {
   sinCosto: string[];
 }
 
-export function resumirPorFamilia(filas: FilaCatalogo[]): ResumenFamilia[] {
+/** Pide lo que usa y no la fila entera: así se resume cualquier lista. */
+export function resumirPorFamilia(
+  filas: Array<Pick<FilaCatalogo, "codigo" | "costo">>,
+): ResumenFamilia[] {
   const por = new Map<string, ResumenFamilia>();
   for (const f of filas) {
     const familia = familiaDeFila(f.codigo);

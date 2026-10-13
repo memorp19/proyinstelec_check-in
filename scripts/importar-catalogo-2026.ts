@@ -39,6 +39,7 @@ import {
   type ParamsEstudio,
 } from "../apps/web/src/lib/catalogo-2026";
 import { tipoDeCodigo } from "../apps/web/src/lib/cotizador/catalogo";
+import { cabeEnEscala, decimalesDe, ESCALA_MONTO } from "../apps/web/src/lib/cotizador/persistencia";
 import { ejecutarLote, leerBanderas, opcion, verificarDestino } from "./guardas";
 
 config({ path: "apps/web/.env.local" });
@@ -78,6 +79,12 @@ interface Lectura {
   desacuerdos: Array<{ codigo: string; segunBloque: number; segunColumna: number | null }>;
   /** Estudios sin bloque: se cargan con el costo, pero sin desglose. */
   sinBloque: string[];
+  /**
+   * Valores con más decimales de los que la columna guarda. **Detienen la
+   * carga**: Postgres los redondearía sin decir nada, y un costo redondeado
+   * mueve el total de cada cotización que lo use.
+   */
+  excesos: Array<{ codigo: string; campo: string; valor: string; decimales: number }>;
 }
 
 function leer(): Lectura {
@@ -99,6 +106,7 @@ function leer(): Lectura {
   const servicios: Servicio[] = [];
   const desacuerdos: Lectura["desacuerdos"] = [];
   const sinBloque: string[] = [];
+  const excesos: Lectura["excesos"] = [];
   let huecos = 0;
   let separadores = 0;
 
@@ -123,10 +131,29 @@ function leer(): Lectura {
       }
     }
 
+    // Se cuenta sobre el texto de la celda: el número ya convertido no sirve
+    // para saber cuántos decimales traía de verdad.
+    if (fila.costoCrudo && !cabeEnEscala(fila.costoCrudo)) {
+      excesos.push({
+        codigo: fila.codigo,
+        campo: "costo (ZK)",
+        valor: fila.costoCrudo,
+        decimales: decimalesDe(fila.costoCrudo),
+      });
+    }
+    if (esfuerzo && !cabeEnEscala(esfuerzo.tarifaHora)) {
+      excesos.push({
+        codigo: fila.codigo,
+        campo: "tarifa por hora",
+        valor: String(esfuerzo.tarifaHora),
+        decimales: decimalesDe(esfuerzo.tarifaHora),
+      });
+    }
+
     servicios.push({ ...fila, familia: familiaDeFila(fila.codigo), tipo, esfuerzo });
   }
 
-  return { servicios, huecos, separadores, desacuerdos, sinBloque };
+  return { servicios, huecos, separadores, desacuerdos, sinBloque, excesos };
 }
 
 // ── Lo que ya hay en la base ──────────────────────────────────────────────────
@@ -275,6 +302,23 @@ async function main() {
     "\n    Los nodos base no vienen en el Excel: cada estudio los toma de\n" +
       "    BASE_NODOS_ESTUDIO en config_erp mientras no se le capture uno propio.",
   );
+
+  // Un valor que no cabe en la columna no se carga recortado: se detiene todo.
+  // Redondearlo en silencio es lo que movió el total de la 068 diez centavos.
+  if (lectura.excesos.length) {
+    console.error(
+      `\n❌  ${lectura.excesos.length} valores traen más de ${ESCALA_MONTO} decimales y la columna\n` +
+        "    los redondearía sin avisar. No se carga nada:\n",
+    );
+    for (const e of lectura.excesos) {
+      console.error(`    ${e.codigo.padEnd(24)} ${e.campo}: ${e.valor} (${e.decimales} decimales)`);
+    }
+    console.error(
+      "\n    Corrige el Excel, o sube la escala de la columna en el esquema si el\n" +
+        "    dato de verdad necesita esos decimales.\n",
+    );
+    process.exit(1);
+  }
 
   // ── Contra lo que ya hay ───────────────────────────────────────────────────
   const base = await leerBase();

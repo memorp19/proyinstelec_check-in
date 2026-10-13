@@ -8,6 +8,7 @@ import {
   resumirPorFamilia,
   type FilaCatalogo,
 } from "@/src/lib/catalogo-2026";
+import { cabeEnEscala, decimalesDe } from "@/src/lib/cotizador";
 import type { Celda, Fila } from "@/src/lib/excel";
 
 const c = (valor: string, tipo = "s"): Celda => ({ valor, tipo, conFormatoDeFecha: false });
@@ -22,7 +23,28 @@ const renglon = (codigo: string, descripcion: string, costo?: string): Fila => (
 describe("leerFilaCatalogo", () => {
   it("convierte un servicio con su costo", () => {
     const r = leerFilaCatalogo(113, renglon("SP001", "Resistencia de Aislamiento a Transformador", "2000"));
-    expect(r).toEqual({ fila: 113, codigo: "SP001", descripcion: "Resistencia de Aislamiento a Transformador", costo: 2000 });
+    expect(r).toEqual({
+      fila: 113,
+      codigo: "SP001",
+      descripcion: "Resistencia de Aislamiento a Transformador",
+      costo: 2000,
+      costoCrudo: "2000",
+    });
+  });
+
+  /**
+   * El texto de la celda se conserva para poder contar los decimales **de
+   * verdad**. Sobre el número ya convertido no se distingue lo que traía la
+   * celda de lo que el binario le haga, y ese conteo es lo que decide si la
+   * columna lo guarda entero o lo redondea sin avisar.
+   */
+  it("conserva el texto de la celda, sin convertir", () => {
+    const r = leerFilaCatalogo(1, renglon("X1", "Algo", "2671.885")) as FilaCatalogo;
+    expect(r.costoCrudo).toBe("2671.885");
+    expect(decimalesDe(r.costoCrudo)).toBe(3);
+    expect(cabeEnEscala(r.costoCrudo)).toBe(true);
+    // Es el valor que en numeric(14,2) se volvía 2,671.89.
+    expect(cabeEnEscala(r.costoCrudo, 2)).toBe(false);
   });
 
   /**
@@ -147,12 +169,12 @@ describe("resumen", () => {
   });
 
   it("cuenta por familia y señala lo que se cargaría en cero", () => {
-    const filas: FilaCatalogo[] = [
-      { fila: 2, codigo: "AR001", descripcion: "a", costo: 9600 },
-      { fila: 3, codigo: "AR002", descripcion: "b", costo: 80000 },
-      { fila: 4, codigo: "COSTO_TRANSPORTE_A", descripcion: "c", costo: 0 },
-      { fila: 5, codigo: "COSTO_HOSPEDAJE", descripcion: "d", costo: 2000 },
-      { fila: 6, codigo: "SP001", descripcion: "e", costo: null },
+    const filas: Array<Pick<FilaCatalogo, "codigo" | "costo">> = [
+      { codigo: "AR001", costo: 9600 },
+      { codigo: "AR002", costo: 80000 },
+      { codigo: "COSTO_TRANSPORTE_A", costo: 0 },
+      { codigo: "COSTO_HOSPEDAJE", costo: 2000 },
+      { codigo: "SP001", costo: null },
     ];
     expect(resumirPorFamilia(filas)).toEqual([
       { familia: "AR", total: 2, sinCosto: [] },
