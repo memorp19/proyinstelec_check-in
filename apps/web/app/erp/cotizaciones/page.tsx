@@ -12,6 +12,7 @@ export default async function CotizacionesPage() {
     <CotizacionesClient
       puedeEnviar={tienePermiso(session.user, "cotizaciones.enviar")}
       puedeCrearOT={tienePermiso(session.user, "ot.crear")}
+      puedeModificarOC={tienePermiso(session.user, "ot.oc.modificar")}
     />
   );
 }

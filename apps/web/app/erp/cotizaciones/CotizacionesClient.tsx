@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 // ── Tipos (espejo de la API) ──────────────────────────────────────────────────
 
@@ -41,12 +41,14 @@ type Modal =
   | { tipo: "enviar"; cot: Cot }
   | { tipo: "oc"; cot: Cot }
   | { tipo: "ot-sin-oc"; cot: Cot }
+  | { tipo: "oc-posterior"; cot: Cot }
+  | { tipo: "oc-modificar"; cot: Cot }
   | null;
 
 const key = (c: Cot) => `${String(c.numero).padStart(3, "0")}-${c.anio}`;
 
 const BADGE: Record<string, string> = {
-  PROCESO: "bg-amber-500/20 border-amber-400/30 text-amber-300",
+  PROCESO: "bg-amber/20 border-amber/30 text-amber",
   REVISION: "bg-blue/20 border-blue/30 text-blue-mid",
   ENVIADA: "bg-purple-500/20 border-purple-400/30 text-purple-300",
   ASIGNADA: "bg-green/20 border-green/30 text-green",
@@ -143,15 +145,34 @@ function CamposMonto({
 export function CotizacionesClient({
   puedeEnviar,
   puedeCrearOT,
+  puedeModificarOC,
 }: {
   puedeEnviar: boolean;
   puedeCrearOT: boolean;
+  puedeModificarOC: boolean;
 }) {
   const anioActual = new Date().getFullYear();
   const [tab, setTab] = useState<"buscar" | "nueva">("buscar");
   const [catalogos, setCatalogos] = useState<Catalogos | null>(null);
   const [modal, setModal] = useState<Modal>(null);
   const [aviso, setAviso] = useState<string | null>(null);
+  /**
+   * Se incrementa cuando un modal escribió algo. El listado lo observa y
+   * vuelve a buscar.
+   *
+   * Hace falta un contador —y no una llamada directa— porque el modal lo
+   * monta este componente y `buscar()` vive dentro de `Buscador`. Sin esto, la
+   * tarjeta seguía mostrando el valor anterior hasta recargar con F5: la base
+   * y la OT quedaban bien, pero la pantalla mentía.
+   */
+  const [recarga, setRecarga] = useState(0);
+
+  /** Cierra el modal, deja el aviso y pide al listado que se refresque. */
+  const trasEscribir = (msg?: string) => {
+    if (msg) setAviso(msg);
+    setModal(null);
+    setRecarga((n) => n + 1);
+  };
 
   useEffect(() => {
     fetch("/api/erp/catalogos")
@@ -180,8 +201,8 @@ export function CotizacionesClient({
       </div>
 
       {aviso && (
-        <div className="mb-4 bg-amber-500/10 border border-amber-400/20 rounded-xl px-4 py-3 flex justify-between gap-3">
-          <p className="font-mono text-xs text-amber-300">{aviso}</p>
+        <div className="mb-4 bg-amber/10 border border-amber/20 rounded-xl px-4 py-3 flex justify-between gap-3">
+          <p className="font-mono text-xs text-amber">{aviso}</p>
           <button onClick={() => setAviso(null)} className="font-mono text-xs text-white/40">✕</button>
         </div>
       )}
@@ -192,8 +213,10 @@ export function CotizacionesClient({
           catalogos={catalogos}
           puedeEnviar={puedeEnviar}
           puedeCrearOT={puedeCrearOT}
+          puedeModificarOC={puedeModificarOC}
           abrirModal={setModal}
           setAviso={setAviso}
+          recarga={recarga}
         />
       )}
       {tab === "nueva" && (
@@ -210,23 +233,157 @@ export function CotizacionesClient({
       {modal && (
         <ModalShell titulo={tituloModal(modal)} onClose={() => setModal(null)}>
           {modal.tipo === "editar" && (
-            <EditarForm cot={modal.cot} catalogos={catalogos} onDone={() => setModal(null)} />
+            <EditarForm cot={modal.cot} catalogos={catalogos} onDone={() => trasEscribir()} />
           )}
           {modal.tipo === "version" && (
-            <NuevaVersionForm cot={modal.cot} onDone={(msg) => { setAviso(msg); setModal(null); }} />
+            <NuevaVersionForm cot={modal.cot} onDone={trasEscribir} />
           )}
           {modal.tipo === "versiones" && <Versiones cot={modal.cot} />}
           {modal.tipo === "enviar" && (
-            <EnviarForm cot={modal.cot} onDone={(msg) => { setAviso(msg); setModal(null); }} />
+            <EnviarForm cot={modal.cot} onDone={trasEscribir} />
           )}
           {modal.tipo === "oc" && (
-            <OcForm cot={modal.cot} catalogos={catalogos} onDone={(msg) => { setAviso(msg); setModal(null); }} />
+            <OcForm cot={modal.cot} catalogos={catalogos} onDone={trasEscribir} />
           )}
           {modal.tipo === "ot-sin-oc" && (
-            <OcForm sinOc cot={modal.cot} catalogos={catalogos} onDone={(msg) => { setAviso(msg); setModal(null); }} />
+            <OcForm sinOc cot={modal.cot} catalogos={catalogos} onDone={trasEscribir} />
+          )}
+          {modal.tipo === "oc-posterior" && (
+            <OcPosteriorForm cot={modal.cot} onDone={trasEscribir} />
+          )}
+          {modal.tipo === "oc-modificar" && (
+            <OcModificarForm cot={modal.cot} onDone={trasEscribir} />
           )}
         </ModalShell>
       )}
+    </div>
+  );
+}
+
+
+/**
+ * Captura la OC de una cotizacion que ya esta ASIGNADA y ya tiene OT.
+ *
+ * No reutiliza `OcForm` porque aquel genera la OT: pide responsable y areas, y
+ * ofrece elegir version. Aqui no hay nada que elegir — el servidor escribe en
+ * la version que tiene la OT, que no siempre es la vigente.
+ */
+function OcPosteriorForm({ cot, onDone }: { cot: Cot; onDone: (msg: string) => void }) {
+  const [oc, setOc] = useState("");
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function guardar() {
+    if (!oc.trim()) return;
+    setGuardando(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/erp/cotizaciones/${cot.numero}-${cot.anio}/oc-posterior`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ordenCompra: oc.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "No se pudo registrar la orden de compra");
+      onDone(`OC ${data.ordenCompra} registrada en la v${data.version} y en ${data.folioOt}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error");
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="font-mono text-[10px] text-white/50">
+        La orden de trabajo ya existe. La OC se guarda en la versión que la generó y en su OT.
+      </p>
+      <input
+        className={input}
+        placeholder="No. de Orden de Compra *"
+        value={oc}
+        onChange={(e) => setOc(e.target.value)}
+      />
+      {error && (
+        <p className="font-mono text-[10px] text-danger bg-danger/10 border border-danger/20 rounded-lg px-3 py-2">
+          {error}
+        </p>
+      )}
+      <button
+        onClick={guardar}
+        disabled={guardando || !oc.trim()}
+        className="w-full min-h-tap font-mono text-xs font-bold text-navy bg-amber rounded-xl disabled:opacity-40"
+      >
+        {guardando ? "Guardando…" : "Registrar OC"}
+      </button>
+    </div>
+  );
+}
+
+
+/**
+ * Corrige una OC ya registrada. Pide motivo porque lo que se reescribe es el
+ * numero con el que se factura y se cobra: sin motivo, el cambio es
+ * indistinguible de un error de captura.
+ */
+function OcModificarForm({ cot, onDone }: { cot: Cot; onDone: (msg: string) => void }) {
+  const [oc, setOc] = useState("");
+  const [motivo, setMotivo] = useState("");
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const listo = oc.trim() !== "" && oc.trim() !== cot.orden_compra && motivo.trim().length >= 5;
+
+  async function guardar() {
+    if (!listo) return;
+    setGuardando(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/erp/cotizaciones/${cot.numero}-${cot.anio}/oc-posterior`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ordenCompra: oc.trim(), motivo: motivo.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "No se pudo modificar la orden de compra");
+      onDone(`OC ${data.anterior} → ${data.ordenCompra} en la v${data.version} y en ${data.folioOt}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error");
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="font-mono text-[10px] text-amber bg-amber/10 border border-amber/20 rounded-lg px-3 py-2">
+        Se reemplaza la OC <strong className="font-bold">{cot.orden_compra}</strong> en la versión
+        que tiene la OT y en su orden de trabajo. Queda en bitácora con tu nombre y el motivo.
+      </p>
+      <input
+        className={input}
+        placeholder="Nueva orden de compra *"
+        value={oc}
+        onChange={(e) => setOc(e.target.value)}
+      />
+      <textarea
+        className={`${input} min-h-[72px] resize-y`}
+        placeholder="Motivo del cambio * (mínimo 5 caracteres)"
+        value={motivo}
+        onChange={(e) => setMotivo(e.target.value)}
+      />
+      {error && (
+        <p className="font-mono text-[10px] text-danger bg-danger/10 border border-danger/20 rounded-lg px-3 py-2">
+          {error}
+        </p>
+      )}
+      <button
+        onClick={guardar}
+        disabled={guardando || !listo}
+        className="w-full min-h-tap font-mono text-xs font-bold text-navy bg-amber rounded-xl disabled:opacity-40"
+      >
+        {guardando ? "Guardando…" : "Modificar OC"}
+      </button>
     </div>
   );
 }
@@ -239,6 +396,8 @@ function tituloModal(m: NonNullable<Modal>) {
     enviar: "Enviar al cliente",
     oc: "Ingresar OC → Generar OT",
     "ot-sin-oc": "Generar OT sin OC",
+    "oc-posterior": "Registrar OC",
+    "oc-modificar": "Modificar OC",
   }[m.tipo];
   return `${t} · ${m.cot.folio}`;
 }
@@ -269,19 +428,26 @@ function Buscador({
   catalogos,
   puedeEnviar,
   puedeCrearOT,
+  puedeModificarOC,
   abrirModal,
   setAviso,
+  recarga,
 }: {
   anioActual: number;
   catalogos: Catalogos | null;
   puedeEnviar: boolean;
   puedeCrearOT: boolean;
+  puedeModificarOC: boolean;
   abrirModal: (m: Modal) => void;
   setAviso: (s: string) => void;
+  /** Cambia cuando un modal escribió algo; dispara una búsqueda nueva. */
+  recarga: number;
 }) {
   const [filtros, setFiltros] = useState({
     anio: String(anioActual), empresa: "", numero: "", elaboro: "", dirigidaA: "", estatus: "", mesEntrega: "", ot: "", oc: "",
   });
+  /** Cola de quien persigue las OC: asignadas que aún no tienen número. */
+  const [soloSinOc, setSoloSinOc] = useState(false);
   const [resultados, setResultados] = useState<Cot[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -293,6 +459,7 @@ function Buscador({
     try {
       const params = new URLSearchParams();
       Object.entries(filtros).forEach(([k, v]) => v && params.set(k, v));
+      if (soloSinOc) params.set("sinOc", "1");
       const res = await fetch(`/api/erp/cotizaciones?${params}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Error al buscar");
@@ -302,9 +469,19 @@ function Buscador({
     } finally {
       setLoading(false);
     }
-  }, [filtros]);
+  }, [filtros, soloSinOc]);
 
   useEffect(() => { buscar(); }, []); // carga inicial
+
+  // Dos disparadores que no pasan por el botón de buscar:
+  //   · el interruptor "sin OC", que es un cambio de "qué estoy mirando";
+  //   · `recarga`, cuando un modal acaba de escribir.
+  // El ref evita que la carga inicial se duplique en el primer render.
+  const primera = useRef(true);
+  useEffect(() => {
+    if (primera.current) { primera.current = false; return; }
+    buscar();
+  }, [soloSinOc, recarga]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function enviarARevision(c: Cot) {
     if (!confirm(`¿Enviar ${c.folio} a revisión? Se avisará a los revisores por correo.`)) return;
@@ -336,6 +513,16 @@ function Buscador({
         <input className={input} placeholder="No. cotización" value={filtros.numero} onChange={set("numero")} />
         <input className={input} placeholder="Elaboró" value={filtros.elaboro} onChange={set("elaboro")} list="dl-elaboro" />
         <input className={input} placeholder="Dirigida a" value={filtros.dirigidaA} onChange={set("dirigidaA")} />
+        <label className="col-span-2 md:col-span-4 flex items-center gap-2 min-h-tap font-mono text-[11px] text-white/60 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={soloSinOc}
+            onChange={(e) => setSoloSinOc(e.target.checked)}
+            className="w-4 h-4 accent-amber"
+          />
+          Solo <span className="text-amber">ASIGNADA sin orden de compra</span>
+          <span className="text-white/30">— la cola de OC por conseguir</span>
+        </label>
         <select className={input} value={filtros.estatus} onChange={set("estatus")}>
           <option value="" className="bg-navy">Estatus (todos)</option>
           {(catalogos?.estatus ?? []).map((s) => <option key={s} value={s} className="bg-navy">{s}</option>)}
@@ -358,6 +545,13 @@ function Buscador({
         <button type="submit" disabled={loading} className={`${btnPrimary} col-span-2 md:col-span-3`}>
           {loading ? "Buscando…" : "Buscar"}
         </button>
+        <span className="col-span-2 md:col-span-1 flex items-center justify-end font-mono text-[10px] text-white/30">
+          {loading
+            ? "…"
+            : `${resultados.length} ${resultados.length === 1 ? "cotización" : "cotizaciones"}${
+                soloSinOc ? " sin OC" : ""
+              }`}
+        </span>
         <datalist id="dl-elaboro">
           {(catalogos?.responsables ?? []).map((r) => <option key={r.email} value={r.iniciales} />)}
         </datalist>
@@ -374,13 +568,29 @@ function Buscador({
         ) : (
           resultados.map((c) => (
             <div key={key(c)} className="bg-white/10 border border-white/10 rounded-xl px-4 py-4">
-              <div className="flex items-start justify-between gap-2 flex-wrap">
-                <div className="min-w-0">
+              {/* Sin flex-wrap y con la columna de texto en flex-1: así los botones
+                  quedan SIEMPRE arriba a la derecha. Antes el contenedor envolvía,
+                  y un título largo ensanchaba la columna izquierda hasta empujarlos
+                  al renglón de abajo — la misma tarjeta cambiaba de forma según el
+                  texto. */}
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="font-head text-sm font-bold text-white">{c.folio}</p>
                     <span className={`font-mono text-[9px] px-2 py-0.5 rounded-full border ${badge(c.estatus)}`}>
                       {c.estatus}
                     </span>
+                    {/* Solo visual: el estatus sigue siendo ASIGNADA. Marca que el
+                        trabajo se ejecutó y falta el número del cliente para poder
+                        facturar. Desaparece sola al registrar la OC. */}
+                    {c.estatus === "ASIGNADA" && !c.orden_compra && (
+                      <span
+                        className="font-mono text-[9px] px-2 py-0.5 rounded-full bg-amber/15 border border-amber/30 text-amber"
+                        title="Asignada sin orden de compra: el trabajo se ejecuta y la OC del cliente está pendiente"
+                      >
+                        SIN OC
+                      </span>
+                    )}
                     {c.estatus === "REVISION" && !c.aprobada && (
                       <span className="font-mono text-[9px] px-2 py-0.5 rounded-full bg-white/10 border border-white/20 text-white/50">
                         Esperando aprobación del revisor
@@ -398,7 +608,7 @@ function Buscador({
                 </div>
 
                 {/* Acción principal según estado (regla del legacy) */}
-                <div className="shrink-0">
+                <div className="shrink-0 flex items-center gap-1.5 flex-wrap justify-end">
                   {c.estatus === "PROCESO" && (
                     <button
                       onClick={() => enviarARevision(c)}
@@ -415,7 +625,7 @@ function Buscador({
                   )}
                   {c.estatus === "ENVIADA" && !c.folio_ot && puedeCrearOT && (
                     <>
-                      <button onClick={() => abrirModal({ tipo: "oc", cot: c })} className="font-mono text-[10px] font-bold text-navy bg-amber-400 rounded-lg px-3 py-1.5 active:scale-[0.97] transition-transform">
+                      <button onClick={() => abrirModal({ tipo: "oc", cot: c })} className="font-mono text-[10px] font-bold text-navy bg-amber rounded-lg px-3 py-1.5 active:scale-[0.97] transition-transform">
                         Ingresar OC
                       </button>
                       {/* El cliente puede aceptar sin emitir OC; la OT se genera igual */}
@@ -423,6 +633,19 @@ function Buscador({
                         Generar OT sin OC
                       </button>
                     </>
+                  )}
+                  {/* Trabajo ejecutado y OC pendiente: la OT ya existe y solo falta el numero */}
+                  {c.estatus === "ASIGNADA" && !c.orden_compra && puedeCrearOT && (
+                    <button onClick={() => abrirModal({ tipo: "oc-posterior", cot: c })} className="font-mono text-[10px] font-bold text-navy bg-amber rounded-lg px-3 py-1.5 active:scale-[0.97] transition-transform">
+                      Registrar OC
+                    </button>
+                  )}
+                  {/* Corregir una OC ya registrada es reescribir el número con el que
+                      se factura: permiso aparte y más alto, y motivo obligatorio. */}
+                  {c.estatus === "ASIGNADA" && c.orden_compra && puedeModificarOC && (
+                    <button onClick={() => abrirModal({ tipo: "oc-modificar", cot: c })} className={btnGhost}>
+                      Modificar OC
+                    </button>
                   )}
                   {c.estatus === "ENVIADA" && puedeEnviar && (
                     <button onClick={() => abrirModal({ tipo: "enviar", cot: c })} className={`${btnGhost} ml-1.5`}>
@@ -777,7 +1000,7 @@ function EnviarForm({ cot, onDone }: { cot: Cot; onDone: (msg: string) => void }
 
   if (!datos && !error) return <p className="font-mono text-xs text-white/40">Cargando…</p>;
   if (datos && !datos.puede) {
-    return <p className="font-mono text-xs text-amber-300">{datos.motivo ?? "No puede enviarse todavía"}</p>;
+    return <p className="font-mono text-xs text-amber">{datos.motivo ?? "No puede enviarse todavía"}</p>;
   }
 
   const totalSeleccion = seleccion.size + manual.split(",").filter((s) => s.trim()).length;
@@ -785,7 +1008,7 @@ function EnviarForm({ cot, onDone }: { cot: Cot; onDone: (msg: string) => void }
   return (
     <div className="space-y-3">
       {datos && !datos.pdfDisponible && (
-        <p className="font-mono text-[10px] text-amber-300 bg-amber-500/10 border border-amber-400/20 rounded-lg px-3 py-2">
+        <p className="font-mono text-[10px] text-amber bg-amber/10 border border-amber/20 rounded-lg px-3 py-2">
           No se localizó el PDF en la carpeta de la cotización. Genera el PDF con el nombre
           «{cot.folio} …» antes de enviar — el envío es obligatorio con PDF.
         </p>
@@ -989,7 +1212,7 @@ function OcForm({
       )}
 
       {enviadas && enviadas.length === 0 && (
-        <p className="font-mono text-[10px] text-amber-300/80 bg-amber-400/10 border border-amber-400/20 rounded-lg px-3 py-2">
+        <p className="font-mono text-[10px] text-amber/80 bg-amber/10 border border-amber/20 rounded-lg px-3 py-2">
           Ninguna versión de esta cotización está en ENVIADA, así que no se puede generar la OT.
         </p>
       )}
@@ -1000,9 +1223,10 @@ function OcForm({
         </p>
       )}
       {sinOc ? (
-        <p className="font-mono text-[10px] text-amber-300/80 bg-amber-400/10 border border-amber-400/20 rounded-lg px-3 py-2">
-          Se generará la OT sin orden de compra. La cotización queda ASIGNADA y la OC puede
-          capturarse después, cuando el cliente la emita.
+        <p className="font-mono text-[10px] text-amber/80 bg-amber/10 border border-amber/20 rounded-lg px-3 py-2">
+          Se generará la OT sin orden de compra. La cotización queda ASIGNADA, y cuando el
+          cliente emita la OC se captura con el botón <strong>Registrar OC</strong> de la
+          tarjeta: se guarda en esta misma versión y en su orden de trabajo.
         </p>
       ) : (
         <input className={input} placeholder="No. de Orden de Compra *" value={oc} onChange={(e) => setOc(e.target.value)} />
