@@ -19,7 +19,7 @@
     "import:erp": "tsx scripts/importar-erp.ts",
     "backfill:carpetas": "tsx scripts/backfill-carpetas-cotizaciones.ts",
     "auditar:pdfs": "tsx scripts/auditar-pdfs-cotizaciones.ts",
-    "marcar:no-asignadas": "tsx scripts/marcar-no-asignadas-importadas.ts",
+    "importar:2026": "tsx scripts/importar-excel-2026.ts",
     "catalogo:importar": "tsx scripts/importar-catalogo-2026.ts",
     "prueba:068": "tsx scripts/prueba-068.ts",
     "revertir:0006": "tsx scripts/revertir-0006.ts"

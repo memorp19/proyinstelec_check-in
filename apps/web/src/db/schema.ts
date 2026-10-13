@@ -1,6 +1,7 @@
 import {
   boolean,
   check,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -11,7 +12,9 @@ import {
   smallint,
   text,
   timestamp,
+  unique,
   uniqueIndex,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type { AdapterAccountType } from "next-auth/adapters";
@@ -577,6 +580,25 @@ const PORCENTAJE = { precision: 9, scale: 6 } as const;
 const IMPORTE = { precision: 14, scale: 2 } as const;
 
 /**
+ * Todas las tablas del cotizador cuelgan de una VERSIÓN de cotización, y lo
+ * dicen con una llave foránea a `cotizaciones (numero, anio, version)`.
+ *
+ * Sin ella, un armado podía referenciar una versión que no existe y nadie
+ * limpiaba nada si una desaparecía: la integridad quedaba cuidada dentro del
+ * módulo —`cot_conceptos` → `cot_partidas`— y no en su frontera. `CASCADE`
+ * porque un armado sin su cotización no significa nada.
+ */
+const versionDeCotizacion = (t: {
+  numero: AnyPgColumn;
+  anio: AnyPgColumn;
+  version: AnyPgColumn;
+}) =>
+  foreignKey({
+    columns: [t.numero, t.anio, t.version],
+    foreignColumns: [cotizaciones.numero, cotizaciones.anio, cotizaciones.version],
+  }).onDelete("cascade");
+
+/**
  * El catálogo de servicios: un solo precio para todos los clientes.
  *
  * No hay precios por cliente, y es una decisión, no una omisión: un descuento
@@ -710,7 +732,17 @@ export const cotArmado = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => ({ pk: primaryKey({ columns: [t.numero, t.anio, t.version] }) }),
+  (t) => ({
+    pk: primaryKey({ columns: [t.numero, t.anio, t.version] }),
+    version: versionDeCotizacion(t),
+    /**
+     * Un porcentaje fuera de 0–100 no es un caso raro: es un error de captura.
+     * El motor avisa, y esto cierra la otra puerta — la de quien escriba por
+     * SQL sin pasar por el motor.
+     */
+    asesoriaRango: check("cot_armado_asesoria_pct_rango", sql`${t.asesoriaPct} BETWEEN 0 AND 100`),
+    ivaRango: check("cot_armado_iva_pct_rango", sql`${t.ivaPct} BETWEEN 0 AND 100`),
+  }),
 );
 
 export const cotPartidas = pgTable(
@@ -762,6 +794,14 @@ export const cotPartidas = pgTable(
   (t) => ({
     versionIdx: index("cot_partidas_version_idx").on(t.numero, t.anio, t.version),
     ordenUq: uniqueIndex("cot_partidas_orden_uq").on(t.numero, t.anio, t.version, t.orden),
+    version: versionDeCotizacion(t),
+    /**
+     * Redundante con la llave primaria, y no está de adorno: es el destino de
+     * la llave foránea compuesta de las hijas. Sin este `UNIQUE`, Postgres no
+     * deja apuntar a `(id, numero, anio, version)`, y sin esa llave el trío de
+     * un concepto podría no coincidir con el de su partida.
+     */
+    identidad: unique("cot_partidas_identidad_uq").on(t.id, t.numero, t.anio, t.version),
   }),
 );
 
@@ -783,9 +823,12 @@ export const cotConceptos = pgTable(
     id: text("id")
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
-    partidaId: text("partida_id")
-      .notNull()
-      .references(() => cotPartidas.id, { onDelete: "cascade" }),
+    /**
+     * La partida de la que cuelga. Su llave foránea es **compuesta** —abajo,
+     * con el resto—: lleva también el trío de la versión, de modo que un
+     * concepto no pueda apuntar a una partida de otra.
+     */
+    partidaId: text("partida_id").notNull(),
     numero: integer("numero").notNull(),
     anio: integer("anio").notNull(),
     version: integer("version").notNull(),
@@ -817,6 +860,17 @@ export const cotConceptos = pgTable(
   (t) => ({
     partidaIdx: index("cot_conceptos_partida_idx").on(t.partidaId, t.orden),
     versionIdx: index("cot_conceptos_version_idx").on(t.numero, t.anio, t.version),
+    version: versionDeCotizacion(t),
+    /**
+     * El trío viaja en las hijas para poder consultar una versión sin unir
+     * (§1.5 del plan), y esta llave es lo que garantiza que sea el mismo trío
+     * que el de su partida. Antes nada lo impedía.
+     */
+    partida: foreignKey({
+      columns: [t.partidaId, t.numero, t.anio, t.version],
+      foreignColumns: [cotPartidas.id, cotPartidas.numero, cotPartidas.anio, cotPartidas.version],
+    }).onDelete("cascade"),
+    utilidadRango: check("cot_conceptos_utilidad_pct_rango", sql`${t.utilidadPct} BETWEEN 0 AND 100`),
   }),
 );
 
@@ -846,16 +900,35 @@ export const cotGastos = pgTable(
     utilidadPct: numeric("utilidad_pct", PORCENTAJE).notNull().default("0"),
     monedaCosto: text("moneda_costo", { enum: ["MXN", "USD"] }),
 
-    /** Null = general, se reparte. Con valor = entero a esa partida. */
-    destinoPartidaId: text("destino_partida_id").references(() => cotPartidas.id, {
-      onDelete: "cascade",
-    }),
+    /**
+     * Null = general, se reparte. Con valor = entero a esa partida. Su llave
+     * foránea es compuesta y se declara abajo.
+     */
+    destinoPartidaId: text("destino_partida_id"),
 
     orden: integer("orden").notNull().default(1),
     notas: text("notas"),
   },
   (t) => ({
     versionIdx: index("cot_gastos_version_idx").on(t.numero, t.anio, t.version),
+    version: versionDeCotizacion(t),
+    /**
+     * `SET NULL` y no `CASCADE`: borrar la partida a la que iba dirigido un
+     * gasto no debe borrar el gasto. El viático se gastó igual — lo que
+     * desaparece es a quién se le carga, y sin destino vuelve a ser general.
+     * Es degradar en vez de perder.
+     *
+     * **Ojo al regenerar la migración.** La llave es compuesta, así que un
+     * `SET NULL` a secas anularía las cuatro columnas y tres son `NOT NULL`:
+     * borrar una partida fallaría. En el SQL se nombra la columna que se
+     * anula —`ON DELETE SET NULL ("destino_partida_id")`, Postgres 15+—, y eso
+     * drizzle-kit todavía no lo genera: hay que volver a ponerlo a mano.
+     */
+    destino: foreignKey({
+      columns: [t.destinoPartidaId, t.numero, t.anio, t.version],
+      foreignColumns: [cotPartidas.id, cotPartidas.numero, cotPartidas.anio, cotPartidas.version],
+    }).onDelete("set null"),
+    utilidadRango: check("cot_gastos_utilidad_pct_rango", sql`${t.utilidadPct} BETWEEN 0 AND 100`),
   }),
 );
 
@@ -889,7 +962,10 @@ export const cotImportes = pgTable(
     /** El importe con letra, tal como sale en el documento. */
     letra: text("letra").notNull(),
   },
-  (t) => ({ pk: primaryKey({ columns: [t.numero, t.anio, t.version] }) }),
+  (t) => ({
+    pk: primaryKey({ columns: [t.numero, t.anio, t.version] }),
+    version: versionDeCotizacion(t),
+  }),
 );
 
 // ── Tipos inferidos ───────────────────────────────────────────────────────────

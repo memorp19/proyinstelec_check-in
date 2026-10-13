@@ -417,7 +417,47 @@ Dos consecuencias prácticas:
   redondeo no aparecía en memoria: solo salía contra la base. Ahora hay un test
   que reproduce el fallo —el total 1,213,491.20— para que no vuelva en silencio.
 
-### 1.8 Qué se migra y cómo
+### 1.8 Lo que impide la base, y no el código
+
+La revisión del PR del modelo lo señaló en una frase que vale la pena conservar:
+*la integridad se cuidó dentro del módulo, no en su frontera*. Estaban las
+llaves de `cot_conceptos` → `cot_partidas` y de `cat_servicios_cambios` →
+`cat_servicios`, pero ninguna de las cinco tablas decía de qué cotización
+colgaba. Un armado podía referenciar una versión que no existe, y si una
+desaparecía no se limpiaba nada.
+
+| Regla | Cómo se impone |
+|---|---|
+| Un armado pertenece a una versión que existe | FK `(numero, anio, version)` → `cotizaciones`, `ON DELETE CASCADE`, en las **cinco** tablas |
+| Un concepto cuelga de una partida **de su misma versión** | FK compuesta `(partida_id, numero, anio, version)` → `cot_partidas (id, numero, anio, version)`, `CASCADE` |
+| Un gasto dirigido apunta a una partida de su misma versión | la misma llave, pero `ON DELETE SET NULL` |
+| Asesoría, IVA y utilidad van de 0 a 100 | tres `CHECK`, uno por columna |
+
+El trío `(numero, anio, version)` **se queda** en las hijas —sirve para
+consultar una versión sin unir— y lo que se agrega es la garantía de que sea el
+mismo trío que el de su partida. Antes nada lo impedía: un concepto podía decir
+que era de la versión 2 colgando de una partida de la 0. Para que la llave
+compuesta tenga a dónde apuntar, `cot_partidas` lleva un `UNIQUE (id, numero,
+anio, version)` redundante con su llave primaria; no está de adorno.
+
+**`SET NULL` y no `CASCADE` en el destino de un gasto.** Borrar la partida a la
+que iba dirigido no debe borrar el gasto: el viático se gastó igual. Lo que
+desaparece es a quién se le carga, y sin destino vuelve a ser general — degradar
+en vez de perder. Un detalle del SQL que conviene saber: como la llave es
+compuesta, el `SET NULL` nombra **su** columna
+(`ON DELETE SET NULL ("destino_partida_id")`, Postgres 15+); a secas anularía
+las cuatro, y tres son `NOT NULL`. `drizzle-kit` todavía no genera esa lista, así
+que está puesta a mano en la migración y anotada en el esquema.
+
+**Los `CHECK` no sustituyen a los avisos del motor, los acompañan.** El motor
+avisa de una asesoría o un IVA fuera de rango para que quien cotiza lo vea
+mientras captura; el `CHECK` cierra la otra puerta, la de quien escriba por SQL
+sin pasar por el motor. Y hay una cosa que un `CHECK` **no** puede hacer: ver un
+monto antes de que la columna lo recorte. Esa defensa vive del lado de quien
+escribe, en una sola función —`montoParaGuardar`—, que lanza en vez de redondear
+y la usan el importador, la copia de versión y el guardado de la pantalla.
+
+### 1.9 Qué se migra y cómo
 
 | Origen | Destino | Cómo |
 |---|---|---|

@@ -490,6 +490,14 @@ export function calcularCotizacion(entrada: EntradaCotizacion): ResultadoCotizac
   const ivaPct = entrada.ivaPct === undefined || entrada.ivaPct === null
     ? IVA_PCT
     : Number(entrada.ivaPct);
+
+  // Igual que la asesoría: fuera de 0–100 no es una tasa rara, es un error de
+  // captura. Un IVA negativo deja el total por debajo del subtotal, que es de
+  // las cosas que nadie mira dos veces porque "el sistema lo calculó".
+  if (!Number.isFinite(ivaPct) || ivaPct < 0 || ivaPct > 100) {
+    avisos.push(`El IVA es ${entrada.ivaPct} %, fuera del rango razonable de 0 a 100. Revísalo.`);
+  }
+
   const iva = redondear(subtotal * (ivaPct / 100));
 
   return {

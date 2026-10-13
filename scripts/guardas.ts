@@ -50,6 +50,21 @@ export function verificarDestino(host: string, banderas: Banderas, queHace: stri
   console.log(`🔌  Base: ${host}\n`);
 
   const produccion = process.env.PRODUCTION_DATABASE_HOST?.trim();
+
+  /**
+   * Sin la variable, la guarda de producción no guarda nada — y callarlo es
+   * peor que no tenerla: quien ejecuta cree estar protegido. Solo se exige
+   * cuando se va a escribir; para un reporte no hace falta.
+   */
+  if (!produccion && banderas.escribe) {
+    console.error(
+      "❌  PRODUCTION_DATABASE_HOST no está definida, así que la guarda de producción\n" +
+        "    NO puede comprobar nada. Defínela en apps/web/.env.local —aunque sea con el\n" +
+        "    host de producción de otro— antes de escribir.\n",
+    );
+    process.exit(1);
+  }
+
   if (produccion && host === produccion) {
     console.error(
       `❌  ${host} es el host de producción (PRODUCTION_DATABASE_HOST).\n` +

@@ -1,5 +1,5 @@
 {
-  "id": "abdb9c2f-8f98-431c-88b9-5e36987277af",
+  "id": "0d575b05-c144-4311-962d-983542b19554",
   "prevId": "ca2c435c-4eaa-4707-aea1-f1f3b1fd2506",
   "version": "7",
   "dialect": "postgresql",
@@ -843,7 +843,25 @@
         }
       },
       "indexes": {},
-      "foreignKeys": {},
+      "foreignKeys": {
+        "cot_armado_numero_anio_version_cotizaciones_numero_anio_version_fk": {
+          "name": "cot_armado_numero_anio_version_cotizaciones_numero_anio_version_fk",
+          "tableFrom": "cot_armado",
+          "tableTo": "cotizaciones",
+          "columnsFrom": [
+            "numero",
+            "anio",
+            "version"
+          ],
+          "columnsTo": [
+            "numero",
+            "anio",
+            "version"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {
         "cot_armado_numero_anio_version_pk": {
           "name": "cot_armado_numero_anio_version_pk",
@@ -856,7 +874,16 @@
       },
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "cot_armado_asesoria_pct_rango": {
+          "name": "cot_armado_asesoria_pct_rango",
+          "value": "\"cot_armado\".\"asesoria_pct\" BETWEEN 0 AND 100"
+        },
+        "cot_armado_iva_pct_rango": {
+          "name": "cot_armado_iva_pct_rango",
+          "value": "\"cot_armado\".\"iva_pct\" BETWEEN 0 AND 100"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.cot_conceptos": {
@@ -1050,15 +1077,38 @@
         }
       },
       "foreignKeys": {
-        "cot_conceptos_partida_id_cot_partidas_id_fk": {
-          "name": "cot_conceptos_partida_id_cot_partidas_id_fk",
+        "cot_conceptos_numero_anio_version_cotizaciones_numero_anio_version_fk": {
+          "name": "cot_conceptos_numero_anio_version_cotizaciones_numero_anio_version_fk",
+          "tableFrom": "cot_conceptos",
+          "tableTo": "cotizaciones",
+          "columnsFrom": [
+            "numero",
+            "anio",
+            "version"
+          ],
+          "columnsTo": [
+            "numero",
+            "anio",
+            "version"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "cot_conceptos_partida_id_numero_anio_version_cot_partidas_id_numero_anio_version_fk": {
+          "name": "cot_conceptos_partida_id_numero_anio_version_cot_partidas_id_numero_anio_version_fk",
           "tableFrom": "cot_conceptos",
           "tableTo": "cot_partidas",
           "columnsFrom": [
-            "partida_id"
+            "partida_id",
+            "numero",
+            "anio",
+            "version"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "numero",
+            "anio",
+            "version"
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
@@ -1067,7 +1117,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "cot_conceptos_utilidad_pct_rango": {
+          "name": "cot_conceptos_utilidad_pct_rango",
+          "value": "\"cot_conceptos\".\"utilidad_pct\" BETWEEN 0 AND 100"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.cot_gastos": {
@@ -1193,24 +1248,52 @@
         }
       },
       "foreignKeys": {
-        "cot_gastos_destino_partida_id_cot_partidas_id_fk": {
-          "name": "cot_gastos_destino_partida_id_cot_partidas_id_fk",
+        "cot_gastos_numero_anio_version_cotizaciones_numero_anio_version_fk": {
+          "name": "cot_gastos_numero_anio_version_cotizaciones_numero_anio_version_fk",
+          "tableFrom": "cot_gastos",
+          "tableTo": "cotizaciones",
+          "columnsFrom": [
+            "numero",
+            "anio",
+            "version"
+          ],
+          "columnsTo": [
+            "numero",
+            "anio",
+            "version"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "cot_gastos_destino_partida_id_numero_anio_version_cot_partidas_id_numero_anio_version_fk": {
+          "name": "cot_gastos_destino_partida_id_numero_anio_version_cot_partidas_id_numero_anio_version_fk",
           "tableFrom": "cot_gastos",
           "tableTo": "cot_partidas",
           "columnsFrom": [
-            "destino_partida_id"
+            "destino_partida_id",
+            "numero",
+            "anio",
+            "version"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "numero",
+            "anio",
+            "version"
           ],
-          "onDelete": "cascade",
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "cot_gastos_utilidad_pct_rango": {
+          "name": "cot_gastos_utilidad_pct_rango",
+          "value": "\"cot_gastos\".\"utilidad_pct\" BETWEEN 0 AND 100"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.cot_importes": {
@@ -1292,7 +1375,25 @@
         }
       },
       "indexes": {},
-      "foreignKeys": {},
+      "foreignKeys": {
+        "cot_importes_numero_anio_version_cotizaciones_numero_anio_version_fk": {
+          "name": "cot_importes_numero_anio_version_cotizaciones_numero_anio_version_fk",
+          "tableFrom": "cot_importes",
+          "tableTo": "cotizaciones",
+          "columnsFrom": [
+            "numero",
+            "anio",
+            "version"
+          ],
+          "columnsTo": [
+            "numero",
+            "anio",
+            "version"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {
         "cot_importes_numero_anio_version_pk": {
           "name": "cot_importes_numero_anio_version_pk",
@@ -1471,9 +1572,38 @@
           "with": {}
         }
       },
-      "foreignKeys": {},
+      "foreignKeys": {
+        "cot_partidas_numero_anio_version_cotizaciones_numero_anio_version_fk": {
+          "name": "cot_partidas_numero_anio_version_cotizaciones_numero_anio_version_fk",
+          "tableFrom": "cot_partidas",
+          "tableTo": "cotizaciones",
+          "columnsFrom": [
+            "numero",
+            "anio",
+            "version"
+          ],
+          "columnsTo": [
+            "numero",
+            "anio",
+            "version"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "cot_partidas_identidad_uq": {
+          "name": "cot_partidas_identidad_uq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "numero",
+            "anio",
+            "version"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
