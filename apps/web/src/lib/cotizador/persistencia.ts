@@ -208,58 +208,17 @@ export function partidaDeFila(p: FilaPartida, conceptos: Concepto[]): Partida {
   };
 }
 
-export interface FilasVersion {
-  armado: FilaArmado;
+// ── La versión siguiente ──────────────────────────────────────────────────────
+
+/**
+ * Lo que se copia a la versión siguiente. No lleva el encabezado a propósito:
+ * ese se copia tal cual y no necesita religar nada.
+ */
+export interface FilasCopiables {
   partidas: FilaPartida[];
   conceptos: FilaConcepto[];
   gastos: FilaGasto[];
-  /** De `config_erp`, para los estudios que no capturaron su base. */
-  baseNodosPorOmision?: number;
 }
-
-/**
- * Las filas de una versión, convertidas en lo que el motor sabe calcular.
- *
- * El orden es el de `orden`, no el que haya devuelto la consulta: el documento
- * depende de él y un `SELECT` sin `ORDER BY` no promete nada.
- */
-export function entradaDesdeFilas(filas: FilasVersion): EntradaCotizacion {
-  const porPartida = new Map<string, Concepto[]>();
-  for (const c of [...filas.conceptos].sort((a, b) => a.orden - b.orden)) {
-    const lista = porPartida.get(c.partida_id) ?? [];
-    lista.push(conceptoDeFila(c));
-    porPartida.set(c.partida_id, lista);
-  }
-
-  const partidas = [...filas.partidas]
-    .sort((a, b) => a.orden - b.orden)
-    .map((p) => partidaDeFila(p, porPartida.get(p.id) ?? []));
-
-  const a = filas.armado;
-  const tipoCambio = dec(a.tipo_cambio);
-
-  return {
-    moneda: moneda(a.moneda) ?? "MXN",
-    monedaGastos: moneda(a.moneda_gastos) ?? moneda(a.moneda) ?? "MXN",
-    reparto: (a.reparto_gastos as RepartoGastos) ?? "IGUAL",
-    asesoriaPct: dec(a.asesoria_pct) ?? 0,
-    ...(dec(a.iva_pct) === undefined ? {} : { ivaPct: dec(a.iva_pct) }),
-    ...(tipoCambio === undefined
-      ? {}
-      : {
-          tipoCambio: {
-            valor: tipoCambio,
-            origen: a.tipo_cambio_origen === "PREFERENTE" ? "PREFERENTE" : "BANXICO",
-            ...(a.tipo_cambio_motivo ? { motivo: a.tipo_cambio_motivo } : {}),
-          },
-        }),
-    ...(filas.baseNodosPorOmision ? { baseNodosPorOmision: filas.baseNodosPorOmision } : {}),
-    partidas,
-    gastos: [...filas.gastos].sort((x, y) => x.orden - y.orden).map(gastoDeFila),
-  };
-}
-
-// ── La versión siguiente ──────────────────────────────────────────────────────
 
 export interface CopiaVersion {
   partidas: FilaPartida[];
@@ -281,7 +240,7 @@ export interface CopiaVersion {
  * de la v0.
  */
 export function copiarAVersion(
-  filas: FilasVersion,
+  filas: FilasCopiables,
   catalogo: ServicioCatalogo[],
   nuevoId: () => string,
 ): CopiaVersion {

@@ -76,51 +76,101 @@ describe("normalizarDocumento", () => {
   it("sin nada guardado, el bloque vacío con su esquema", () => {
     const { valor, avisos } = normalizarDocumento(undefined);
     expect(valor.esquema).toBe(ESQUEMA_DOCUMENTO);
-    expect(valor.contacto).toEqual({ nombre: "", telefono: "", email: "" });
-    expect(valor.direccion).toEqual(["", ""]);
+    expect(valor.contacto).toEqual({ contacto: "", direccion1: "", direccion2: "", telefono: "", correo: "" });
+    expect(valor.normas).toBeNull();
+    expect(valor.reporte).toBe("COMPLETO");
     expect(avisos).toEqual([]);
   });
 
-  it("arma el contacto, la dirección y las listas", () => {
+  it("arma el contacto, los párrafos y el encabezado de la tabla", () => {
     const { valor, avisos } = normalizarDocumento({
       esquema: 1,
-      contacto: { nombre: "Ing. Pérez", telefono: "81 1234 5678", email: "p@ejemplo.mx" },
-      direccion: ["Av. Siempre Viva 742", "Col. Centro"],
-      sitio: "Planta 2",
-      actividades: ["Pruebas eléctricas", "  Limpieza  ", ""],
-      normas: ["NMX-J-169"],
-      reporte: "Reporte con resultados y recomendaciones.",
-      notas: "Precios en pesos.",
+      fecha: "2026-10-13",
+      contacto: {
+        contacto: "Ing. Pérez", direccion1: "Av. Siempre Viva 742",
+        direccion2: "Col. Centro", telefono: "81 1234 5678", correo: "p@ejemplo.mx",
+      },
+      ocultar: { direccion2: true },
+      objeto: "  El objeto de la propuesta…  ",
+      alcance: "El alcance principal…",
+      encabezadoTabla: "Subestación principal",
     });
-    expect(valor.contacto.nombre).toBe("Ing. Pérez");
-    expect(valor.direccion).toEqual(["Av. Siempre Viva 742", "Col. Centro"]);
-    // Los renglones vacíos se caen; los demás se recortan.
-    expect(valor.actividades).toEqual(["Pruebas eléctricas", "Limpieza"]);
+    expect(valor.fecha).toBe("2026-10-13");
+    expect(valor.contacto.contacto).toBe("Ing. Pérez");
+    expect(valor.ocultar).toEqual({ direccion2: true });
+    expect(valor.objeto).toBe("El objeto de la propuesta…");
+    expect(valor.encabezadoTabla).toBe("Subestación principal");
     expect(avisos).toEqual([]);
   });
 
-  it("la segunda línea de dirección puede faltar", () => {
-    const { valor } = normalizarDocumento({ direccion: ["Una sola línea"] });
-    expect(valor.direccion).toEqual(["Una sola línea", ""]);
+  /**
+   * `null` y `[]` no son lo mismo: una cotización que no tocó las normas no es
+   * igual que una donde alguien las quitó todas a propósito.
+   */
+  it("distingue las normas sin tocar de las vaciadas a propósito", () => {
+    expect(normalizarDocumento({}).valor.normas).toBeNull();
+    expect(normalizarDocumento({ normas: [] }).valor.normas).toEqual([]);
+    expect(normalizarDocumento({ normas: ["NOM-001-SEDE-2012"] }).valor.normas).toEqual(["NOM-001-SEDE-2012"]);
   });
 
-  it("una lista que no es lista se ignora con aviso", () => {
+  it("una lista de normas que no es lista vuelve a las sugeridas, con aviso", () => {
     const { valor, avisos } = normalizarDocumento({ normas: "NMX-J-169" });
-    expect(valor.normas).toEqual([]);
+    expect(valor.normas).toBeNull();
     expect(avisos[0]).toContain("no es una lista");
+  });
+
+  it("solo se ocultan los renglones que existen, y solo con true", () => {
+    const { valor } = normalizarDocumento({
+      ocultar: { direccion1: true, telefono: "sí", inventado: true },
+    });
+    expect(valor.ocultar).toEqual({ direccion1: true });
+  });
+
+  it("un modo de reporte desconocido vuelve a COMPLETO, con aviso", () => {
+    const { valor, avisos } = normalizarDocumento({ reporte: "LARGO" });
+    expect(valor.reporte).toBe("COMPLETO");
+    expect(avisos[0]).toContain("no es un modo de reporte");
+  });
+
+  it("acepta los cuatro modos buenos", () => {
+    for (const modo of ["COMPLETO", "CORTO", "NINGUNO", "OTRO"]) {
+      expect(normalizarDocumento({ reporte: modo }).valor.reporte).toBe(modo);
+    }
+  });
+
+  // La fija el generador del documento y no se mueve al regenerar; una fecha
+  // con otra forma no se intenta interpretar.
+  it("una fecha que no es aaaa-mm-dd se deja vacía y se avisa", () => {
+    const { valor, avisos } = normalizarDocumento({ fecha: "13/10/2026" });
+    expect(valor.fecha).toBe("");
+    expect(avisos[0]).toContain("aaaa-mm-dd");
   });
 
   it("un contacto que no es bloque se deja vacío con aviso", () => {
     const { valor, avisos } = normalizarDocumento({ contacto: "Ing. Pérez" });
-    expect(valor.contacto).toEqual({ nombre: "", telefono: "", email: "" });
+    expect(valor.contacto.contacto).toBe("");
     expect(avisos[0]).toContain("contacto");
   });
 
   it("sobrevive a la ida y vuelta por jsonb", () => {
     const { valor } = normalizarDocumento({
-      contacto: { nombre: "A", telefono: "1", email: "a@b.mx" },
-      actividades: ["Una"],
+      fecha: "2026-01-02",
+      contacto: { contacto: "A", telefono: "1", correo: "a@b.mx" },
+      ocultar: { direccion1: true },
+      normas: ["GEN-MANUAL"],
+      reporte: "OTRO",
+      reporteTexto: "Reporte a la medida.",
     });
     expect(normalizarDocumento(JSON.parse(JSON.stringify(valor))).valor).toEqual(valor);
+  });
+
+  // Dos cotizaciones no pueden terminar compartiendo el mismo objeto.
+  it("cada documento vacío es suyo", () => {
+    const a = normalizarDocumento(null).valor;
+    const b = normalizarDocumento(null).valor;
+    a.contacto.contacto = "Alguien";
+    a.ocultar.telefono = true;
+    expect(b.contacto.contacto).toBe("");
+    expect(b.ocultar).toEqual({});
   });
 });

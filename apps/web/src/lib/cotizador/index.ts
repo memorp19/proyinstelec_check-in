@@ -10,5 +10,8 @@ export * from "./tipos";
 export * from "./calculo";
 export * from "./letras";
 export * from "./catalogo";
+export * from "./bloques";
+export * from "./normas";
 export * from "./documento";
 export * from "./persistencia";
+export * from "./armado";

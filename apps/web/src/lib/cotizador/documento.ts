@@ -10,7 +10,12 @@
  * Cada bloque lleva su **versión de esquema**. Cuando cambie la forma, las
  * cotizaciones viejas se van a seguir leyendo: el número dice cómo leerlas, y
  * un bloque de esquema desconocido se reporta en vez de malinterpretarse.
+ *
+ * Los campos del documento son los de Apps Script (`COT_06:136-152`), que se
+ * armaron comparando las cotizaciones reales contra lo que generaba el sistema:
+ * son exactamente lo que alguien corregía a mano en el Doc cada vez.
  */
+import type { ModoReporte } from "./normas";
 
 /** Sube cuando cambie la forma del bloque, nunca cuando cambie un valor. */
 export const ESQUEMA_CONDICIONES = 1;
@@ -40,51 +45,86 @@ export const CONDICIONES_POR_OMISION: Condiciones = {
   vigenciaDias: 30,
 };
 
+/**
+ * Las formas de pago que se ofrecen de un clic (`COT_04:83-89`).
+ *
+ * No son un catálogo cerrado: el campo se escribe libre y estas solo ahorran
+ * teclear las cinco de siempre.
+ */
+export const PAGOS_FRECUENTES: string[] = [
+  "100% contra entrega de factura.",
+  "50% de anticipo y 50% contra entrega de factura.",
+  "30% de anticipo y 70% contra entrega de factura.",
+  "100% de anticipo.",
+  "Crédito a 30 días contra entrega de factura.",
+];
+
 /** Una vigencia de un año ya no es una oferta: es un error de captura. */
 const VIGENCIA_MAXIMA = 365;
 
 // ── Datos del documento ───────────────────────────────────────────────────────
 
+/**
+ * El contacto **de esta cotización**.
+ *
+ * Sale del catálogo de clientes, pero se corrige aquí sin tocar el catálogo:
+ * que una cotización vaya dirigida a otra persona no cambia quién es el
+ * contacto de la cuenta. Un campo vacío usa el del catálogo.
+ */
 export interface ContactoDocumento {
-  nombre: string;
+  contacto: string;
+  direccion1: string;
+  direccion2: string;
   telefono: string;
-  email: string;
+  correo: string;
 }
+
+/** Qué renglones del bloque del contacto no salen en la carta. */
+export type RenglonesOcultos = Partial<Record<keyof ContactoDocumento, boolean>>;
 
 export interface DatosDocumento {
   esquema: number;
-  /**
-   * El contacto **de esta cotización**.
-   *
-   * Sale del catálogo de clientes, pero se corrige aquí sin tocar el catálogo:
-   * que una cotización vaya dirigida a otra persona no cambia quién es el
-   * contacto de la cuenta.
-   */
+  /** `aaaa-mm-dd`. Vacía = se fija al generar el documento y ya no se mueve. */
+  fecha: string;
   contacto: ContactoDocumento;
-  /** Las dos líneas de dirección. La segunda, vacía, borra su renglón. */
-  direccion: [string, string];
-  /** Derivado del título y el cliente; corregible. `{{SITIO}}`. */
-  sitio: string;
-  /** Actividades generales, una por viñeta. */
-  actividades: string[];
-  /** Normas aplicables, una por viñeta. */
-  normas: string[];
-  /** Qué incluye el reporte que se entrega. */
-  reporte: string;
-  /** Notas al pie del documento. */
-  notas: string;
+  ocultar: RenglonesOcultos;
+  /** Primer párrafo de "Actividades Generales". */
+  objeto: string;
+  /** Segundo párrafo. Se puede quitar con `sinAlcance`. */
+  alcance: string;
+  sinAlcance: boolean;
+  /** `null` = las sugeridas por el título; `[]` = ninguna. Ver `normasElegidas`. */
+  normas: string[] | null;
+  /** Normas que no están en la lista, una por renglón. */
+  normasExtra: string;
+  reporte: ModoReporte;
+  /** El texto del reporte cuando `reporte` es `OTRO`. */
+  reporteTexto: string;
+  /** Renglón sin número arriba de las partidas, como en la 256. */
+  encabezadoTabla: string;
 }
 
 export const DOCUMENTO_POR_OMISION: DatosDocumento = {
   esquema: ESQUEMA_DOCUMENTO,
-  contacto: { nombre: "", telefono: "", email: "" },
-  direccion: ["", ""],
-  sitio: "",
-  actividades: [],
-  normas: [],
-  reporte: "",
-  notas: "",
+  fecha: "",
+  contacto: { contacto: "", direccion1: "", direccion2: "", telefono: "", correo: "" },
+  ocultar: {},
+  objeto: "",
+  alcance: "",
+  sinAlcance: false,
+  normas: null,
+  normasExtra: "",
+  reporte: "COMPLETO",
+  reporteTexto: "",
+  encabezadoTabla: "",
 };
+
+/** Una copia nueva, para no repartir referencias al mismo objeto. */
+export const documentoVacio = (): DatosDocumento => ({
+  ...DOCUMENTO_POR_OMISION,
+  contacto: { ...DOCUMENTO_POR_OMISION.contacto },
+  ocultar: {},
+});
 
 // ── Validación ────────────────────────────────────────────────────────────────
 
@@ -103,20 +143,6 @@ function texto(v: unknown, campo: string, avisos: string[], porOmision = ""): st
   if (typeof v === "string") return v.trim();
   avisos.push(`"${campo}" no es texto; se usa el valor por omisión.`);
   return porOmision;
-}
-
-function lista(v: unknown, campo: string, avisos: string[]): string[] {
-  if (v === undefined || v === null) return [];
-  if (!Array.isArray(v)) {
-    avisos.push(`"${campo}" no es una lista; se ignora.`);
-    return [];
-  }
-  const fuera: string[] = [];
-  for (const x of v) {
-    if (typeof x === "string" && x.trim()) fuera.push(x.trim());
-    else if (typeof x !== "string") avisos.push(`"${campo}" trae un renglón que no es texto; se ignora.`);
-  }
-  return fuera;
 }
 
 /**
@@ -179,42 +205,74 @@ export function normalizarCondiciones(crudo: unknown): Validado<Condiciones> {
   };
 }
 
+const MODOS_REPORTE: ModoReporte[] = ["COMPLETO", "CORTO", "NINGUNO", "OTRO"];
+
 /** Lo mismo para los datos del documento. */
 export function normalizarDocumento(crudo: unknown): Validado<DatosDocumento> {
   const avisos: string[] = [];
-  if (crudo === null || crudo === undefined) {
-    return { valor: { ...DOCUMENTO_POR_OMISION, direccion: ["", ""] }, avisos };
-  }
+  if (crudo === null || crudo === undefined) return { valor: documentoVacio(), avisos };
   if (!esObjeto(crudo)) {
     avisos.push("Los datos del documento no son un bloque; se usan los de omisión.");
-    return { valor: { ...DOCUMENTO_POR_OMISION, direccion: ["", ""] }, avisos };
+    return { valor: documentoVacio(), avisos };
   }
 
   const esquema = revisarEsquema(crudo.esquema, ESQUEMA_DOCUMENTO, avisos);
+
   const contactoCrudo = esObjeto(crudo.contacto) ? crudo.contacto : {};
   if (crudo.contacto !== undefined && !esObjeto(crudo.contacto)) {
     avisos.push('"contacto" no es un bloque; se deja vacío.');
   }
 
-  const dir = Array.isArray(crudo.direccion) ? crudo.direccion : [];
-  if (crudo.direccion !== undefined && !Array.isArray(crudo.direccion)) {
-    avisos.push('"direccion" no es una lista de dos renglones; se deja vacía.');
+  const ocultarCrudo = esObjeto(crudo.ocultar) ? crudo.ocultar : {};
+  const ocultar: RenglonesOcultos = {};
+  for (const campo of ["contacto", "direccion1", "direccion2", "telefono", "correo"] as const) {
+    if (ocultarCrudo[campo] === true) ocultar[campo] = true;
+  }
+
+  // `null` y `[]` NO son lo mismo: sin tocar (se sugieren) y vacía a propósito.
+  let normas: string[] | null = null;
+  if (Array.isArray(crudo.normas)) {
+    normas = crudo.normas.filter((n): n is string => typeof n === "string");
+    if (normas.length !== crudo.normas.length) {
+      avisos.push('"normas" traía renglones que no son texto; se ignoran.');
+    }
+  } else if (crudo.normas !== undefined && crudo.normas !== null) {
+    avisos.push('"normas" no es una lista; se usan las sugeridas.');
+  }
+
+  const reporteCrudo = texto(crudo.reporte, "reporte", avisos, "COMPLETO");
+  const reporte = MODOS_REPORTE.includes(reporteCrudo as ModoReporte)
+    ? (reporteCrudo as ModoReporte)
+    : "COMPLETO";
+  if (reporteCrudo && reporte !== reporteCrudo) {
+    avisos.push(`"${reporteCrudo}" no es un modo de reporte; se usa COMPLETO.`);
+  }
+
+  const fecha = texto(crudo.fecha, "fecha", avisos);
+  if (fecha && !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+    avisos.push(`La fecha "${fecha}" no tiene la forma aaaa-mm-dd; se deja vacía.`);
   }
 
   return {
     valor: {
       esquema,
+      fecha: /^\d{4}-\d{2}-\d{2}$/.test(fecha) ? fecha : "",
       contacto: {
-        nombre: texto(contactoCrudo.nombre, "contacto.nombre", avisos),
+        contacto: texto(contactoCrudo.contacto, "contacto.contacto", avisos),
+        direccion1: texto(contactoCrudo.direccion1, "contacto.direccion1", avisos),
+        direccion2: texto(contactoCrudo.direccion2, "contacto.direccion2", avisos),
         telefono: texto(contactoCrudo.telefono, "contacto.telefono", avisos),
-        email: texto(contactoCrudo.email, "contacto.email", avisos),
+        correo: texto(contactoCrudo.correo, "contacto.correo", avisos),
       },
-      direccion: [texto(dir[0], "direccion", avisos), texto(dir[1], "direccion", avisos)],
-      sitio: texto(crudo.sitio, "sitio", avisos),
-      actividades: lista(crudo.actividades, "actividades", avisos),
-      normas: lista(crudo.normas, "normas", avisos),
-      reporte: texto(crudo.reporte, "reporte", avisos),
-      notas: texto(crudo.notas, "notas", avisos),
+      ocultar,
+      objeto: texto(crudo.objeto, "objeto", avisos),
+      alcance: texto(crudo.alcance, "alcance", avisos),
+      sinAlcance: crudo.sinAlcance === true,
+      normas,
+      normasExtra: texto(crudo.normasExtra, "normasExtra", avisos),
+      reporte,
+      reporteTexto: texto(crudo.reporteTexto, "reporteTexto", avisos),
+      encabezadoTabla: texto(crudo.encabezadoTabla, "encabezadoTabla", avisos),
     },
     avisos,
   };
