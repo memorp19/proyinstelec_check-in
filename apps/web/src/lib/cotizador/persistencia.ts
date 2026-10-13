@@ -61,6 +61,50 @@ export function cabeEnEscala(valor: string | number, escala = ESCALA_MONTO): boo
   return decimalesDe(valor) <= escala;
 }
 
+/** Lo que se le dice a alguien cuando un monto no cabe en su columna. */
+export class MontoFueraDeEscala extends Error {
+  constructor(
+    readonly campo: string,
+    readonly valor: string | number,
+  ) {
+    super(
+      `${campo}: ${valor} tiene ${decimalesDe(valor)} decimales y la columna guarda ` +
+        `${ESCALA_MONTO}. Guardarlo así lo redondearía sin avisar.`,
+    );
+    this.name = "MontoFueraDeEscala";
+  }
+}
+
+/**
+ * **La única manera de convertir un monto en lo que se escribe.**
+ *
+ * Todo lo que acabe en una columna de dinero del cotizador pasa por aquí: el
+ * importador del catálogo, la copia a una versión nueva y el guardado de la
+ * pantalla. Devuelve el texto con la escala exacta de la columna, y si el
+ * valor no cabe **lanza** en vez de recortar.
+ *
+ * Que sea una sola función es el punto. Postgres redondea en silencio y un
+ * `CHECK` no puede ayudar —no ve el valor antes de que la columna lo recorte—,
+ * así que la única defensa está del lado de quien escribe; repartida en tres
+ * lugares, tarde o temprano uno se olvida. Así se perdió el 2,671.885 de la
+ * 068, que movió el total de una cotización que el cliente ya tenía.
+ */
+export function montoParaGuardar(valor: number | string, campo = "El monto"): string {
+  const n = typeof valor === "number" ? valor : Number(valor);
+  if (!Number.isFinite(n)) throw new MontoFueraDeEscala(campo, valor);
+  if (!cabeEnEscala(valor)) throw new MontoFueraDeEscala(campo, valor);
+  return n.toFixed(ESCALA_MONTO);
+}
+
+/** Lo mismo, para las columnas que admiten vacío. `null` sigue siendo `null`. */
+export function montoOpcionalParaGuardar(
+  valor: number | string | null | undefined,
+  campo = "El monto",
+): string | null {
+  if (valor === null || valor === undefined || valor === "") return null;
+  return montoParaGuardar(valor, campo);
+}
+
 export interface FilaArmado {
   numero: number;
   anio: number;
@@ -261,6 +305,16 @@ export function entradaDesdeFilas(filas: FilasVersion): EntradaCotizacion {
 
 // ── La versión siguiente ──────────────────────────────────────────────────────
 
+/**
+ * Lo que se copia a la versión siguiente. No lleva el encabezado a propósito:
+ * ese se copia tal cual y no necesita religar nada.
+ */
+export interface FilasCopiables {
+  partidas: FilaPartida[];
+  conceptos: FilaConcepto[];
+  gastos: FilaGasto[];
+}
+
 export interface CopiaVersion {
   partidas: FilaPartida[];
   conceptos: FilaConcepto[];
@@ -281,25 +335,50 @@ export interface CopiaVersion {
  * de la v0.
  */
 export function copiarAVersion(
-  filas: FilasVersion,
+  filas: FilasCopiables,
   catalogo: ServicioCatalogo[],
   nuevoId: () => string,
 ): CopiaVersion {
   const idNuevo = new Map(filas.partidas.map((p) => [p.id, nuevoId()]));
+  const huerfanos: string[] = [];
 
   const partidas = filas.partidas.map((p) => ({ ...p, id: idNuevo.get(p.id)! }));
-  const conceptos = filas.conceptos.map((c) => ({
-    ...c,
-    id: nuevoId(),
-    partida_id: idNuevo.get(c.partida_id) ?? c.partida_id,
-  }));
-  const gastos = filas.gastos.map((g) => ({
-    ...g,
-    id: nuevoId(),
-    destino_partida_id: g.destino_partida_id
-      ? idNuevo.get(g.destino_partida_id) ?? g.destino_partida_id
-      : null,
-  }));
+
+  /**
+   * Un concepto cuya partida no está entre las filas **se descarta**.
+   *
+   * Conservar su `partida_id` sería lo peor que se puede hacer: ese id existe
+   * en la base —es la partida de la versión anterior—, así que la llave
+   * foránea lo aceptaría y la línea nueva quedaría cobrándose contra otra
+   * versión, en silencio. No hay respaldo sensato para un concepto: o se
+   * descarta diciéndolo, o se corrompe la copia.
+   */
+  const conceptos = filas.conceptos.flatMap((c) => {
+    const destino = idNuevo.get(c.partida_id);
+    if (!destino) {
+      huerfanos.push(
+        `El concepto ${c.codigo ?? c.id} colgaba de una partida que no está en esta versión: ` +
+          "no se copió.",
+      );
+      return [];
+    }
+    return [{ ...c, id: nuevoId(), partida_id: destino }];
+  });
+
+  /**
+   * Un gasto sí tiene respaldo: sin destino vuelve a ser general. Es degradar
+   * —se reparte entre todas en vez de ir entero a una— en vez de corromper.
+   */
+  const gastos = filas.gastos.map((g) => {
+    const destino = g.destino_partida_id ? idNuevo.get(g.destino_partida_id) ?? null : null;
+    if (g.destino_partida_id && !destino) {
+      huerfanos.push(
+        `El gasto ${g.codigo ?? g.id} iba dirigido a una partida que no está en esta versión: ` +
+          "se copió como general.",
+      );
+    }
+    return { ...g, id: nuevoId(), destino_partida_id: destino };
+  });
 
   // Se comparan las líneas COPIADAS: así el aviso trae el id nuevo y quien lo
   // lea puede ir directo a la línea de la versión que está armando.
@@ -316,7 +395,8 @@ export function copiarAVersion(
         "Se copió el costo anterior: actualizarlo es una decisión tuya.",
   );
 
-  return { partidas, conceptos, gastos, avisos };
+  // Los huérfanos van primero: son un problema de la copia, no del catálogo.
+  return { partidas, conceptos, gastos, avisos: [...huerfanos, ...avisos] };
 }
 
 // ── El congelado ──────────────────────────────────────────────────────────────

@@ -6,6 +6,9 @@ import {
   dec,
   decimalesDe,
   cabeEnEscala,
+  montoOpcionalParaGuardar,
+  montoParaGuardar,
+  MontoFueraDeEscala,
   entradaDesdeFilas,
   ESCALA_MONTO,
   importeEnLetra,
@@ -436,5 +439,110 @@ describe("ida y vuelta sin perder decimales", () => {
     );
     expect(r.total).toBe(1213491.2);
     expect(r.total).not.toBe(PDF_068.total);
+  });
+});
+
+// ── La única puerta de escritura ─────────────────────────────────────────────
+
+/**
+ * Postgres redondea en silencio y un `CHECK` no puede ayudar —no ve el valor
+ * antes de que la columna lo recorte—, así que la defensa está del lado de
+ * quien escribe. Repartida en tres lugares, tarde o temprano uno se olvida:
+ * por eso es una sola función y por eso **lanza** en vez de recortar.
+ */
+describe("montoParaGuardar", () => {
+  it("escribe con la escala exacta de la columna", () => {
+    expect(montoParaGuardar(2671.885)).toBe("2671.885000");
+    expect(montoParaGuardar(2000)).toBe("2000.000000");
+    expect(montoParaGuardar("1.5")).toBe("1.500000");
+  });
+
+  it("un valor que no cabe NO se recorta: lanza", () => {
+    expect(() => montoParaGuardar(1.1234567, "El costo")).toThrow(MontoFueraDeEscala);
+    expect(() => montoParaGuardar(1.1234567, "El costo")).toThrow(/El costo/);
+    expect(() => montoParaGuardar(1.1234567)).toThrow(/redondearía sin avisar/);
+  });
+
+  it("el límite es exacto", () => {
+    expect(montoParaGuardar(1.123456)).toBe("1.123456");
+    expect(() => montoParaGuardar(1.1234561)).toThrow(MontoFueraDeEscala);
+  });
+
+  it("lo que no es número tampoco pasa", () => {
+    expect(() => montoParaGuardar("por definir")).toThrow(MontoFueraDeEscala);
+    expect(() => montoParaGuardar(Infinity)).toThrow(MontoFueraDeEscala);
+  });
+
+  // Un costo sin capturar no es un costo de cero.
+  it("la versión opcional respeta el vacío", () => {
+    expect(montoOpcionalParaGuardar(null)).toBeNull();
+    expect(montoOpcionalParaGuardar(undefined)).toBeNull();
+    expect(montoOpcionalParaGuardar("")).toBeNull();
+    expect(montoOpcionalParaGuardar(0)).toBe("0.000000");
+  });
+});
+
+// ── La copia a la versión siguiente, sin huérfanos ───────────────────────────
+
+describe("copiarAVersion · líneas huérfanas", () => {
+  const catalogo: ServicioCatalogo[] = [
+    { codigo: "SP001", descripcion: "a", unidad: "servicio", costo: 2000, moneda: "MXN", tipo: "SERVICIO", activo: true },
+  ];
+
+  /**
+   * El id de la partida vieja existe en la base, así que la llave foránea lo
+   * aceptaría y la línea nueva quedaría cobrándose contra otra versión, en
+   * silencio. Para un concepto no hay respaldo sensato.
+   */
+  it("un concepto cuya partida no está se descarta, y lo dice", () => {
+    const r = copiarAVersion(
+      {
+        partidas: [partida({ id: "vieja-1" })],
+        conceptos: [
+          concepto({ id: "c-1", partida_id: "vieja-1" }),
+          concepto({ id: "c-2", partida_id: "DE-OTRA-VERSION", codigo: "SP002" }),
+        ],
+        gastos: [],
+      },
+      catalogo,
+      (() => {
+        let n = 0;
+        return () => `n${++n}`;
+      })(),
+    );
+
+    expect(r.conceptos).toHaveLength(1);
+    expect(r.conceptos[0].partida_id).toBe("n1");
+    expect(JSON.stringify(r.conceptos)).not.toContain("DE-OTRA-VERSION");
+    expect(r.avisos[0]).toContain("SP002");
+    expect(r.avisos[0]).toContain("no se copió");
+  });
+
+  // El gasto sí tiene respaldo: sin destino vuelve a ser general. Degradar en
+  // vez de corromper.
+  it("un gasto dirigido a una partida que no está queda general, con aviso", () => {
+    const r = copiarAVersion(
+      {
+        partidas: [partida({ id: "vieja-1" })],
+        conceptos: [],
+        gastos: [gasto({ id: "g-1", destino_partida_id: "DE-OTRA-VERSION" })],
+      },
+      catalogo,
+      () => "nuevo",
+    );
+    expect(r.gastos[0].destino_partida_id).toBeNull();
+    expect(r.avisos[0]).toContain("se copió como general");
+  });
+
+  it("sin huérfanos no hay avisos de más", () => {
+    const r = copiarAVersion(
+      { partidas: [partida({ id: "v1" })], conceptos: [concepto({ partida_id: "v1" })], gastos: [] },
+      catalogo,
+      (() => {
+        let n = 0;
+        return () => `x${++n}`;
+      })(),
+    );
+    expect(r.avisos).toEqual([]);
   });
 });

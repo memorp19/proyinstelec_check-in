@@ -587,3 +587,49 @@ describe("avisos de importes en negativo", () => {
     expect(r.avisos.some((a) => a.includes("El subtotal cierra"))).toBe(true);
   });
 });
+
+// ── El IVA de la versión ─────────────────────────────────────────────────────
+
+describe("IVA fuera de rango", () => {
+  const con = (ivaPct?: number) =>
+    calcularCotizacion({
+      moneda: "MXN",
+      ivaPct,
+      partidas: [{ id: "P", orden: 1, titulo: "P", cantidad: 1, conceptos: [{ codigo: "x", cantidad: 1, costo: 1000 }] }],
+    });
+
+  it("sin capturar, el vigente y sin avisos", () => {
+    const r = con();
+    expect([r.ivaPct, r.iva, r.total]).toEqual([16, 160, 1160]);
+    expect(r.avisos).toEqual([]);
+  });
+
+  // La frontera: 8 % es la tasa que tuvo la franja fronteriza, no un error.
+  it("una tasa válida distinta de la vigente no avisa", () => {
+    const r = con(8);
+    expect([r.iva, r.total]).toEqual([80, 1080]);
+    expect(r.avisos).toEqual([]);
+  });
+
+  /**
+   * Igual que la asesoría: fuera de 0–100 no es una tasa rara, es un error de
+   * captura. Un IVA negativo deja el total por debajo del subtotal, que es de
+   * las cosas que nadie mira dos veces porque "el sistema lo calculó".
+   */
+  it("una tasa imposible se calcula pero se avisa", () => {
+    for (const malo of [-16, 200]) {
+      const r = con(malo);
+      expect([malo, r.avisos.some((a) => a.includes("IVA"))]).toEqual([malo, true]);
+    }
+  });
+
+  it("0 % es válido y no avisa", () => {
+    const r = con(0);
+    expect([r.iva, r.total]).toEqual([0, 1000]);
+    expect(r.avisos).toEqual([]);
+  });
+
+  it("100 % también, por raro que suene", () => {
+    expect(con(100).avisos).toEqual([]);
+  });
+});
