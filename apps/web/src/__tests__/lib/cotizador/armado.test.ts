@@ -5,6 +5,7 @@ import {
   edicionPorEstatus,
   entradaDeArmado,
   filasDeArmado,
+  MontoFueraDeEscala,
   puedeArmar,
   type Armado,
   type FilasArmado,
@@ -196,6 +197,24 @@ describe("filasDeArmado", () => {
     const filas = filasDeArmado(armado);
     expect(filas.conceptos[0].costo).toBe("2671.885000");
     expect(Number(filas.conceptos[0].costo)).toBe(2671.885);
+  });
+
+  /**
+   * Pasa por la misma puerta que el importador: `montoParaGuardar`. Antes esto
+   * hacía `toFixed(6)` por su cuenta y redondeaba en silencio — la regla en dos
+   * lugares es cómo se vuelve a perder un decimal que sí importaba.
+   */
+  it("un monto que no cabe en la columna NO se recorta: lanza", () => {
+    const imposible: Armado = {
+      ...armado,
+      partidas: [
+        {
+          ...armado.partidas[0],
+          conceptos: [{ ...armado.partidas[0].conceptos[0], costo: 1.12345678 }],
+        },
+      ],
+    };
+    expect(() => filasDeArmado(imposible)).toThrow(MontoFueraDeEscala);
   });
 
   /**

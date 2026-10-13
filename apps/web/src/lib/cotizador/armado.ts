@@ -20,7 +20,8 @@ import {
 } from "./documento";
 import {
   dec,
-  ESCALA_MONTO,
+  montoOpcionalParaGuardar,
+  montoParaGuardar,
   type FilaArmado,
   type FilaConcepto,
   type FilaGasto,
@@ -334,16 +335,17 @@ export interface FilasParaEscribir {
 }
 
 /**
- * Los números se escriben como **texto**, con la escala de su columna.
+ * Los números se escriben como **texto**, con la escala de su columna, y por
+ * la misma puerta que todo lo demás: `montoParaGuardar`.
  *
- * Mandarlos como `number` deja que el driver y Postgres decidan la
- * representación; en texto se escribe exactamente lo que se quiso guardar, que
- * es lo que hace falta cuando un costo lleva tres decimales y la cuenta
- * depende de ellos.
+ * Antes esto hacía `toFixed(ESCALA_MONTO)` por su cuenta, que **redondea en
+ * silencio** — justo lo que el importador se niega a hacer. Tener la regla en
+ * dos lugares es cómo se vuelve a perder un 2,671.885: aquí se lanza igual que
+ * allá, y quien guarde un monto imposible se entera al guardarlo.
  */
-const monto = (n: number | null | undefined): string | null =>
-  n === null || n === undefined || !Number.isFinite(n) ? null : n.toFixed(ESCALA_MONTO);
-const montoReq = (n: number): string => (Number.isFinite(n) ? n : 0).toFixed(ESCALA_MONTO);
+const monto = montoOpcionalParaGuardar;
+const montoReq = (n: number, campo = "El monto"): string =>
+  montoParaGuardar(Number.isFinite(n) ? n : 0, campo);
 const entero = (n: number | null | undefined): number | null =>
   n === null || n === undefined || !Number.isFinite(n) ? null : Math.trunc(n);
 

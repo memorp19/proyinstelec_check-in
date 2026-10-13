@@ -207,6 +207,15 @@ describe("PUT armado", () => {
     expect((await r.json()).conflicto).toBe(true);
   });
 
+  // Un dato que no cabe en la columna no es un fallo del servidor.
+  it("un monto con demasiados decimales, 422 y dice cuál", async () => {
+    const { MontoFueraDeEscala } = await import("@/src/lib/cotizador");
+    vi.mocked(guardarArmado).mockRejectedValue(new MontoFueraDeEscala("El costo de SP001", 1.1234567));
+    const r = await PUT(pedir({ armado, actualizadoEn: completo.actualizadoEn }), { params });
+    expect(r.status).toBe(422);
+    expect((await r.json()).error).toContain("SP001");
+  });
+
   it("sin armado en el cuerpo, 400", async () => {
     expect((await PUT(pedir({}), { params })).status).toBe(400);
     expect(guardarArmado).not.toHaveBeenCalled();

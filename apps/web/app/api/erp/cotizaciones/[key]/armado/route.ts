@@ -4,7 +4,7 @@ import { exigirPermiso } from "@/src/lib/permisos";
 import { parseCotKey } from "@/src/lib/cotizaciones";
 import { accesoAlArmado } from "@/src/lib/cotizador-permisos";
 import { ConflictoDeEdicion, catalogoVigente, getArmado, guardarArmado } from "@/src/lib/cotizador-db";
-import type { Armado } from "@/src/lib/cotizador";
+import { MontoFueraDeEscala, type Armado } from "@/src/lib/cotizador";
 
 /** `?version=` es opcional: sin él, la v0. */
 function leerVersion(req: NextRequest): number | null {
@@ -79,6 +79,11 @@ export async function PUT(req: NextRequest, { params }: { params: { key: string 
   } catch (err) {
     if (err instanceof ConflictoDeEdicion) {
       return NextResponse.json({ error: err.message, conflicto: true }, { status: 409 });
+    }
+    // Un monto con más decimales de los que la columna guarda no es un fallo
+    // del servidor: es un dato que no cabe, y hay que decir cuál.
+    if (err instanceof MontoFueraDeEscala) {
+      return NextResponse.json({ error: err.message }, { status: 422 });
     }
     console.error("[erp/armado PUT]", err);
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
