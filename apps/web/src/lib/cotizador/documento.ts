@@ -284,20 +284,28 @@ export function normalizarDocumento(crudo: unknown): Validado<DatosDocumento> {
  * La dirección de una empresa, partida en los dos renglones de la carta.
  *
  * El catálogo guarda **una** dirección y el documento tiene **dos** renglones.
- * Si viene con salto de línea, ahí se parte, que es donde quien la capturó
- * quiso partirla. Si viene de corrido, se deja entera en el primero: inventar
- * un corte por la coma más cercana produce renglones raros —"Av. Siempre Viva
- * 742, Col." — y quien edita lo arregla en dos segundos.
+ * Se corta por la **primera coma**, igual que el ERP viejo (`partirDireccion_`,
+ * `COT_05:177`), porque es donde las direcciones reales separan la calle del
+ * resto:
+ *
+ *     Prol. Paseo de la Reforma No. 2977 Col. Cuajimalpa, C.P. 05000, Ciudad de México
+ *     → "Prol. Paseo de la Reforma No. 2977 Col. Cuajimalpa"
+ *       "C.P. 05000, Ciudad de México"
+ *
+ * Un salto de línea manda sobre la coma: si quien capturó la dirección la
+ * partió a mano, ahí quiso partirla.
  */
 export function lineasDeDireccion(direccion: string | null | undefined): [string, string] {
   const texto = String(direccion ?? "").trim();
   if (!texto) return ["", ""];
-  const corte = texto.indexOf("\n");
-  if (corte < 0) return [texto.replace(/\s+/g, " "), ""];
-  return [
-    texto.slice(0, corte).trim().replace(/\s+/g, " "),
-    texto.slice(corte + 1).trim().replace(/\s+/g, " "),
-  ];
+
+  const limpio = (t: string) => t.trim().replace(/\s+/g, " ");
+  const salto = texto.indexOf("\n");
+  if (salto >= 0) return [limpio(texto.slice(0, salto)), limpio(texto.slice(salto + 1))];
+
+  const coma = texto.indexOf(",");
+  if (coma < 0) return [limpio(texto), ""];
+  return [limpio(texto.slice(0, coma)), limpio(texto.slice(coma + 1))];
 }
 
 /** Lo que se propone, venga del catálogo de clientes o del título. */

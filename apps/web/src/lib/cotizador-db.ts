@@ -25,6 +25,7 @@ import {
   calcularCotizacion,
   completarDocumento,
   lineasDeDireccion,
+  telefonoParaDocumento,
   textosSugeridos,
   congelar,
   entradaDeArmado,
@@ -53,10 +54,16 @@ export interface ArmadoCompleto {
   avisos: string[];
   /**
    * Qué campos del documento llegaron llenos del machote y no de lo guardado.
-   * La pantalla lo dice —"Encontrado en el catálogo"— para que nadie confunda
-   * una propuesta con un dato que alguien revisó.
+   * La pantalla lo dice para que nadie confunda una propuesta con un dato que
+   * alguien revisó.
    */
   llenadoAutomatico: Array<"contacto" | "textos">;
+  /**
+   * Si el contacto salió del catálogo de clientes. Es distinto de que se haya
+   * llenado algo: sin contacto todavía se puede tomar la dirección de la
+   * empresa, y decir "encontrado en el catálogo" entonces sería mentir.
+   */
+  contactoDelCatalogo: boolean;
   /** El congelado, si esta versión ya pasó a revisión. */
   congelado: { total: string; letra: string; congeladoAt: string } | null;
   /**
@@ -107,12 +114,16 @@ async function machoteDelDocumento(cotizacion: Cotizacion) {
   const textos = textosSugeridos(cotizacion.titulo, cotizacion.cliente);
 
   return {
+    /** `true` solo si coincidió un CONTACTO, no si solo se tomó la dirección. */
+    encontrado: contacto !== null,
     contacto: contacto
       ? {
           contacto: contacto.nombre,
           direccion1,
           direccion2,
-          telefono: contacto.telefono ?? "",
+              // Con el formato del documento, como lo hace el ERP viejo:
+          // 7751104791 → + (52) 775 110 4791.
+          telefono: telefonoParaDocumento(contacto.telefono),
           correo: contacto.correo ?? "",
         }
       : // Sin contacto en el catálogo, la dirección de la empresa todavía sirve.
@@ -171,7 +182,8 @@ export async function getArmado(
 
   if (!encabezado) {
     const armado = await armadoNuevo(numero, anio, version);
-    const { valor, llenados } = completarDocumento(armado.documento, await machoteDelDocumento(cotizacion));
+    const machote = await machoteDelDocumento(cotizacion);
+    const { valor, llenados } = completarDocumento(armado.documento, machote);
     armado.documento = valor;
 
     const resultado = calcularCotizacion(
@@ -184,6 +196,7 @@ export async function getArmado(
       desfases: [],
       avisos: [],
       llenadoAutomatico: llenados,
+      contactoDelCatalogo: machote.encontrado,
       congelado: null,
       actualizadoEn: null,
     };
@@ -265,7 +278,8 @@ export async function getArmado(
   });
 
   // El machote solo entra donde quedó vacío; lo escrito no se pisa.
-  const { valor, llenados } = completarDocumento(armado.documento, await machoteDelDocumento(cotizacion));
+  const machote = await machoteDelDocumento(cotizacion);
+  const { valor, llenados } = completarDocumento(armado.documento, machote);
   armado.documento = valor;
 
   const resultado = calcularCotizacion(entradaDeArmado(armado, config.cotizador.BASE_NODOS_ESTUDIO));
@@ -290,6 +304,7 @@ export async function getArmado(
     desfases: detectarDesfases(lineas, catalogo),
     avisos,
     llenadoAutomatico: llenados,
+    contactoDelCatalogo: machote.encontrado,
     congelado: congeladoRow
       ? {
           total: congeladoRow.total,

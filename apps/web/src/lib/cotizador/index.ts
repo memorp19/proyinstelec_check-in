@@ -13,5 +13,6 @@ export * from "./catalogo";
 export * from "./bloques";
 export * from "./normas";
 export * from "./documento";
+export * from "./presentacion";
 export * from "./persistencia";
 export * from "./armado";

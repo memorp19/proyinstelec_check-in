@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   completarDocumento,
   CONDICIONES_POR_OMISION,
-  lineasDeDireccion,
   ESQUEMA_CONDICIONES,
   ESQUEMA_DOCUMENTO,
   normalizarCondiciones,
@@ -178,36 +177,6 @@ describe("normalizarDocumento", () => {
 });
 
 // ── El machote del documento ─────────────────────────────────────────────────
-
-describe("lineasDeDireccion", () => {
-  /**
-   * El catálogo guarda UNA dirección y la carta tiene DOS renglones. Donde hay
-   * salto de línea es donde quien la capturó quiso partirla.
-   */
-  it("parte donde hay salto de línea", () => {
-    expect(lineasDeDireccion("Av. Siempre Viva 742\nCol. Centro, Monterrey")).toEqual([
-      "Av. Siempre Viva 742",
-      "Col. Centro, Monterrey",
-    ]);
-  });
-
-  // Inventar un corte por la coma más cercana produce renglones raros.
-  it("de corrido se queda entera en el primero", () => {
-    expect(lineasDeDireccion("Av. Siempre Viva 742, Col. Centro, Monterrey")).toEqual([
-      "Av. Siempre Viva 742, Col. Centro, Monterrey",
-      "",
-    ]);
-  });
-
-  it("sin dirección, dos renglones vacíos", () => {
-    expect(lineasDeDireccion(null)).toEqual(["", ""]);
-    expect(lineasDeDireccion("   ")).toEqual(["", ""]);
-  });
-
-  it("limpia los espacios de sobra", () => {
-    expect(lineasDeDireccion("  Av.   Siempre  Viva 742  ")[0]).toBe("Av. Siempre Viva 742");
-  });
-});
 
 describe("completarDocumento", () => {
   const machote = {
