@@ -261,15 +261,42 @@ export function Partidas({
                 <p className="font-body text-xs text-white/30">Sin conceptos: la partida costaría cero.</p>
               )}
 
-              {p.conceptos.map((c) => {
-                const calc = calculada?.conceptos.find((x) => x.codigo === c.codigo && x.descripcion === (c.descripcion || undefined));
+              {p.conceptos.map((c, iConcepto) => {
+                /**
+                 * Se emparejan por POSICIÓN, no por código.
+                 *
+                 * `entradaDeArmado` conserva el orden, así que el concepto i de
+                 * la pantalla es el i del resultado. Buscar por código fallaba
+                 * con dos renglones del mismo servicio en una partida —que es
+                 * normal: dos transformadores iguales— y los dos enseñaban el
+                 * importe del primero.
+                 */
+                const calc = calculada?.conceptos[iConcepto];
+                const esEstudio = c.esfuerzo !== null;
+
                 return (
                   <div key={c.id} className="grid grid-cols-12 gap-2 items-start">
+                    {/* Nombre, y para un estudio el botón que abre sus parámetros */}
                     <div className="col-span-12 sm:col-span-4">
                       {c.codigo ? (
                         <div className="px-3 py-2">
-                          <p className="font-mono text-xs text-blue-mid">{c.codigo}</p>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="font-mono text-xs text-blue-mid">{c.codigo}</p>
+                            {esEstudio && !soloLectura && (
+                              <button
+                                className={btnGhost}
+                                onClick={() => setEditandoEsfuerzo({ partidaId: p.id, conceptoId: c.id })}
+                              >
+                                Editar
+                              </button>
+                            )}
+                          </div>
                           <p className="font-body text-xs text-white/70">{c.descripcion}</p>
+                          {esEstudio && calc?.horas !== undefined && (
+                            <p className="font-mono text-[10px] text-white/40 mt-0.5">
+                              {pesos(calc.horas)} h × ${pesos(c.esfuerzo!.tarifaHora)}/h
+                            </p>
+                          )}
                         </div>
                       ) : (
                         <input
@@ -281,6 +308,7 @@ export function Partidas({
                         />
                       )}
                     </div>
+
                     <input
                       value={c.cantidad}
                       disabled={soloLectura}
@@ -289,15 +317,38 @@ export function Partidas({
                       inputMode="decimal"
                       aria-label="Cantidad"
                     />
-                    <input
-                      value={c.costo ?? ""}
-                      disabled={soloLectura}
-                      onChange={(e) => cambiarConcepto(p.id, c.id, { costo: aNumero(e.target.value) })}
-                      placeholder="costo"
-                      className={`${inputNum} col-span-4 sm:col-span-2`}
-                      inputMode="decimal"
-                      aria-label="Costo"
-                    />
+
+                    {/**
+                     * El costo de un estudio NO se teclea: sale de sus horas por
+                     * su tarifa. Dejarlo editable con el costo del catálogo
+                     * enseñaba un número que el cálculo no usa —9,600 del
+                     * catálogo contra los 40,000 de 80 h × $500— y el que
+                     * mandaba era el de abajo. El del catálogo queda como
+                     * referencia, en chico, que es lo que es.
+                     */}
+                    {esEstudio ? (
+                      <div className="col-span-4 sm:col-span-2 px-3 py-2 text-right">
+                        <p className="font-mono text-sm text-white">
+                          {calc ? pesos(calc.costoUnitario) : "—"}
+                        </p>
+                        {c.costoCatalogo !== null && (
+                          <p className="font-mono text-[9px] text-white/30">
+                            catálogo {pesos(c.costoCatalogo)}
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <input
+                        value={c.costo ?? ""}
+                        disabled={soloLectura}
+                        onChange={(e) => cambiarConcepto(p.id, c.id, { costo: aNumero(e.target.value) })}
+                        placeholder="costo"
+                        className={`${inputNum} col-span-4 sm:col-span-2`}
+                        inputMode="decimal"
+                        aria-label="Costo"
+                      />
+                    )}
+
                     <input
                       value={c.utilidadPct || ""}
                       disabled={soloLectura}
@@ -307,6 +358,7 @@ export function Partidas({
                       inputMode="decimal"
                       aria-label="Utilidad %"
                     />
+
                     <select
                       value={c.monedaCosto ?? ""}
                       disabled={soloLectura}
@@ -322,21 +374,17 @@ export function Partidas({
                       <option value="MXN">MXN</option>
                       <option value="USD">USD</option>
                     </select>
-                    <div className="col-span-10 sm:col-span-2 flex items-center gap-2 justify-end">
-                      <span className="font-mono text-xs text-white/60">
+
+                    {/* El importe y el quitar, cada uno con su espacio: antes el
+                        botón del esfuerzo cabía aquí y encimaba la cifra. */}
+                    <div className="col-span-10 sm:col-span-2 flex items-center gap-3 justify-end px-1">
+                      <span className="font-mono text-xs text-white/70 tabular-nums">
                         {calc ? pesos(calc.importe) : "—"}
                       </span>
-                      {c.esfuerzo && !soloLectura && (
-                        <button
-                          className={btnGhost}
-                          onClick={() => setEditandoEsfuerzo({ partidaId: p.id, conceptoId: c.id })}
-                        >
-                          Esfuerzo
-                        </button>
-                      )}
                       {!soloLectura && (
                         <button
                           className={btnPeligro}
+                          aria-label="Quitar el concepto"
                           onClick={() =>
                             cambiarPartida(p.id, { conceptos: p.conceptos.filter((x) => x.id !== c.id) })
                           }
