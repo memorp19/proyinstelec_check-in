@@ -17,7 +17,7 @@ export default async function ArmarPage({
   searchParams,
 }: {
   params: { key: string };
-  searchParams: { version?: string };
+  searchParams: { version?: string; vistaPrevia?: string };
 }) {
   const session = await auth();
   if (!session || !tienePermiso(session.user, "modulo.cotizaciones")) {
@@ -30,6 +30,7 @@ export default async function ArmarPage({
     <ArmadoClient
       cotKey={params.key}
       version={Number.isInteger(version) && version >= 0 ? version : 0}
+      abrirVistaPrevia={searchParams.vistaPrevia === "1"}
     />
   );
 }

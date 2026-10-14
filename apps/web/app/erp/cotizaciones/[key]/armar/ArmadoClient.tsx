@@ -17,6 +17,7 @@ import { Condiciones } from "./secciones/Condiciones";
 import { Documento } from "./secciones/Documento";
 import { Totales } from "./secciones/Totales";
 import { ActualizarPrecios } from "./secciones/ActualizarPrecios";
+import { VistaPrevia } from "./secciones/VistaPrevia";
 import { btnGhost, btnPrimary, etiqueta, tarjeta } from "./ui";
 
 // ── Lo que manda la API ───────────────────────────────────────────────────────
@@ -55,7 +56,16 @@ const ESPERA_AUTOGUARDADO_MS = 2500;
 
 const hora = () => new Date().toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
 
-export function ArmadoClient({ cotKey, version }: { cotKey: string; version: number }) {
+export function ArmadoClient({
+  cotKey,
+  version,
+  abrirVistaPrevia = false,
+}: {
+  cotKey: string;
+  version: number;
+  /** Se llega desde el botón de la tarjeta: abre directo la vista previa. */
+  abrirVistaPrevia?: boolean;
+}) {
   const [datos, setDatos] = useState<Respuesta | null>(null);
   const [armado, setArmado] = useState<Armado | null>(null);
   const [cargando, setCargando] = useState(true);
@@ -64,6 +74,7 @@ export function ArmadoClient({ cotKey, version }: { cotKey: string; version: num
   const [enviando, setEnviando] = useState(false);
   const [resultadoEnvio, setResultadoEnvio] = useState<{ total: number; letra: string; avisos: string[] } | null>(null);
   const [verPrecios, setVerPrecios] = useState(false);
+  const [verPrevia, setVerPrevia] = useState(abrirVistaPrevia);
 
   /**
    * La marca de tiempo del último guardado aceptado. Va en una ref y no en el
@@ -157,20 +168,41 @@ export function ArmadoClient({ cotKey, version }: { cotKey: string; version: num
     if (armado) await guardar(armado);
   }, [armado, guardar]);
 
-  // ── Mandar a revisión ───────────────────────────────────────────────────────
+  // ── Mandar a revisión, desde la vista previa ────────────────────────────────
+  /**
+   * Dos caminos, y el que se toma depende de si hay algo que congelar.
+   *
+   * Con partidas, la ruta del cotizador: calcula, congela y manda. Sin ellas
+   * —las que se cargaron del control de 2026 nunca pasaron por aquí— la ruta
+   * de siempre, que solo cambia el estatus. Congelar una cotización vacía
+   * guardaría un total de cero y lo daría por bueno.
+   */
   const mandarARevision = useCallback(async () => {
     if (!armado) return;
     setEnviando(true);
+    setError(null);
     try {
-      await guardarYa();
-      const r = await fetch(`/api/erp/cotizaciones/${cotKey}/armado/revision`, {
+      const sinArmado = armado.partidas.length === 0;
+      if (!sinArmado) await guardarYa();
+
+      const ruta = sinArmado
+        ? `/api/erp/cotizaciones/${cotKey}/revision`
+        : `/api/erp/cotizaciones/${cotKey}/armado/revision`;
+
+      const r = await fetch(ruta, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ version }),
       });
       const cuerpo = await r.json();
       if (!r.ok) throw new Error(cuerpo.error ?? "No se pudo mandar a revisión");
-      setResultadoEnvio({ total: cuerpo.total, letra: cuerpo.letra, avisos: cuerpo.avisos ?? [] });
+
+      setVerPrevia(false);
+      setResultadoEnvio({
+        total: cuerpo.total ?? 0,
+        letra: cuerpo.letra ?? "",
+        avisos: cuerpo.avisos ?? [],
+      });
       await cargar();
     } catch (e) {
       setError((e as Error).message);
@@ -279,27 +311,38 @@ export function ArmadoClient({ cotKey, version }: { cotKey: string; version: num
           onCambio={cambiar}
         />
 
-        {/* Mandar a revisión */}
+        {/* El último paso: leer lo que se va a mandar */}
         {!soloLectura && (
           <div className={`${tarjeta} p-4 flex flex-wrap items-center gap-4`}>
             <div className="flex-1 min-w-[240px]">
-              <p className={etiqueta}>Mandar a revisión</p>
+              <p className={etiqueta}>Vista previa</p>
               <p className="font-body text-xs text-white/50 mt-1">
-                Al mandarla, los importes se congelan: el revisor ve estos números y ya no se mueven.
-                Para cambiar algo después se hace una versión nueva.
+                Lo que va a ver el cliente. Desde ahí se manda a revisión, y ahí es donde los
+                importes se congelan.
               </p>
             </div>
             <p className="font-mono text-sm text-white">
               ${resultado.total.toLocaleString("es-MX", { minimumFractionDigits: 2 })} {resultado.moneda}
             </p>
-            <button
-              className={btnPrimary}
-              disabled={enviando || armado.partidas.length === 0}
-              onClick={() => void mandarARevision()}
-            >
-              {enviando ? "Mandando…" : "Mandar a revisión"}
+            <button className={btnPrimary} onClick={() => setVerPrevia(true)}>
+              Vista previa
             </button>
           </div>
+        )}
+
+        {verPrevia && (
+          <VistaPrevia
+            armado={armado}
+            resultado={resultado}
+            cliente={cotizacion.cliente}
+            titulo={cotizacion.titulo}
+            folio={cotizacion.folio}
+            sinArmado={armado.partidas.length === 0}
+            enviando={enviando}
+            error={error}
+            onCerrar={() => setVerPrevia(false)}
+            onMandar={() => void mandarARevision()}
+          />
         )}
 
         {resultadoEnvio && (
