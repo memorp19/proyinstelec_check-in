@@ -1,6 +1,13 @@
 "use client";
 
-import { importeEnLetra, normasElegidas, type Armado, type ResultadoCotizacion } from "@/src/lib/cotizador";
+import {
+  cantidadParaDocumento,
+  importeEnLetra,
+  normasElegidas,
+  unidadParaDocumento,
+  type Armado,
+  type ResultadoCotizacion,
+} from "@/src/lib/cotizador";
 import { btnGhost, btnPrimary, conMoneda, etiqueta, pesos } from "../ui";
 
 /**
@@ -98,9 +105,11 @@ export function VistaPrevia({
                       <td className="py-2 font-mono text-xs text-white/40">{i + 1}</td>
                       <td className="py-2 font-body text-sm text-white">{p.titulo || "—"}</td>
                       <td className="py-2 font-mono text-xs text-white/70 text-right tabular-nums">
-                        {pesos(p.cantidad)}
+                        {cantidadParaDocumento(p.cantidad)}
                       </td>
-                      <td className="py-2 font-body text-xs text-white/50">{p.unidad ?? ""}</td>
+                      <td className="py-2 font-body text-xs text-white/50">
+                        {unidadParaDocumento(p.unidad, p.cantidad)}
+                      </td>
                       <td className="py-2 font-mono text-xs text-white text-right tabular-nums">
                         {pesos(p.precioUnitario)}
                       </td>
@@ -160,9 +169,15 @@ export function VistaPrevia({
               {normas.length > 0 && (
                 <div>
                   <p className={etiqueta}>Documentos aplicables ({normas.length})</p>
-                  <p className="font-body text-xs text-white/50 mt-1">
-                    {normas.map((n) => n.id).join(" · ")}
-                  </p>
+                  {/* El nombre completo, como sale en el PDF. El id es una
+                      llave interna y no significa nada para quien lee. */}
+                  <ul className="mt-1 space-y-0.5">
+                    {normas.map((n) => (
+                      <li key={n.id} className="font-body text-xs text-white/60">
+                        · {n.texto}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               )}
 

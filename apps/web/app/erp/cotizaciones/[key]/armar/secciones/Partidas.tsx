@@ -359,6 +359,8 @@ export function Partidas({
                       aria-label="Utilidad %"
                     />
 
+                    {/* Dos columnas no alcanzaban para "MXN" más la flecha del
+                        desplegable: se veía un solo carácter cortado. */}
                     <select
                       value={c.monedaCosto ?? ""}
                       disabled={soloLectura}
@@ -367,7 +369,7 @@ export function Partidas({
                           monedaCosto: e.target.value === "" ? null : (e.target.value as "MXN" | "USD"),
                         })
                       }
-                      className={`${input} col-span-2 sm:col-span-1`}
+                      className={`${input} col-span-3 sm:col-span-2 px-2`}
                       aria-label="Moneda del costo"
                     >
                       <option value="">{armado.moneda}</option>
@@ -377,7 +379,7 @@ export function Partidas({
 
                     {/* El importe y el quitar, cada uno con su espacio: antes el
                         botón del esfuerzo cabía aquí y encimaba la cifra. */}
-                    <div className="col-span-10 sm:col-span-2 flex items-center gap-3 justify-end px-1">
+                    <div className="col-span-9 sm:col-span-1 flex items-center gap-3 justify-end px-1">
                       <span className="font-mono text-xs text-white/70 tabular-nums">
                         {calc ? pesos(calc.importe) : "—"}
                       </span>

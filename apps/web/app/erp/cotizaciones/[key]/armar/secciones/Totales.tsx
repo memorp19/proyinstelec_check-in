@@ -91,7 +91,11 @@ export function Totales({ armado, resultado }: { armado: Armado; resultado: Resu
           </div>
         </dl>
 
-        <p className="font-body text-xs text-white/50 mt-3">{importeEnLetra(resultado.total, resultado.moneda)}</p>
+        {/* La letra va aquí y no suelta al final de la pantalla: es parte de
+            lo que ve el cliente, justo debajo del total que describe. */}
+        <p className="font-body text-xs text-white/60 mt-3 border-t border-white/10 pt-3">
+          {importeEnLetra(resultado.total, resultado.moneda)}
+        </p>
 
         {/* Los avisos del motor, donde se producen. */}
         {resultado.avisos.length > 0 && (

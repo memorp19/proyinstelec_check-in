@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   calcularCotizacion,
   entradaDeArmado,
-  importeEnLetra,
   type Armado,
   type Desfase,
   type ResultadoCotizacion,
@@ -363,8 +362,6 @@ export function ArmadoClient({
 
         {error && <p className="font-mono text-xs text-danger">{error}</p>}
 
-        {/* La letra, que es lo que el cliente compara contra la cifra. */}
-        <p className="font-body text-xs text-white/40">{importeEnLetra(resultado.total, resultado.moneda)}</p>
       </div>
     </main>
   );
