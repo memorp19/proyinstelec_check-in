@@ -24,6 +24,7 @@ import {
   ultimaVersion,
   puedeEnviarseAlCliente,
   buscarCotizaciones,
+  puedeEliminarse,
 } from "@/src/lib/cotizaciones";
 
 function usarDb(resultados: unknown[] = []) {
@@ -606,9 +607,11 @@ describe("marcarNoAsignadas deja rastro", () => {
 
     const evento = vi.mocked(registrarBitacora).mock.calls[0][0];
     expect(evento.usuario).toBe("ana@proyinstelec.mx");
-    expect(evento.detalle).toContain("v1");
-    expect(evento.detalle).toContain("v3");
-    expect(evento.detalle).toContain("v0");
+    // El folio canónico, nunca "v1": es como se nombra una cotización en toda
+    // la aplicación, y la bitácora se lee después sin tener el código delante.
+    expect(evento.detalle).toContain("PCOTOP-002-2026-1");
+    expect(evento.detalle).toContain("PCOTOP-002-2026-3");
+    expect(evento.detalle).toContain("PCOTOP-002-2026");
   });
 
   it("no registra nada si no descartó ninguna", async () => {
@@ -617,5 +620,44 @@ describe("marcarNoAsignadas deja rastro", () => {
     await marcarNoAsignadas(2, 2026, 0, "ana@proyinstelec.mx");
 
     expect(registrarBitacora).not.toHaveBeenCalled();
+  });
+});
+
+// ── Eliminar una cotización que nunca salió ──────────────────────────────────
+
+describe("puedeEliminarse", () => {
+  const base = {
+    numero: 260, anio: 2026, version: 0, folio: "PCOTOP-260-2026",
+    cliente: "Cliente", titulo: "Título", dirigida_a: "Quien sea",
+    prioridad: "MEDIA", estatus: "PROCESO", elaboro: "EAOL",
+    fecha_solicitud: "2026-10-01", created_by: "ana@proyinstelec.mx",
+  } as unknown as Parameters<typeof puedeEliminarse>[0];
+
+  it("una en proceso que nunca salió, sí", () => {
+    expect(puedeEliminarse(base).puede).toBe(true);
+  });
+
+  /**
+   * La regla es estrecha a propósito: una cotización que el cliente ya tiene,
+   * o que generó una OT, es parte del historial aunque haya sido un error.
+   * Para esas está CANCELADA, que deja constancia.
+   */
+  it("fuera de PROCESO no, y el motivo manda a cancelarla", () => {
+    for (const estatus of ["REVISION", "ENVIADA", "ASIGNADA", "CANCELADA"]) {
+      const r = puedeEliminarse({ ...base, estatus } as typeof base);
+      expect([estatus, r.puede]).toEqual([estatus, false]);
+    }
+    expect(puedeEliminarse({ ...base, estatus: "REVISION" } as typeof base).motivo).toContain("cancélala");
+  });
+
+  it("si alguna vez se envió, no", () => {
+    const r = puedeEliminarse({ ...base, fecha_envio: "2026-10-02" } as typeof base);
+    expect(r.puede).toBe(false);
+    expect(r.motivo).toContain("no se borra");
+  });
+
+  it("con OT o con OC, no, y dice cuál", () => {
+    expect(puedeEliminarse({ ...base, folio_ot: "OT260260" } as typeof base).motivo).toContain("OT260260");
+    expect(puedeEliminarse({ ...base, orden_compra: "4501122596" } as typeof base).motivo).toContain("4501122596");
   });
 });
