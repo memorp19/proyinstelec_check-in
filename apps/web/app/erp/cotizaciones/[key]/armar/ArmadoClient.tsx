@@ -38,6 +38,7 @@ interface Respuesta {
   armado: Armado;
   desfases: Desfase[];
   avisos: string[];
+  llenadoAutomatico: Array<"contacto" | "textos">;
   congelado: { total: string; letra: string; congeladoAt: string } | null;
   actualizadoEn: string | null;
   acceso: { puedeVer: boolean; puedeEditar: boolean; motivo: string };
@@ -308,6 +309,7 @@ export function ArmadoClient({
           cliente={cotizacion.cliente}
           titulo={cotizacion.titulo}
           soloLectura={soloLectura}
+          llenadoAutomatico={datos.llenadoAutomatico ?? []}
           onCambio={cambiar}
         />
 

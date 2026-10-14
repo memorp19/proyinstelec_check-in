@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
+  completarDocumento,
   CONDICIONES_POR_OMISION,
+  lineasDeDireccion,
   ESQUEMA_CONDICIONES,
   ESQUEMA_DOCUMENTO,
   normalizarCondiciones,
@@ -172,5 +174,107 @@ describe("normalizarDocumento", () => {
     a.ocultar.telefono = true;
     expect(b.contacto.contacto).toBe("");
     expect(b.ocultar).toEqual({});
+  });
+});
+
+// ── El machote del documento ─────────────────────────────────────────────────
+
+describe("lineasDeDireccion", () => {
+  /**
+   * El catálogo guarda UNA dirección y la carta tiene DOS renglones. Donde hay
+   * salto de línea es donde quien la capturó quiso partirla.
+   */
+  it("parte donde hay salto de línea", () => {
+    expect(lineasDeDireccion("Av. Siempre Viva 742\nCol. Centro, Monterrey")).toEqual([
+      "Av. Siempre Viva 742",
+      "Col. Centro, Monterrey",
+    ]);
+  });
+
+  // Inventar un corte por la coma más cercana produce renglones raros.
+  it("de corrido se queda entera en el primero", () => {
+    expect(lineasDeDireccion("Av. Siempre Viva 742, Col. Centro, Monterrey")).toEqual([
+      "Av. Siempre Viva 742, Col. Centro, Monterrey",
+      "",
+    ]);
+  });
+
+  it("sin dirección, dos renglones vacíos", () => {
+    expect(lineasDeDireccion(null)).toEqual(["", ""]);
+    expect(lineasDeDireccion("   ")).toEqual(["", ""]);
+  });
+
+  it("limpia los espacios de sobra", () => {
+    expect(lineasDeDireccion("  Av.   Siempre  Viva 742  ")[0]).toBe("Av. Siempre Viva 742");
+  });
+});
+
+describe("completarDocumento", () => {
+  const machote = {
+    contacto: {
+      contacto: "Ing. Pérez",
+      direccion1: "Av. Siempre Viva 742",
+      direccion2: "Col. Centro",
+      telefono: "81 1234 5678",
+      correo: "perez@cliente.mx",
+    },
+    objeto: "El objeto de la presente propuesta…",
+    alcance: "El alcance principal…",
+  };
+
+  it("llena un documento en blanco y dice qué llenó", () => {
+    const { valor, llenados } = completarDocumento(normalizarDocumento(null).valor, machote);
+    expect(valor.contacto.contacto).toBe("Ing. Pérez");
+    expect(valor.objeto).toBe("El objeto de la presente propuesta…");
+    expect(llenados).toEqual(["contacto", "textos"]);
+  });
+
+  /**
+   * La regla que lo hace seguro: lo escrito no se pisa. Si no, cada recarga
+   * borraría la corrección de quien se tomó el trabajo de hacerla.
+   */
+  it("NO pisa lo que alguien escribió", () => {
+    const previo = normalizarDocumento({
+      contacto: { contacto: "Lic. Gómez", telefono: "55 0000 0000" },
+      objeto: "Un objeto escrito a mano.",
+    }).valor;
+
+    const { valor, llenados } = completarDocumento(previo, machote);
+    expect(valor.contacto.contacto).toBe("Lic. Gómez");
+    expect(valor.contacto.telefono).toBe("55 0000 0000");
+    expect(valor.objeto).toBe("Un objeto escrito a mano.");
+    // Lo que sí estaba vacío se llena igual: el correo y el segundo párrafo.
+    expect(valor.contacto.correo).toBe("perez@cliente.mx");
+    expect(valor.alcance).toBe("El alcance principal…");
+    expect(llenados).toEqual(["contacto", "textos"]);
+  });
+
+  it("si no hay nada que llenar, no dice que llenó", () => {
+    const lleno = normalizarDocumento({
+      contacto: {
+        contacto: "A", direccion1: "B", direccion2: "C", telefono: "D", correo: "E",
+      },
+      objeto: "F",
+      alcance: "G",
+    }).valor;
+    expect(completarDocumento(lleno, machote).llenados).toEqual([]);
+  });
+
+  it("sin contacto en el catálogo, solo se propone lo que haya", () => {
+    const { valor, llenados } = completarDocumento(normalizarDocumento(null).valor, {
+      contacto: { direccion1: "Av. Siempre Viva 742" },
+      objeto: "Un objeto",
+      alcance: "Un alcance",
+    });
+    expect(valor.contacto.contacto).toBe("");
+    expect(valor.contacto.direccion1).toBe("Av. Siempre Viva 742");
+    expect(llenados).toEqual(["contacto", "textos"]);
+  });
+
+  it("no comparte el objeto con el que recibió", () => {
+    const previo = normalizarDocumento(null).valor;
+    const { valor } = completarDocumento(previo, machote);
+    valor.contacto.contacto = "Otro";
+    expect(previo.contacto.contacto).toBe("");
   });
 });

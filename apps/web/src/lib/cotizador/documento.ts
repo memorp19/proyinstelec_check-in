@@ -277,3 +277,79 @@ export function normalizarDocumento(crudo: unknown): Validado<DatosDocumento> {
     avisos,
   };
 }
+
+// ── El machote: lo que se propone al abrir ────────────────────────────────────
+
+/**
+ * La dirección de una empresa, partida en los dos renglones de la carta.
+ *
+ * El catálogo guarda **una** dirección y el documento tiene **dos** renglones.
+ * Si viene con salto de línea, ahí se parte, que es donde quien la capturó
+ * quiso partirla. Si viene de corrido, se deja entera en el primero: inventar
+ * un corte por la coma más cercana produce renglones raros —"Av. Siempre Viva
+ * 742, Col." — y quien edita lo arregla en dos segundos.
+ */
+export function lineasDeDireccion(direccion: string | null | undefined): [string, string] {
+  const texto = String(direccion ?? "").trim();
+  if (!texto) return ["", ""];
+  const corte = texto.indexOf("\n");
+  if (corte < 0) return [texto.replace(/\s+/g, " "), ""];
+  return [
+    texto.slice(0, corte).trim().replace(/\s+/g, " "),
+    texto.slice(corte + 1).trim().replace(/\s+/g, " "),
+  ];
+}
+
+/** Lo que se propone, venga del catálogo de clientes o del título. */
+export interface SugerenciasDocumento {
+  contacto?: Partial<ContactoDocumento>;
+  objeto?: string;
+  alcance?: string;
+}
+
+/** Qué campos se llenaron solos, para que la pantalla lo pueda decir. */
+export interface Completado {
+  valor: DatosDocumento;
+  /** `contacto` si vino del catálogo de clientes; `textos` si del título. */
+  llenados: Array<"contacto" | "textos">;
+}
+
+/**
+ * Llena lo que esté vacío, y **solo** lo que esté vacío.
+ *
+ * El cotizador viejo escribe el machote al abrir y deja editar encima; eso es
+ * lo que la gente espera, y empezar frente a cinco campos en blanco es el
+ * motivo de que el documento acabe corrigiéndose a mano después de generarlo.
+ *
+ * La regla que lo hace seguro es la otra mitad: **lo escrito no se pisa**. Al
+ * recargar, un campo con texto se queda como está, venga de donde venga. Un
+ * campo que alguien vació a propósito se vuelve a proponer — es el precio de
+ * no guardar un "esto lo borré yo", y es el comportamiento del original.
+ */
+export function completarDocumento(d: DatosDocumento, s: SugerenciasDocumento): Completado {
+  const valor: DatosDocumento = { ...d, contacto: { ...d.contacto }, ocultar: { ...d.ocultar } };
+  const llenados: Completado["llenados"] = [];
+
+  let tocoContacto = false;
+  for (const campo of ["contacto", "direccion1", "direccion2", "telefono", "correo"] as const) {
+    const propuesto = (s.contacto?.[campo] ?? "").trim();
+    if (propuesto && !valor.contacto[campo]) {
+      valor.contacto[campo] = propuesto;
+      tocoContacto = true;
+    }
+  }
+  if (tocoContacto) llenados.push("contacto");
+
+  let tocoTextos = false;
+  if (s.objeto?.trim() && !valor.objeto) {
+    valor.objeto = s.objeto.trim();
+    tocoTextos = true;
+  }
+  if (s.alcance?.trim() && !valor.alcance) {
+    valor.alcance = s.alcance.trim();
+    tocoTextos = true;
+  }
+  if (tocoTextos) llenados.push("textos");
+
+  return { valor, llenados };
+}

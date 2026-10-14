@@ -4,6 +4,7 @@ import {
   NORMAS,
   normasSugeridas,
   textosSugeridos,
+  type Completado,
   type Armado,
   type ContactoDocumento,
   type DatosDocumento,
@@ -39,12 +40,15 @@ export function Documento({
   cliente,
   titulo,
   soloLectura,
+  llenadoAutomatico,
   onCambio,
 }: {
   armado: Armado;
   cliente: string;
   titulo: string;
   soloLectura: boolean;
+  /** Qué llegó del machote y no de lo guardado. */
+  llenadoAutomatico: Completado["llenados"];
   onCambio: (a: Armado) => void;
 }) {
   const d = armado.documento;
@@ -61,6 +65,9 @@ export function Documento({
     const { objeto, alcance } = textosSugeridos(titulo, cliente);
     cambiar({ objeto, alcance });
   };
+
+  const delCatalogo = llenadoAutomatico.includes("contacto");
+  const contactoVacio = Object.values(d.contacto).every((v) => !v);
 
   return (
     <section className={`${tarjeta} p-4 space-y-5`}>
@@ -82,10 +89,18 @@ export function Documento({
 
       {/* El bloque del contacto en la carta */}
       <div className="space-y-2">
-        <p className={etiqueta}>El contacto, como sale en la carta</p>
+        <div className="flex items-center gap-2 flex-wrap">
+          <p className={etiqueta}>El contacto, como sale en la carta</p>
+          {delCatalogo && (
+            <span className="font-mono text-[9px] px-2 py-0.5 rounded-full bg-green/15 border border-green/30 text-green">
+              Encontrado en el catálogo
+            </span>
+          )}
+        </div>
         <p className="font-body text-xs text-white/40">
-          Vacío usa lo del catálogo de clientes. Lo que se escriba aquí es solo de esta cotización: no
-          cambia quién es el contacto de la cuenta.
+          {contactoVacio
+            ? "No hay un contacto de este cliente en el catálogo: captúralo aquí."
+            : "Lo que se escriba aquí es solo de esta cotización: no cambia quién es el contacto de la cuenta."}
         </p>
         {RENGLONES.map(({ campo, titulo: t }) => (
           <div key={campo} className="flex items-center gap-3">
@@ -121,10 +136,14 @@ export function Documento({
           <p className={etiqueta}>Actividades generales</p>
           {!soloLectura && (
             <button className={btnGhost} onClick={proponerTextos}>
-              Proponer con el título
+              Volver al texto sugerido
             </button>
           )}
         </div>
+        <p className="font-body text-xs text-white/40">
+          Llegan escritos con el tipo de servicio y el nombre del cliente. Son un punto de partida:
+          se editan encima, y el botón los devuelve a como estaban.
+        </p>
         <textarea
           value={d.objeto}
           disabled={soloLectura}
@@ -155,18 +174,29 @@ export function Documento({
 
       {/* Normas */}
       <div className="space-y-2">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
           <p className={etiqueta}>Documentos aplicables</p>
           {!soloLectura && (
-            <button className={btnGhost} onClick={() => cambiar({ normas: null })}>
-              Volver a las sugeridas
-            </button>
+            <div className="flex gap-2">
+              {/* `null` no es lo mismo que la lista de sugeridas: significa "no
+                  las he tocado", y así la cotización sigue al título si este
+                  cambia. Por eso Sugeridas vuelve a null y no copia ids. */}
+              <button className={btnGhost} onClick={() => cambiar({ normas: null })}>
+                Sugeridas
+              </button>
+              <button className={btnGhost} onClick={() => cambiar({ normas: NORMAS.map((n) => n.id) })}>
+                Todas
+              </button>
+              <button className={btnGhost} onClick={() => cambiar({ normas: [] })}>
+                Ninguna
+              </button>
+            </div>
           )}
         </div>
         <p className="font-body text-xs text-white/40">
           {d.normas === null
-            ? "Las sugeridas por el título de la cotización."
-            : `${elegidas.length} elegidas a mano.`}
+            ? `Las ${sugeridas.length} que corresponden a este tipo de servicio, de ${NORMAS.length}.`
+            : `${elegidas.length} elegidas a mano, de ${NORMAS.length}.`}
         </p>
         <div className="grid gap-1 sm:grid-cols-2">
           {NORMAS.map((n) => (

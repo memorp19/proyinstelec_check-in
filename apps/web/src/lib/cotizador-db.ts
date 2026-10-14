@@ -23,6 +23,9 @@ import {
 import {
   armadoDesdeFilas,
   calcularCotizacion,
+  completarDocumento,
+  lineasDeDireccion,
+  textosSugeridos,
   congelar,
   entradaDeArmado,
   detectarDesfases,
@@ -36,6 +39,7 @@ import {
 } from "./cotizador";
 import { getConfigErp } from "./config-erp";
 import { getVersion, type Cotizacion } from "./cotizaciones";
+import { contactoParaCarta } from "./clientes";
 
 // ── Lectura ───────────────────────────────────────────────────────────────────
 
@@ -47,6 +51,12 @@ export interface ArmadoCompleto {
   desfases: Desfase[];
   /** Lo que no se entendió al leer los bloques de jsonb. */
   avisos: string[];
+  /**
+   * Qué campos del documento llegaron llenos del machote y no de lo guardado.
+   * La pantalla lo dice —"Encontrado en el catálogo"— para que nadie confunda
+   * una propuesta con un dato que alguien revisó.
+   */
+  llenadoAutomatico: Array<"contacto" | "textos">;
   /** El congelado, si esta versión ya pasó a revisión. */
   congelado: { total: string; letra: string; congeladoAt: string } | null;
   /**
@@ -78,6 +88,38 @@ export async function catalogoVigente(): Promise<ServicioCatalogo[]> {
     tarifaHora: f.tarifaHora === null ? null : Number(f.tarifaHora),
     baseNodos: f.baseNodos,
   }));
+}
+
+/**
+ * Lo que se propone para el documento de esta cotización.
+ *
+ * El contacto sale del catálogo de clientes; los dos párrafos, del título y la
+ * razón social. Es el machote del cotizador viejo: llega escrito y se edita
+ * encima. Lo que ya tenga texto no se toca (`completarDocumento`).
+ */
+async function machoteDelDocumento(cotizacion: Cotizacion) {
+  const { empresa, contacto } = await contactoParaCarta({
+    razonSocial: cotizacion.cliente,
+    dirigidaA: cotizacion.dirigida_a,
+  }).catch(() => ({ empresa: null, contacto: null }));
+
+  const [direccion1, direccion2] = lineasDeDireccion(empresa?.direccion);
+  const textos = textosSugeridos(cotizacion.titulo, cotizacion.cliente);
+
+  return {
+    contacto: contacto
+      ? {
+          contacto: contacto.nombre,
+          direccion1,
+          direccion2,
+          telefono: contacto.telefono ?? "",
+          correo: contacto.correo ?? "",
+        }
+      : // Sin contacto en el catálogo, la dirección de la empresa todavía sirve.
+        { direccion1, direccion2 },
+    objeto: textos.objeto,
+    alcance: textos.alcance,
+  };
 }
 
 /** Un armado en blanco, con los valores por omisión de `config_erp`. */
@@ -129,10 +171,22 @@ export async function getArmado(
 
   if (!encabezado) {
     const armado = await armadoNuevo(numero, anio, version);
+    const { valor, llenados } = completarDocumento(armado.documento, await machoteDelDocumento(cotizacion));
+    armado.documento = valor;
+
     const resultado = calcularCotizacion(
       entradaDeArmado(armado, config.cotizador.BASE_NODOS_ESTUDIO),
     );
-    return { cotizacion, armado, resultado, desfases: [], avisos: [], congelado: null, actualizadoEn: null };
+    return {
+      cotizacion,
+      armado,
+      resultado,
+      desfases: [],
+      avisos: [],
+      llenadoAutomatico: llenados,
+      congelado: null,
+      actualizadoEn: null,
+    };
   }
 
   const [partidas, conceptos, gastos, congeladoFila] = await Promise.all([
@@ -210,6 +264,10 @@ export async function getArmado(
     })),
   });
 
+  // El machote solo entra donde quedó vacío; lo escrito no se pisa.
+  const { valor, llenados } = completarDocumento(armado.documento, await machoteDelDocumento(cotizacion));
+  armado.documento = valor;
+
   const resultado = calcularCotizacion(entradaDeArmado(armado, config.cotizador.BASE_NODOS_ESTUDIO));
 
   // Los desfases se calculan contra el catálogo de HOY: es la pregunta que la
@@ -231,6 +289,7 @@ export async function getArmado(
     resultado,
     desfases: detectarDesfases(lineas, catalogo),
     avisos,
+    llenadoAutomatico: llenados,
     congelado: congeladoRow
       ? {
           total: congeladoRow.total,
