@@ -286,7 +286,7 @@ export async function aprobarCotizacion(params: {
     accion: "COTIZACION_APROBADA",
     usuario: params.aprobadoPor,
     referencia: cotPk(vigente.numero, vigente.anio),
-    detalle: `${vigente.folio} v${vigente.version}`,
+    detalle: vigente.folio,
   });
 
   const correoElab = await correoDeElaborador(vigente.elaboro);
@@ -545,7 +545,7 @@ async function generarOT(params: {
     throw new Error(
       params.version === undefined
         ? "Cotización no encontrada"
-        : `La cotización no tiene versión ${params.version}`,
+        : `No existe ${folioCotizacion(params.numero, params.anio, params.version)}`,
     );
   }
   if (vigente.estatus !== "ENVIADA") {
@@ -783,7 +783,7 @@ export async function registrarOcPosterior(params: {
   }
   if (asignada.ordenCompra) {
     throw new Error(
-      `La v${asignada.version} ya tiene la orden de compra ${asignada.ordenCompra}`,
+      `${folioCotizacion(params.numero, params.anio, asignada.version)} ya tiene la orden de compra ${asignada.ordenCompra}`,
     );
   }
 
@@ -813,7 +813,7 @@ export async function registrarOcPosterior(params: {
     accion: "COTIZACION_OC_POSTERIOR",
     usuario: params.usuario,
     referencia: cotPk(params.numero, params.anio),
-    detalle: `OC registrada después de asignar: ${oc} (v${asignada.version}, ${asignada.folioOt})`,
+    detalle: `OC registrada después de asignar: ${oc} (${folioCotizacion(params.numero, params.anio, asignada.version)}, ${asignada.folioOt})`,
   });
 
   return { version: asignada.version, folioOt: asignada.folioOt, ordenCompra: oc };
@@ -879,7 +879,7 @@ export async function modificarOcPosterior(params: {
   // más alto que esta operación exige.
   if (!asignada.ordenCompra) {
     throw new Error(
-      `La v${asignada.version} todavía no tiene orden de compra; regístrala en vez de modificarla`,
+      `${folioCotizacion(params.numero, params.anio, asignada.version)} todavía no tiene orden de compra; regístrala en vez de modificarla`,
     );
   }
   const anterior = asignada.ordenCompra;
@@ -906,7 +906,7 @@ export async function modificarOcPosterior(params: {
     accion: "COTIZACION_OC_MODIFICADA",
     usuario: params.usuario,
     referencia: cotPk(params.numero, params.anio),
-    detalle: `OC ${anterior} → ${oc} (v${asignada.version}, ${asignada.folioOt}). Motivo: ${motivo}`,
+    detalle: `OC ${anterior} → ${oc} (${folioCotizacion(params.numero, params.anio, asignada.version)}, ${asignada.folioOt}). Motivo: ${motivo}`,
   });
 
   return { version: asignada.version, folioOt: asignada.folioOt, anterior, ordenCompra: oc };
