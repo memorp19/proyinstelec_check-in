@@ -261,6 +261,20 @@ export function Partidas({
                 <p className="font-body text-xs text-white/30">Sin conceptos: la partida costaría cero.</p>
               )}
 
+              {/* Los rótulos solo donde el renglón cabe de corrido; más
+                  estrecho se parte y un encabezado dejaría de alinear. */}
+              {p.conceptos.length > 0 && (
+                <div className="hidden lg:flex items-center gap-2">
+                  <span className="flex-1 min-w-[200px]" />
+                  <span className={`${etiqueta} w-20 shrink-0 px-3 text-right`}>Cant.</span>
+                  <span className={`${etiqueta} w-32 shrink-0 px-3 text-right`}>Costo</span>
+                  <span className={`${etiqueta} w-20 shrink-0 px-3 text-right`}>Util %</span>
+                  <span className={`${etiqueta} w-24 shrink-0 px-2`}>Moneda</span>
+                  <span className={`${etiqueta} w-28 shrink-0 px-1 text-right`}>Importe</span>
+                  {!soloLectura && <span className="w-9 shrink-0" />}
+                </div>
+              )}
+
               {p.conceptos.map((c, iConcepto) => {
                 /**
                  * Se emparejan por POSICIÓN, no por código.
@@ -275,11 +289,21 @@ export function Partidas({
                 const esEstudio = c.esfuerzo !== null;
 
                 return (
-                  <div key={c.id} className="grid grid-cols-12 gap-2 items-start">
+                  /**
+                   * Cada dato con su ancho, no con una fracción de doce.
+                   *
+                   * Con la rejilla, el importe compartía una columna de un
+                   * doceavo con el botón de quitar: en una laptop eso son
+                   * ochenta píxeles para "80,000.00" y una ×, así que el
+                   * número se metía debajo del desplegable de la moneda. Aquí
+                   * cada campo mide lo que necesita y, cuando no caben, el
+                   * renglón se parte — que es legible — en vez de encimarse.
+                   */
+                  <div key={c.id} className="flex flex-wrap items-start gap-2">
                     {/* Nombre, y para un estudio el botón que abre sus parámetros */}
-                    <div className="col-span-12 sm:col-span-4">
+                    <div className="w-full lg:flex-1 lg:min-w-[200px]">
                       {c.codigo ? (
-                        <div className="px-3 py-2">
+                        <div className="px-1 py-2">
                           <div className="flex items-center gap-2 flex-wrap">
                             <p className="font-mono text-xs text-blue-mid">{c.codigo}</p>
                             {esEstudio && !soloLectura && (
@@ -313,7 +337,7 @@ export function Partidas({
                       value={c.cantidad}
                       disabled={soloLectura}
                       onChange={(e) => cambiarConcepto(p.id, c.id, { cantidad: aNumero(e.target.value) ?? 0 })}
-                      className={`${inputNum} col-span-3 sm:col-span-2`}
+                      className={`${inputNum} w-20 shrink-0`}
                       inputMode="decimal"
                       aria-label="Cantidad"
                     />
@@ -327,12 +351,12 @@ export function Partidas({
                      * referencia, en chico, que es lo que es.
                      */}
                     {esEstudio ? (
-                      <div className="col-span-4 sm:col-span-2 px-3 py-2 text-right">
-                        <p className="font-mono text-sm text-white">
+                      <div className="w-32 shrink-0 px-3 py-2 text-right">
+                        <p className="font-mono text-sm text-white tabular-nums">
                           {calc ? pesos(calc.costoUnitario) : "—"}
                         </p>
                         {c.costoCatalogo !== null && (
-                          <p className="font-mono text-[9px] text-white/30">
+                          <p className="font-mono text-[9px] text-white/30 tabular-nums">
                             catálogo {pesos(c.costoCatalogo)}
                           </p>
                         )}
@@ -343,7 +367,7 @@ export function Partidas({
                         disabled={soloLectura}
                         onChange={(e) => cambiarConcepto(p.id, c.id, { costo: aNumero(e.target.value) })}
                         placeholder="costo"
-                        className={`${inputNum} col-span-4 sm:col-span-2`}
+                        className={`${inputNum} w-32 shrink-0`}
                         inputMode="decimal"
                         aria-label="Costo"
                       />
@@ -354,13 +378,12 @@ export function Partidas({
                       disabled={soloLectura}
                       onChange={(e) => cambiarConcepto(p.id, c.id, { utilidadPct: aNumero(e.target.value) ?? 0 })}
                       placeholder="util %"
-                      className={`${inputNum} col-span-3 sm:col-span-1`}
+                      className={`${inputNum} w-20 shrink-0`}
                       inputMode="decimal"
                       aria-label="Utilidad %"
                     />
 
-                    {/* Dos columnas no alcanzaban para "MXN" más la flecha del
-                        desplegable: se veía un solo carácter cortado. */}
+                    {/* Ancho fijo para que "MXN" quepa con su flecha. */}
                     <select
                       value={c.monedaCosto ?? ""}
                       disabled={soloLectura}
@@ -369,7 +392,7 @@ export function Partidas({
                           monedaCosto: e.target.value === "" ? null : (e.target.value as "MXN" | "USD"),
                         })
                       }
-                      className={`${input} col-span-3 sm:col-span-2 px-2`}
+                      className={`${input} w-24 shrink-0 px-2`}
                       aria-label="Moneda del costo"
                     >
                       <option value="">{armado.moneda}</option>
@@ -377,24 +400,22 @@ export function Partidas({
                       <option value="USD">USD</option>
                     </select>
 
-                    {/* El importe y el quitar, cada uno con su espacio: antes el
-                        botón del esfuerzo cabía aquí y encimaba la cifra. */}
-                    <div className="col-span-9 sm:col-span-1 flex items-center gap-3 justify-end px-1">
-                      <span className="font-mono text-xs text-white/70 tabular-nums">
-                        {calc ? pesos(calc.importe) : "—"}
-                      </span>
-                      {!soloLectura && (
-                        <button
-                          className={btnPeligro}
-                          aria-label="Quitar el concepto"
-                          onClick={() =>
-                            cambiarPartida(p.id, { conceptos: p.conceptos.filter((x) => x.id !== c.id) })
-                          }
-                        >
-                          ×
-                        </button>
-                      )}
-                    </div>
+                    {/* El importe, con su propio espacio y alineado a la derecha */}
+                    <p className="w-28 shrink-0 px-1 py-2 font-mono text-xs text-white/70 text-right tabular-nums">
+                      {calc ? pesos(calc.importe) : "—"}
+                    </p>
+
+                    {!soloLectura && (
+                      <button
+                        className={`${btnPeligro} w-9 shrink-0 px-0`}
+                        aria-label="Quitar el concepto"
+                        onClick={() =>
+                          cambiarPartida(p.id, { conceptos: p.conceptos.filter((x) => x.id !== c.id) })
+                        }
+                      >
+                        ×
+                      </button>
+                    )}
                   </div>
                 );
               })}
