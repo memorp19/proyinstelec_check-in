@@ -14,12 +14,25 @@ import {
 } from "@/src/lib/cotizador";
 import { BuscadorCatalogo } from "./BuscadorCatalogo";
 import { ModalEstudio } from "./ModalEstudio";
-import { aNumero, btnGhost, btnPeligro, btnPrimary, conMoneda, etiqueta, input, inputNum, pesos, tarjeta } from "../ui";
+import {
+  aNumero,
+  btnGhost,
+  btnPeligro,
+  btnPrimary,
+  campo,
+  campoNum,
+  conMoneda,
+  etiqueta,
+  input,
+  pesos,
+  tarjeta,
+} from "../ui";
 
 const nuevoId = () =>
   typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `tmp-${Date.now()}-${Math.random()}`;
 
-const TIPOS: TipoBloque[] = ["texto", "vineta", "subvineta", "subtitulo", "parrafo", "espacio"];
+/** El orden del cotizador viejo, que es el de los botones de agregar. */
+const TIPOS: TipoBloque[] = ["subtitulo", "texto", "parrafo", "vineta", "subvineta", "espacio"];
 
 /** El concepto que se está agregando, mientras pide los parámetros del estudio. */
 type EstudioPendiente = { partidaId: string; servicio: ServicioCatalogo } | null;
@@ -132,22 +145,56 @@ export function Partidas({
         const calculada = resultado.partidas.find((x) => x.id === p.id);
         return (
           <article key={p.id} className="border border-white/10 rounded-xl p-4 space-y-4 bg-white/[0.02]">
-            {/* Encabezado de la partida */}
-            <div className="flex flex-wrap items-start gap-3">
-              <span className="font-mono text-xs text-white/40 mt-3">{i + 1}</span>
+            {/**
+              * El encabezado de la partida, en un renglón: número, título,
+              * cantidad, unidad, formato y quitar. Como el cotizador viejo —
+              * en dos renglones de campos sueltos ocupaba media pantalla por
+              * partida y había que bajar para ver la siguiente.
+              */}
+            <div className="flex flex-wrap ancho:flex-nowrap items-center gap-2">
+              <span className="font-mono text-xs text-white/40 w-5 shrink-0 text-right">{i + 1}</span>
               <input
                 value={p.titulo}
                 disabled={soloLectura}
                 onChange={(e) => cambiarPartida(p.id, { titulo: e.target.value })}
                 placeholder="Título de la partida"
-                className={`${input} flex-1 min-w-[200px]`}
+                className={`${campo} w-full ancho:w-auto ancho:flex-1 ancho:min-w-[180px]`}
               />
+              <input
+                value={p.cantidad}
+                disabled={soloLectura}
+                onChange={(e) => cambiarPartida(p.id, { cantidad: aNumero(e.target.value) ?? 0 })}
+                className={`${campoNum} w-20 shrink-0`}
+                inputMode="decimal"
+                aria-label="Cantidad de la partida"
+                title="Cantidad"
+              />
+              <input
+                value={p.unidad}
+                disabled={soloLectura}
+                onChange={(e) => cambiarPartida(p.id, { unidad: e.target.value })}
+                className={`${campo} w-28 shrink-0`}
+                aria-label="Unidad de la partida"
+                title="Unidad"
+              />
+              <select
+                value={p.formato}
+                disabled={soloLectura}
+                onChange={(e) => cambiarPartida(p.id, { formato: e.target.value as PartidaArmada["formato"] })}
+                className={`${campo} w-28 shrink-0 px-2`}
+                aria-label="Formato del título"
+                title="Cómo sale el título en el documento"
+              >
+                <option value="NORMAL">Normal</option>
+                <option value="NEGRITAS">Negritas</option>
+                <option value="OCULTO">Oculto</option>
+              </select>
               {!soloLectura && (
-                <div className="flex gap-1">
-                  <button className={btnGhost} onClick={() => moverPartida(i, -1)} aria-label="Subir">
+                <div className="flex gap-1 shrink-0">
+                  <button className={btnGhost} onClick={() => moverPartida(i, -1)} aria-label="Subir la partida">
                     ↑
                   </button>
-                  <button className={btnGhost} onClick={() => moverPartida(i, 1)} aria-label="Bajar">
+                  <button className={btnGhost} onClick={() => moverPartida(i, 1)} aria-label="Bajar la partida">
                     ↓
                   </button>
                   <button
@@ -160,64 +207,6 @@ export function Partidas({
               )}
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <label className="block">
-                <span className={etiqueta}>Cantidad</span>
-                <input
-                  value={p.cantidad}
-                  disabled={soloLectura}
-                  onChange={(e) => cambiarPartida(p.id, { cantidad: aNumero(e.target.value) ?? 0 })}
-                  className={`${inputNum} mt-1`}
-                  inputMode="decimal"
-                />
-              </label>
-              <label className="block">
-                <span className={etiqueta}>Unidad</span>
-                <input
-                  value={p.unidad}
-                  disabled={soloLectura}
-                  onChange={(e) => cambiarPartida(p.id, { unidad: e.target.value })}
-                  className={`${input} mt-1`}
-                />
-              </label>
-              <label className="block">
-                <span className={etiqueta}>Formato del título</span>
-                <select
-                  value={p.formato}
-                  disabled={soloLectura}
-                  onChange={(e) => cambiarPartida(p.id, { formato: e.target.value as PartidaArmada["formato"] })}
-                  className={`${input} mt-1`}
-                >
-                  <option value="NORMAL">Normal</option>
-                  <option value="NEGRITAS">Negritas</option>
-                  <option value="OCULTO">Oculto</option>
-                </select>
-              </label>
-              <label className="flex items-center gap-2 mt-5">
-                <input
-                  type="checkbox"
-                  checked={p.recibeGastosGenerales}
-                  disabled={soloLectura}
-                  onChange={(e) => cambiarPartida(p.id, { recibeGastosGenerales: e.target.checked })}
-                  className="w-5 h-5 accent-blue"
-                />
-                <span className="font-body text-xs text-white/70">Recibe gastos generales</span>
-              </label>
-            </div>
-
-            {armado.reparto === "MANUAL" && p.recibeGastosGenerales && (
-              <label className="block max-w-xs">
-                <span className={etiqueta}>Gastos asignados a mano</span>
-                <input
-                  value={p.gastoManual ?? ""}
-                  disabled={soloLectura}
-                  onChange={(e) => cambiarPartida(p.id, { gastoManual: aNumero(e.target.value) })}
-                  className={`${inputNum} mt-1`}
-                  inputMode="decimal"
-                />
-              </label>
-            )}
-
             {/* El contenido del documento */}
             <BloquesDeLaPartida
               bloques={p.bloques}
@@ -225,53 +214,31 @@ export function Partidas({
               onCambio={(bloques) => cambiarPartida(p.id, { bloques })}
             />
 
-            {/* Conceptos */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <p className={etiqueta}>Conceptos</p>
-                {!soloLectura && (
-                  <div className="flex gap-2">
-                    <button className={btnGhost} onClick={() => setBuscando(p.id)}>
-                      Del catálogo
-                    </button>
-                    <button
-                      className={btnGhost}
-                      onClick={() =>
-                        agregarConcepto(p.id, {
-                          id: nuevoId(),
-                          codigo: "",
-                          descripcion: "",
-                          cantidad: 1,
-                          unidad: "",
-                          costo: null,
-                          costoCatalogo: null,
-                          utilidadPct: 0,
-                          monedaCosto: null,
-                          esfuerzo: null,
-                        })
-                      }
-                    >
-                      Escribir uno
-                    </button>
-                  </div>
-                )}
-              </div>
+            {/**
+              * Los conceptos, en el orden de Apps Script: costo, utilidad,
+              * cantidad, unidad, moneda, importe. Es el orden en el que el
+              * equipo los teclea desde hace años; cambiarlo por uno más
+              * "lógico" solo obligaría a reaprender dónde está cada cosa.
+              */}
+            <div className="space-y-1">
+              <p className={etiqueta}>Conceptos</p>
 
               {p.conceptos.length === 0 && (
                 <p className="font-body text-xs text-white/30">Sin conceptos: la partida costaría cero.</p>
               )}
 
-              {/* Los rótulos solo donde el renglón cabe de corrido; más
-                  estrecho se parte y un encabezado dejaría de alinear. */}
+              {/* Los rótulos solo donde el renglón cabe de corrido: más
+                  estrecho se parte y el encabezado dejaría de alinear. */}
               {p.conceptos.length > 0 && (
-                <div className="hidden lg:flex items-center gap-2">
-                  <span className="flex-1 min-w-[200px]" />
+                <div className="hidden ancho:flex items-center gap-2 pb-1">
+                  <span className="flex-1 min-w-[120px]" />
+                  <span className={`${etiqueta} w-28 shrink-0 px-3 text-right`}>Costo</span>
+                  <span className={`${etiqueta} w-16 shrink-0 px-2 text-right`}>Util %</span>
                   <span className={`${etiqueta} w-20 shrink-0 px-3 text-right`}>Cant.</span>
-                  <span className={`${etiqueta} w-32 shrink-0 px-3 text-right`}>Costo</span>
-                  <span className={`${etiqueta} w-20 shrink-0 px-3 text-right`}>Util %</span>
-                  <span className={`${etiqueta} w-24 shrink-0 px-2`}>Moneda</span>
+                  <span className={`${etiqueta} w-24 shrink-0 px-3`}>Unidad</span>
+                  <span className={`${etiqueta} w-20 shrink-0 px-2`}>Moneda</span>
                   <span className={`${etiqueta} w-28 shrink-0 px-1 text-right`}>Importe</span>
-                  {!soloLectura && <span className="w-9 shrink-0" />}
+                  {!soloLectura && <span className="w-8 shrink-0" />}
                 </div>
               )}
 
@@ -289,23 +256,14 @@ export function Partidas({
                 const esEstudio = c.esfuerzo !== null;
 
                 return (
-                  /**
-                   * Cada dato con su ancho, no con una fracción de doce.
-                   *
-                   * Con la rejilla, el importe compartía una columna de un
-                   * doceavo con el botón de quitar: en una laptop eso son
-                   * ochenta píxeles para "80,000.00" y una ×, así que el
-                   * número se metía debajo del desplegable de la moneda. Aquí
-                   * cada campo mide lo que necesita y, cuando no caben, el
-                   * renglón se parte — que es legible — en vez de encimarse.
-                   */
-                  <div key={c.id} className="flex flex-wrap items-start gap-2">
-                    {/* Nombre, y para un estudio el botón que abre sus parámetros */}
-                    <div className="w-full lg:flex-1 lg:min-w-[200px]">
+                  <div key={c.id} className="flex flex-wrap ancho:flex-nowrap items-center gap-2">
+                    {/* Código y descripción, con el botón del estudio al lado */}
+                    <div className="w-full ancho:w-auto ancho:flex-1 ancho:min-w-[120px] min-w-0">
                       {c.codigo ? (
-                        <div className="px-1 py-2">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <p className="font-mono text-xs text-blue-mid">{c.codigo}</p>
+                        <div className="px-1">
+                          <div className="flex items-baseline gap-2 flex-wrap">
+                            <span className="font-mono text-xs text-blue-mid">{c.codigo}</span>
+                            <span className="font-body text-xs text-white/70 truncate">{c.descripcion}</span>
                             {esEstudio && !soloLectura && (
                               <button
                                 className={btnGhost}
@@ -315,9 +273,8 @@ export function Partidas({
                               </button>
                             )}
                           </div>
-                          <p className="font-body text-xs text-white/70">{c.descripcion}</p>
                           {esEstudio && calc?.horas !== undefined && (
-                            <p className="font-mono text-[10px] text-white/40 mt-0.5">
+                            <p className="font-mono text-[10px] text-white/40">
                               {pesos(calc.horas)} h × ${pesos(c.esfuerzo!.tarifaHora)}/h
                             </p>
                           )}
@@ -328,19 +285,10 @@ export function Partidas({
                           disabled={soloLectura}
                           onChange={(e) => cambiarConcepto(p.id, c.id, { descripcion: e.target.value })}
                           placeholder="Descripción del concepto"
-                          className={input}
+                          className={`${campo} w-full`}
                         />
                       )}
                     </div>
-
-                    <input
-                      value={c.cantidad}
-                      disabled={soloLectura}
-                      onChange={(e) => cambiarConcepto(p.id, c.id, { cantidad: aNumero(e.target.value) ?? 0 })}
-                      className={`${inputNum} w-20 shrink-0`}
-                      inputMode="decimal"
-                      aria-label="Cantidad"
-                    />
 
                     {/**
                      * El costo de un estudio NO se teclea: sale de sus horas por
@@ -351,7 +299,7 @@ export function Partidas({
                      * referencia, en chico, que es lo que es.
                      */}
                     {esEstudio ? (
-                      <div className="w-32 shrink-0 px-3 py-2 text-right">
+                      <div className="w-28 shrink-0 px-3 text-right">
                         <p className="font-mono text-sm text-white tabular-nums">
                           {calc ? pesos(calc.costoUnitario) : "—"}
                         </p>
@@ -367,7 +315,7 @@ export function Partidas({
                         disabled={soloLectura}
                         onChange={(e) => cambiarConcepto(p.id, c.id, { costo: aNumero(e.target.value) })}
                         placeholder="costo"
-                        className={`${inputNum} w-32 shrink-0`}
+                        className={`${campoNum} w-28 shrink-0`}
                         inputMode="decimal"
                         aria-label="Costo"
                       />
@@ -377,13 +325,31 @@ export function Partidas({
                       value={c.utilidadPct || ""}
                       disabled={soloLectura}
                       onChange={(e) => cambiarConcepto(p.id, c.id, { utilidadPct: aNumero(e.target.value) ?? 0 })}
-                      placeholder="util %"
-                      className={`${inputNum} w-20 shrink-0`}
+                      placeholder="%"
+                      className={`${campoNum} w-16 shrink-0 px-2`}
                       inputMode="decimal"
                       aria-label="Utilidad %"
                     />
 
-                    {/* Ancho fijo para que "MXN" quepa con su flecha. */}
+                    <input
+                      value={c.cantidad}
+                      disabled={soloLectura}
+                      onChange={(e) => cambiarConcepto(p.id, c.id, { cantidad: aNumero(e.target.value) ?? 0 })}
+                      className={`${campoNum} w-20 shrink-0`}
+                      inputMode="decimal"
+                      aria-label="Cantidad"
+                    />
+
+                    <input
+                      value={c.unidad}
+                      disabled={soloLectura}
+                      onChange={(e) => cambiarConcepto(p.id, c.id, { unidad: e.target.value })}
+                      placeholder="unidad"
+                      className={`${campo} w-24 shrink-0`}
+                      aria-label="Unidad"
+                    />
+
+                    {/* Ancho propio para que "MXN" quepa con su flecha. */}
                     <select
                       value={c.monedaCosto ?? ""}
                       disabled={soloLectura}
@@ -392,7 +358,7 @@ export function Partidas({
                           monedaCosto: e.target.value === "" ? null : (e.target.value as "MXN" | "USD"),
                         })
                       }
-                      className={`${input} w-24 shrink-0 px-2`}
+                      className={`${campo} w-20 shrink-0 px-2`}
                       aria-label="Moneda del costo"
                     >
                       <option value="">{armado.moneda}</option>
@@ -400,14 +366,13 @@ export function Partidas({
                       <option value="USD">USD</option>
                     </select>
 
-                    {/* El importe, con su propio espacio y alineado a la derecha */}
-                    <p className="w-28 shrink-0 px-1 py-2 font-mono text-xs text-white/70 text-right tabular-nums">
+                    <p className="w-28 shrink-0 px-1 font-mono text-xs text-white/80 text-right tabular-nums">
                       {calc ? pesos(calc.importe) : "—"}
                     </p>
 
                     {!soloLectura && (
                       <button
-                        className={`${btnPeligro} w-9 shrink-0 px-0`}
+                        className={`${btnPeligro} w-8 shrink-0 px-0`}
                         aria-label="Quitar el concepto"
                         onClick={() =>
                           cambiarPartida(p.id, { conceptos: p.conceptos.filter((x) => x.id !== c.id) })
@@ -421,18 +386,30 @@ export function Partidas({
               })}
             </div>
 
-            {/* Precio de la partida */}
+            {/* El pie: de un lado lo que agrega, del otro lo que cuesta */}
             {calculada && (
-              <PrecioDeLaPartida
+              <PieDeLaPartida
                 partida={p}
-                costoTotal={calculada.costoTotal}
-                calculado={calculada.total - calculada.ajuste}
-                total={calculada.total}
-                precioUnitario={calculada.precioUnitario}
-                ajusteDerivado={calculada.ajusteDerivado}
+                calculada={calculada}
+                reparto={armado.reparto}
                 moneda={resultado.moneda}
                 soloLectura={soloLectura}
                 onCambio={(cambios) => cambiarPartida(p.id, cambios)}
+                onDelCatalogo={() => setBuscando(p.id)}
+                onEscribirUno={() =>
+                  agregarConcepto(p.id, {
+                    id: nuevoId(),
+                    codigo: "",
+                    descripcion: "",
+                    cantidad: 1,
+                    unidad: "servicio",
+                    costo: null,
+                    costoCatalogo: null,
+                    utilidadPct: 0,
+                    monedaCosto: null,
+                    esfuerzo: null,
+                  })
+                }
               />
             )}
           </article>
@@ -505,22 +482,16 @@ function BloquesDeLaPartida({
 
   return (
     <div className="space-y-1">
-      <div className="flex items-center justify-between">
-        <p className={etiqueta}>Contenido en el documento</p>
-        {!soloLectura && (
-          <button className={btnGhost} onClick={() => onCambio([...bloques, { tipo: "texto", texto: "" }])}>
-            Agregar renglón
-          </button>
-        )}
-      </div>
+      <p className={etiqueta}>Contenido en el documento</p>
 
       {bloques.map((b, i) => (
-        <div key={i} className="flex gap-2 items-center">
+        <div key={i} className="flex items-center gap-2">
+          {/* El tipo, angosto: "Sub-viñeta" es la palabra más larga */}
           <select
             value={b.tipo}
             disabled={soloLectura}
             onChange={(e) => cambiar(i, { tipo: e.target.value as TipoBloque })}
-            className={`${input} w-32 shrink-0`}
+            className={`${campo} w-28 shrink-0 px-2`}
             aria-label="Tipo de renglón"
           >
             {TIPOS.map((t) => (
@@ -529,101 +500,194 @@ function BloquesDeLaPartida({
               </option>
             ))}
           </select>
+
+          {/* El texto se queda con lo que sobra; `min-w-0` es lo que impide
+              que un renglón largo empuje los botones fuera del marco. */}
           <input
             value={b.texto}
             disabled={soloLectura || b.tipo === "espacio"}
             onChange={(e) => cambiar(i, { texto: e.target.value })}
             placeholder={b.tipo === "espacio" ? "(renglón en blanco)" : "Texto"}
-            className={`${input} flex-1`}
+            className={`${campo} flex-1 min-w-0`}
           />
+
           {!soloLectura && (
             <div className="flex gap-1 shrink-0">
-              <button className={btnGhost} onClick={() => mover(i, -1)} aria-label="Subir">
+              <button className={btnGhost} onClick={() => mover(i, -1)} aria-label="Subir el renglón">
                 ↑
               </button>
-              <button className={btnGhost} onClick={() => mover(i, 1)} aria-label="Bajar">
+              <button className={btnGhost} onClick={() => mover(i, 1)} aria-label="Bajar el renglón">
                 ↓
               </button>
-              <button className={btnPeligro} onClick={() => onCambio(bloques.filter((_, j) => j !== i))}>
+              <button
+                className={`${btnPeligro} w-8 px-0`}
+                aria-label="Quitar el renglón"
+                onClick={() => onCambio(bloques.filter((_, j) => j !== i))}
+              >
                 ×
               </button>
             </div>
           )}
         </div>
       ))}
+
+      {/**
+       * Un botón por tipo, como en el cotizador viejo.
+       *
+       * Antes era un solo "Agregar renglón" que metía un texto normal y había
+       * que cambiarle el tipo después. Con seis botones, agregar una viñeta es
+       * un clic en vez de dos.
+       */}
+      {!soloLectura && (
+        <div className="flex flex-wrap gap-2 pt-1">
+          {TIPOS.map((t) => (
+            <button
+              key={t}
+              className={btnGhost}
+              onClick={() => onCambio([...bloques, { tipo: t, texto: "" }])}
+            >
+              + {NOMBRE_BLOQUE[t]}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-// ── El precio, con su ajuste derivado ─────────────────────────────────────────
+// ── El pie de la partida ──────────────────────────────────────────────────────
 
-function PrecioDeLaPartida({
+/**
+ * Lo que agrega a la izquierda y lo que cuesta a la derecha, en un renglón.
+ *
+ * Antes eran dos bloques separados —los botones arriba de los conceptos y una
+ * rejilla de cinco celdas abajo—, y entre los dos ocupaban más alto que los
+ * conceptos de la partida. Aquí es la línea que cierra: al lado de "agregar"
+ * está lo que pasa al agregar.
+ */
+function PieDeLaPartida({
   partida,
-  costoTotal,
-  calculado,
-  total,
-  precioUnitario,
-  ajusteDerivado,
+  calculada,
+  reparto,
   moneda,
   soloLectura,
   onCambio,
+  onDelCatalogo,
+  onEscribirUno,
 }: {
   partida: PartidaArmada;
-  costoTotal: number;
-  calculado: number;
-  total: number;
-  precioUnitario: number;
-  ajusteDerivado: boolean;
+  calculada: ResultadoCotizacion["partidas"][number];
+  reparto: Armado["reparto"];
   moneda: string;
   soloLectura: boolean;
   onCambio: (cambios: Partial<PartidaArmada>) => void;
+  onDelCatalogo: () => void;
+  onEscribirUno: () => void;
 }) {
-  const perdida = partida.precioUnitarioFinal !== null && total < costoTotal;
+  const calculado = calculada.total - calculada.ajuste;
+  const perdida = partida.precioUnitarioFinal !== null && calculada.total < calculada.costoTotal;
 
   return (
-    <div className="border-t border-white/10 pt-3 grid grid-cols-2 sm:grid-cols-5 gap-3 items-end">
-      <div>
-        <p className={etiqueta}>Costo</p>
-        <p className="font-mono text-sm text-white/60">{pesos(costoTotal)}</p>
-      </div>
-      <div>
-        <p className={etiqueta}>Precio calculado</p>
-        <p className="font-mono text-sm text-white/60">{pesos(calculado)}</p>
-      </div>
-      <label className="block">
-        <span className={etiqueta}>Precio unitario final</span>
-        <input
-          value={partida.precioUnitarioFinal ?? ""}
-          disabled={soloLectura}
-          onChange={(e) => onCambio({ precioUnitarioFinal: aNumero(e.target.value) })}
-          placeholder="opcional"
-          className={`${inputNum} mt-1`}
-          inputMode="decimal"
-        />
-      </label>
-      <div>
-        <p className={etiqueta}>{ajusteDerivado ? "Ajuste derivado" : "Ajuste"}</p>
-        {ajusteDerivado ? (
-          <p className="font-mono text-sm text-amber">{pesos(total - calculado)}</p>
-        ) : (
+    <div className="border-t border-white/10 pt-3 space-y-2">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+        {!soloLectura && (
+          <div className="flex gap-2 shrink-0">
+            <button className={btnGhost} onClick={onDelCatalogo}>
+              + Del catálogo
+            </button>
+            <button className={btnGhost} onClick={onEscribirUno}>
+              Escribir uno
+            </button>
+          </div>
+        )}
+
+        <div className="flex-1" />
+
+        {/* Si la partida recibe los gastos generales, y cuánto le tocó */}
+        <label className="flex items-center gap-2 shrink-0" title="Recibe gastos generales">
           <input
-            value={partida.ajuste || ""}
+            type="checkbox"
+            checked={partida.recibeGastosGenerales}
             disabled={soloLectura}
-            onChange={(e) => onCambio({ ajuste: aNumero(e.target.value) ?? 0 })}
-            className={inputNum}
+            onChange={(e) => onCambio({ recibeGastosGenerales: e.target.checked })}
+            className="w-4 h-4 accent-blue"
+          />
+          <span className={etiqueta}>Gasto</span>
+          <span className="font-mono text-xs text-white/60 tabular-nums">
+            {pesos(calculada.gastoAsignado)}
+          </span>
+        </label>
+
+        {/* Con reparto a mano, cuánto se le asigna */}
+        {reparto === "MANUAL" && partida.recibeGastosGenerales && (
+          <label className="flex items-center gap-2 shrink-0">
+            <span className={etiqueta}>A mano</span>
+            <input
+              value={partida.gastoManual ?? ""}
+              disabled={soloLectura}
+              onChange={(e) => onCambio({ gastoManual: aNumero(e.target.value) })}
+              className={`${campoNum} w-24`}
+              inputMode="decimal"
+            />
+          </label>
+        )}
+
+        {/**
+         * El ajuste y el precio final son el mismo renglón porque son la misma
+         * decisión vista de dos maneras: cuando hay precio final, el ajuste se
+         * deriva de él y deja de teclearse.
+         */}
+        <label className="flex items-center gap-2 shrink-0">
+          <span className={etiqueta}>{calculada.ajusteDerivado ? "Ajuste derivado" : "Ajuste"}</span>
+          {calculada.ajusteDerivado ? (
+            <span className="font-mono text-xs text-amber w-24 text-right tabular-nums">
+              {pesos(calculada.ajuste)}
+            </span>
+          ) : (
+            <input
+              value={partida.ajuste || ""}
+              disabled={soloLectura}
+              onChange={(e) => onCambio({ ajuste: aNumero(e.target.value) ?? 0 })}
+              className={`${campoNum} w-24`}
+              inputMode="decimal"
+            />
+          )}
+        </label>
+
+        <label className="flex items-center gap-2 shrink-0">
+          <span className={etiqueta}>P. final</span>
+          <input
+            value={partida.precioUnitarioFinal ?? ""}
+            disabled={soloLectura}
+            onChange={(e) => onCambio({ precioUnitarioFinal: aNumero(e.target.value) })}
+            placeholder="opcional"
+            className={`${campoNum} w-28`}
             inputMode="decimal"
           />
-        )}
-      </div>
-      <div className="text-right">
-        <p className={etiqueta}>Unitario</p>
-        <p className="font-mono text-sm text-white">{conMoneda(precioUnitario, moneda)}</p>
+        </label>
+
+        <div className="shrink-0 text-right">
+          <p className={etiqueta}>Unitario</p>
+          <p className="font-mono text-xs text-white tabular-nums">{pesos(calculada.precioUnitario)}</p>
+        </div>
+
+        <div className="shrink-0 text-right">
+          <p className={etiqueta}>Total</p>
+          <p className="font-mono text-sm text-white font-bold tabular-nums">
+            {conMoneda(calculada.importe, moneda)}
+          </p>
+        </div>
       </div>
 
+      {/* El costo y el precio calculado, en chico: son del panel interno */}
+      <p className="font-mono text-[10px] text-white/35">
+        Costo {pesos(calculada.costoTotal)} · calculado {pesos(calculado)}
+      </p>
+
       {perdida && (
-        <p className="col-span-2 sm:col-span-5 font-body text-xs text-danger bg-danger/15 rounded-lg px-3 py-2">
-          Se vendería en {pesos(total)} y cuesta {pesos(costoTotal)}: es una venta con pérdida de{" "}
-          {pesos(costoTotal - total)}.
+        <p className="font-body text-xs text-danger bg-danger/15 rounded-lg px-3 py-2">
+          Se vendería en {pesos(calculada.total)} y cuesta {pesos(calculada.costoTotal)}: es una venta con
+          pérdida de {pesos(calculada.costoTotal - calculada.total)}.
         </p>
       )}
     </div>

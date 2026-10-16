@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { Armado, ResultadoCotizacion } from "@/src/lib/cotizador";
-import { aNumero, btnGhost, etiqueta, input, inputNum, tarjeta } from "../ui";
+import { aNumero, btnGhost, campoNum, etiqueta, input, inputNum, tarjeta } from "../ui";
 
 /**
  * Moneda, tipo de cambio y asesoría.
@@ -119,7 +119,7 @@ export function MonedaYAsesoria({
                 });
               }}
               placeholder="18.4567"
-              className={`${inputNum} mt-1 w-40`}
+              className={`${campoNum} mt-1 w-40`}
               inputMode="decimal"
             />
           </label>

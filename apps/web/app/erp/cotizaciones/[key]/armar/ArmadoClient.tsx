@@ -56,6 +56,17 @@ const ESPERA_AUTOGUARDADO_MS = 2500;
 
 const hora = () => new Date().toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
 
+/** Los mismos colores de estatus que en el listado, para no aprender dos. */
+const BADGE: Record<string, string> = {
+  PROCESO: "bg-amber-500/20 border-amber-400/30 text-amber-300",
+  REVISION: "bg-blue/20 border-blue/30 text-blue-mid",
+  ENVIADA: "bg-purple-500/20 border-purple-400/30 text-purple-300",
+  ASIGNADA: "bg-green/20 border-green/30 text-green",
+  "NO ASIGNADA": "bg-white/5 border-white/20 text-white/40",
+  CANCELADA: "bg-red-500/20 border-red-400/30 text-red-400",
+};
+const badge = (e: string) => BADGE[e] ?? "bg-white/10 border-white/20 text-white/50";
+
 export function ArmadoClient({
   cotKey,
   version,
@@ -225,19 +236,47 @@ export function ArmadoClient({
 
   return (
     <main className="min-h-screen bg-navy text-white pb-24">
-      {/* Encabezado */}
+      {/**
+        * El encabezado, con el total grande a la derecha.
+        *
+        * Es la cifra que se mira cada vez que se toca un número, y estaba al
+        * final de la pantalla: había que bajar para ver el efecto de lo que se
+        * acababa de escribir arriba. Pegado y a la vista, el cotizador se
+        * vuelve una herramienta de decisión.
+        */}
       <header className="sticky top-0 z-20 bg-navy/95 backdrop-blur border-b border-white/10">
-        <div className="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center gap-3">
+        <div className="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center gap-x-4 gap-y-2">
           <a href="/erp/cotizaciones" className={btnGhost}>
             ← Cotizaciones
           </a>
-          <div className="flex-1 min-w-[200px]">
-            <p className="font-mono text-sm text-white">{cotizacion.folio}</p>
+
+          <div className="flex-1 min-w-[180px]">
+            <div className="flex items-center gap-2 flex-wrap">
+              <p className="font-mono text-sm text-white">{cotizacion.folio}</p>
+              <span className={`font-mono text-[9px] px-2 py-0.5 rounded-full border ${badge(cotizacion.estatus)}`}>
+                {cotizacion.estatus}
+              </span>
+              {congelado && (
+                <span className="font-mono text-[9px] px-2 py-0.5 rounded-full bg-blue/20 border border-blue/30 text-blue-mid">
+                  CONGELADA
+                </span>
+              )}
+            </div>
             <p className="font-body text-xs text-white/50 truncate">
               {cotizacion.cliente} · {cotizacion.titulo}
             </p>
           </div>
+
           <EstadoGuardado guardado={guardado} soloLectura={soloLectura} onRecargar={cargar} />
+
+          <div className="text-right shrink-0">
+            <p className="font-mono text-[9px] text-white/40 uppercase tracking-widest">
+              Total {resultado.moneda}
+            </p>
+            <p className="font-head text-2xl font-bold text-white leading-none tabular-nums">
+              ${resultado.total.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+            </p>
+          </div>
         </div>
       </header>
 
