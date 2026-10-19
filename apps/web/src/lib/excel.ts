@@ -36,6 +36,25 @@ function entradasZip(buf: Buffer): Map<string, Buffer> {
 
   const total = buf.readUInt16LE(eocd + 10);
   let p = buf.readUInt32LE(eocd + 16);
+
+  /**
+   * ZIP64, que este lector no entiende.
+   *
+   * Cuando un ZIP pasa de 65 535 entradas o de 4 GiB, esos dos campos se
+   * quedan en `0xFFFF`/`0xFFFFFFFF` y los de verdad viven en un bloque aparte.
+   * Leerlos tal cual daría cero entradas, o una posición disparatada, y el
+   * error saldría después y en otro lado —"la hoja COSTOS no tiene datos"—,
+   * que es la peor manera de enterarse.
+   *
+   * Ningún libro de los controles se acerca, pero decirlo cuesta dos líneas.
+   */
+  if (total === 0xffff || p === 0xffffffff) {
+    throw new Error(
+      "El archivo usa ZIP64 (más de 65 535 entradas o más de 4 GiB) y este lector no lo soporta. " +
+        "Vuelve a guardarlo desde Excel como .xlsx normal.",
+    );
+  }
+
   const fuera = new Map<string, Buffer>();
 
   for (let n = 0; n < total; n++) {

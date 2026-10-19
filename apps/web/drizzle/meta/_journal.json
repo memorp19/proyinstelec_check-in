@@ -43,6 +43,13 @@
       "when": 1791249218947,
       "tag": "0005_ot_una_por_cotizacion",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791921411312,
+      "tag": "0006_cotizador_modelo",
+      "breakpoints": true
     }
   ]
 }

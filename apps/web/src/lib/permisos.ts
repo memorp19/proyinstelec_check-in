@@ -27,6 +27,15 @@ export const PERMISOS = [
   // Comercial
   "cotizaciones.enviar",   // enviar cotización al cliente (ex EQUIPO_REMITENTES)
   "cotizaciones.aprobar",  // revisar/aprobar/solicitar corrección
+  /**
+   * Editar el catálogo de servicios: costos, descripciones, altas y bajas.
+   *
+   * Separado de `modulo.cotizaciones` porque el alcance es otro: cotizar afecta
+   * a una cotización, y cambiar un costo base afecta a TODAS las que se armen
+   * desde entonces. Lo tienen los cotizadores y el gerente de operaciones.
+   * Cada cambio exige motivo y queda en `cat_servicios_cambios`.
+   */
+  "catalogo.servicios.editar",
 
   // Actividades / Weekly
   "actividades.asignar",
@@ -93,7 +102,7 @@ export const GRUPOS_PERMISOS: Array<{ titulo: string; permisos: Permiso[] }> = [
   },
   {
     titulo: "Comercial",
-    permisos: ["cotizaciones.enviar", "cotizaciones.aprobar"],
+    permisos: ["cotizaciones.enviar", "cotizaciones.aprobar", "catalogo.servicios.editar"],
   },
   {
     titulo: "Actividades y seguimiento",

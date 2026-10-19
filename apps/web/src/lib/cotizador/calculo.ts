@@ -20,8 +20,10 @@ import type {
   ResultadoCotizacion,
 } from "./tipos";
 
-/** IVA vigente. Una constante con nombre, no un 0.16 suelto en una fórmula. */
-export const IVA = 0.16;
+/** IVA vigente, en por ciento. Una constante con nombre, no un 16 suelto. */
+export const IVA_PCT = 16;
+/** El mismo IVA como factor, para multiplicar. */
+export const IVA = IVA_PCT / 100;
 
 /** Nodos que cubre el costo base de un estudio, cuando no se configura otro. */
 export const BASE_NODOS_POR_OMISION = 10;
@@ -337,6 +339,7 @@ export function calcularCotizacion(entrada: EntradaCotizacion): ResultadoCotizac
       costoTotal: 0,
       asesoria: 0,
       ajuste: redondear(Number(p.ajuste) || 0),
+      ajusteDerivado: false,
       total: 0,
       precioUnitario: 0,
       importe: 0,
@@ -434,8 +437,32 @@ export function calcularCotizacion(entrada: EntradaCotizacion): ResultadoCotizac
   }
 
   // ── 6. El total de cada partida y lo que ve el cliente ─────────────────────
+  const porIdEntrada = new Map(entrada.partidas.map((p) => [p.id, p]));
   for (const p of partidas) {
-    p.total = redondear(p.costoTotal + p.asesoria + p.ajuste);
+    const calculado = redondear(p.costoTotal + p.asesoria);
+    const precioFinal = porIdEntrada.get(p.id)?.precioUnitarioFinal;
+
+    // Con precio final, el ajuste se DERIVA en vez de capturarse: la
+    // diferencia contra el cálculo queda a la vista en lugar de aparecer un
+    // precio que nadie sabe de dónde sale.
+    if (precioFinal !== undefined && precioFinal !== null && p.cantidad > 0) {
+      const objetivo = redondear(Number(precioFinal) * p.cantidad);
+      p.ajuste = redondear(objetivo - calculado);
+      p.ajusteDerivado = true;
+
+      // Vender por debajo del costo puede ser una decisión —entrar con un
+      // cliente, cerrar un paquete— pero tiene que ser una decisión y no un
+      // descuido.
+      if (objetivo < p.costoTotal) {
+        avisos.push(
+          `La partida ${p.orden} se vendería en ${objetivo.toFixed(2)} y cuesta ` +
+            `${p.costoTotal.toFixed(2)}: es una venta con pérdida de ` +
+            `${redondear(p.costoTotal - objetivo).toFixed(2)}.`,
+        );
+      }
+    }
+
+    p.total = redondear(calculado + p.ajuste);
     p.precioUnitario = p.cantidad > 0 ? redondear(p.total / p.cantidad) : 0;
     // El importe se recompone desde el unitario redondeado: el cliente multiplica
     // lo que ve, y el subtotal tiene que dar lo mismo que él saca con su
@@ -458,10 +485,24 @@ export function calcularCotizacion(entrada: EntradaCotizacion): ResultadoCotizac
       `El subtotal cierra en ${subtotal.toFixed(2)}, en negativo. La cotización no es cobrable así.`,
     );
   }
-  const iva = redondear(subtotal * IVA);
+  // El IVA es el de la versión: una cotización vieja se reimprime con el que
+  // llevaba. Sin captura, el vigente.
+  const ivaPct = entrada.ivaPct === undefined || entrada.ivaPct === null
+    ? IVA_PCT
+    : Number(entrada.ivaPct);
+
+  // Igual que la asesoría: fuera de 0–100 no es una tasa rara, es un error de
+  // captura. Un IVA negativo deja el total por debajo del subtotal, que es de
+  // las cosas que nadie mira dos veces porque "el sistema lo calculó".
+  if (!Number.isFinite(ivaPct) || ivaPct < 0 || ivaPct > 100) {
+    avisos.push(`El IVA es ${entrada.ivaPct} %, fuera del rango razonable de 0 a 100. Revísalo.`);
+  }
+
+  const iva = redondear(subtotal * (ivaPct / 100));
 
   return {
     moneda,
+    ivaPct,
     partidas,
     gastos,
     costoTotal: redondear(partidas.reduce((s, p) => s + p.costoTotal, 0)),

@@ -19,10 +19,29 @@ export interface AreaOT {
   correo?: string; // correo del área para avisos de nueva OT
 }
 
+/**
+ * Los valores con los que arranca una cotización nueva.
+ *
+ * Viven aquí y no en el código porque cambian con el negocio —la asesoría
+ * subió, el estudio tipo trae otra base de nodos— y cambiarlos no debería
+ * necesitar un despliegue. Son **el punto de partida**: cada versión de
+ * cotización guarda los suyos (decisión 5), así que mover esto no toca ninguna
+ * cotización ya armada.
+ */
+export interface ConfigCotizador {
+  /** Porcentaje de asesoría que se propone en una cotización nueva. */
+  ASESORIA_PCT_DEFAULT: number;
+  /** Nodos que cubre un estudio antes de cobrar nodo adicional. */
+  BASE_NODOS_ESTUDIO: number;
+  /** Horas de trabajo al día con las que se estima un estudio. */
+  HORAS_DIA_ESTUDIO: number;
+}
+
 export interface ConfigErp {
   areas_ot: AreaOT[];
   /** Correos en copia en todo aviso de nueva OT */
   cc_aviso_ot: string[];
+  cotizador: ConfigCotizador;
 }
 
 export const CONFIG_ERP_DEFAULT: ConfigErp = {
@@ -33,6 +52,11 @@ export const CONFIG_ERP_DEFAULT: ConfigErp = {
     { clave: "ADMINISTRACION", nombre: "Administración" },
   ],
   cc_aviso_ot: [],
+  cotizador: {
+    ASESORIA_PCT_DEFAULT: 10,
+    BASE_NODOS_ESTUDIO: 10,
+    HORAS_DIA_ESTUDIO: 8,
+  },
 };
 
 // ── Read / write ──────────────────────────────────────────────────────────────
@@ -48,6 +72,12 @@ export async function getConfigErp(): Promise<ConfigErp> {
   return {
     areas_ot: valor.areas_ot ?? CONFIG_ERP_DEFAULT.areas_ot,
     cc_aviso_ot: valor.cc_aviso_ot ?? CONFIG_ERP_DEFAULT.cc_aviso_ot,
+    // Campo por campo: una fila guardada antes de que existiera el cotizador
+    // —o con el bloque a medias— no debe dejar la cotización sin asesoría.
+    cotizador: {
+      ...CONFIG_ERP_DEFAULT.cotizador,
+      ...(valor.cotizador ?? {}),
+    },
   };
 }
 

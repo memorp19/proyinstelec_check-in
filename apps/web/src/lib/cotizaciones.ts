@@ -72,7 +72,16 @@ export interface Aprobacion {
   fecha: string;
 }
 
-type FilaCotizacion = typeof cotizaciones.$inferSelect;
+/**
+ * Lo que `aCotizacion` necesita leer.
+ *
+ * Se declara como el `$inferSelect` MENOS las columnas que el dominio todavía
+ * no expone, en vez de la fila entera: `camposVigentes` arma un subconjunto, y
+ * exigirle la fila completa obliga a añadir ahí cada columna nueva aunque
+ * nadie la use. `origen_monto` entra con el modelo del cotizador y lo leerá el
+ * congelado, no el listado.
+ */
+type FilaCotizacion = Omit<typeof cotizaciones.$inferSelect, "origenMonto">;
 
 function aCotizacion(f: FilaCotizacion): Cotizacion {
   return {

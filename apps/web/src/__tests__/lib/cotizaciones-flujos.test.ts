@@ -80,6 +80,7 @@ beforeEach(() => {
       { clave: "MANTENIMIENTOS", nombre: "Mantenimientos" },
     ],
     cc_aviso_ot: ["gerencia@proyinstelec.mx"],
+    cotizador: { ASESORIA_PCT_DEFAULT: 10, BASE_NODOS_ESTUDIO: 10, HORAS_DIA_ESTUDIO: 8 },
   });
 });
 
