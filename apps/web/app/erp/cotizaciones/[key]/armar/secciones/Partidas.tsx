@@ -177,11 +177,13 @@ export function Partidas({
                 aria-label="Unidad de la partida"
                 title="Unidad"
               />
+              {/* "Negritas" no cabía en w-28: con el relleno propio del select y
+                  su flecha quedaban 74 px para 67 de texto, y se recortaba. */}
               <select
                 value={p.formato}
                 disabled={soloLectura}
                 onChange={(e) => cambiarPartida(p.id, { formato: e.target.value as PartidaArmada["formato"] })}
-                className={`${campo} w-28 shrink-0 px-2`}
+                className={`${campo} w-32 shrink-0 px-2`}
                 aria-label="Formato del título"
                 title="Cómo sale el título en el documento"
               >
