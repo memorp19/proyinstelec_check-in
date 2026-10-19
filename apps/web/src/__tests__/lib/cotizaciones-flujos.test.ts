@@ -47,7 +47,7 @@ import {
 } from "@/src/lib/cotizaciones";
 import { registrarBitacora } from "@/src/lib/bitacora";
 import { buscarPdfCotizacion } from "@/src/lib/drive-erp";
-import { enviarCorreo } from "@/src/lib/correo";
+import { enviarCorreo, plantillaCorreo } from "@/src/lib/correo";
 import { createOT } from "@/src/lib/ot";
 import { listUsers } from "@/src/lib/users";
 import { getConfigErp } from "@/src/lib/config-erp";
@@ -138,6 +138,21 @@ describe("enviarARevision", () => {
     expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "REVISION", 1);
   });
 
+  // Los correos salen de la empresa: con el folio crudo le enseñarían al equipo
+  // —y al revisor— la convención "-v1" que esta rama vino a quitar.
+  it("los dos correos llevan el folio canónico de esa versión", async () => {
+    dosEnProceso();
+
+    await enviarARevision({ numero: 1, anio: 2026, version: 1, usuario: "ana@proyinstelec.mx" });
+
+    const correos = vi.mocked(enviarCorreo).mock.calls.map(([c]) => c);
+    expect(correos).toHaveLength(2); // revisores + elaboradora
+    for (const correo of correos) {
+      expect(correo.asunto).toContain("PCOTOP-001-2026-1");
+      expect(`${correo.asunto} ${correo.html}`).not.toContain("-v1");
+    }
+  });
+
   // La columna guarda lo que se cargó: la recarga de 2026 metió 75 folios con
   // "-v1". Un registro nuevo no repite esa convención.
   it("la bitácora anota el folio canónico de esa versión, nunca el \"-v1\"", async () => {
@@ -192,6 +207,21 @@ describe("solicitarCorreccion", () => {
     expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "PROCESO", 0);
     const llamada = vi.mocked(enviarCorreo).mock.calls[0][0];
     expect(llamada.html).toContain("Falta el desglose de materiales");
+  });
+
+  it("el correo lleva el folio canónico aunque la columna diga \"-v1\"", async () => {
+    const importada = { ...vigente, version: 1, folio: "PCOTOP-001-2026-v1", estatus: "REVISION" };
+    vi.mocked(getVigente).mockResolvedValue(importada as any);
+    vi.mocked(cambiarEstatus).mockResolvedValue({ ...importada, estatus: "PROCESO" } as any);
+
+    await solicitarCorreccion({
+      numero: 1, anio: 2026,
+      comentario: "Falta el desglose de materiales", usuario: "eduardo@proyinstelec.mx",
+    });
+
+    const llamada = vi.mocked(enviarCorreo).mock.calls[0][0];
+    expect(llamada.asunto).toBe("Corrección solicitada · PCOTOP-001-2026-1");
+    expect(llamada.html).not.toContain("-v1");
   });
 });
 
@@ -283,6 +313,30 @@ describe("enviarAlCliente", () => {
     // Sobre la versión cuya aprobación se verificó: la aprobación es por
     // versión exacta, y ENVIADA no puede caer en otra.
     expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "ENVIADA", 0);
+  });
+
+  // Este correo sale al CLIENTE, y el folio que lleva es el que va a citar en
+  // su orden de compra. El título viaja en `plantillaCorreo`, que el falso
+  // reduce al cuerpo: por eso se mira la llamada y no el html.
+  it("el correo al cliente lleva el folio canónico, no el de la columna", async () => {
+    const importada = { ...vigente, version: 1, folio: "PCOTOP-001-2026-v1" };
+    vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({ puede: true, cotizacion: importada as any });
+    vi.mocked(buscarPdfCotizacion).mockResolvedValue({
+      pdf: { filename: "PCOTOP-001-2026-1.pdf", contenido: Buffer.from("pdf") },
+      nombresEnCarpeta: ["PCOTOP-001-2026-1.pdf"],
+    });
+    vi.mocked(cambiarEstatus).mockResolvedValue({ ...importada, estatus: "ENVIADA" } as any);
+
+    await enviarAlCliente({
+      numero: 1, anio: 2026, destinatarios: ["cliente@aceros.mx"],
+      remitente: { email: "maria@proyinstelec.mx", nombre: "María" },
+    });
+
+    expect(vi.mocked(plantillaCorreo).mock.calls[0][0].titulo).toBe(
+      "Cotización PCOTOP-001-2026-1",
+    );
+    // Y el estatus cae en la versión aprobada, no en la vigente
+    expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "ENVIADA", 1);
   });
 
   // El estatus ENVIADA afirma que el cliente recibió la cotización. Si el correo
