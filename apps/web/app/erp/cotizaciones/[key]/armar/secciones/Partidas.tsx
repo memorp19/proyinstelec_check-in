@@ -257,13 +257,23 @@ export function Partidas({
 
                 return (
                   <div key={c.id} className="flex flex-wrap ancho:flex-nowrap items-center gap-2">
-                    {/* Código y descripción, con el botón del estudio al lado */}
+                    {/**
+                     * El código arriba y la descripción completa debajo,
+                     * **siempre**, aunque ocupe dos renglones.
+                     *
+                     * Iban en la misma línea con `flex-wrap` y `truncate`, así
+                     * que los nombres cortos cabían de corrido y los largos se
+                     * partían y además se cortaban con puntos suspensivos:
+                     * "Pruebas de características de Relevadores de
+                     * Sobrecorriente (Electro…". Dos renglones fijos se ven
+                     * iguales entre sí y no esconden nada — que es el trabajo
+                     * de esta columna.
+                     */}
                     <div className="w-full ancho:w-auto ancho:flex-1 ancho:min-w-[120px] min-w-0">
                       {c.codigo ? (
-                        <div className="px-1">
-                          <div className="flex items-baseline gap-2 flex-wrap">
+                        <div className="px-1 py-1">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-mono text-xs text-blue-mid">{c.codigo}</span>
-                            <span className="font-body text-xs text-white/70 truncate">{c.descripcion}</span>
                             {esEstudio && !soloLectura && (
                               <button
                                 className={btnGhost}
@@ -273,6 +283,7 @@ export function Partidas({
                               </button>
                             )}
                           </div>
+                          <p className="font-body text-xs text-white/70 leading-snug">{c.descripcion}</p>
                           {esEstudio && calc?.horas !== undefined && (
                             <p className="font-mono text-[10px] text-white/40">
                               {pesos(calc.horas)} h × ${pesos(c.esfuerzo!.tarifaHora)}/h
