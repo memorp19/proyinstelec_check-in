@@ -48,7 +48,12 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
   const usuario = session!.user.email ?? "";
   try {
     const congelado = await congelarVersion({ numero: key.numero, anio: key.anio, version, usuario });
-    const { cotizacion, avisos } = await enviarARevision({ numero: key.numero, anio: key.anio, usuario });
+    const { cotizacion, avisos } = await enviarARevision({
+      numero: key.numero,
+      anio: key.anio,
+      version,
+      usuario,
+    });
 
     return NextResponse.json({
       cotizacion,

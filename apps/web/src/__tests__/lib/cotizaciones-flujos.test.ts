@@ -45,12 +45,14 @@ import {
   registrarAprobacion,
   updateCotizacion,
 } from "@/src/lib/cotizaciones";
+import { registrarBitacora } from "@/src/lib/bitacora";
 import { buscarPdfCotizacion } from "@/src/lib/drive-erp";
 import { enviarCorreo } from "@/src/lib/correo";
 import { createOT } from "@/src/lib/ot";
 import { listUsers } from "@/src/lib/users";
 import { getConfigErp } from "@/src/lib/config-erp";
 import {
+  enviarARevision,
   aprobarCotizacion,
   solicitarCorreccion,
   enviarAlCliente,
@@ -81,6 +83,71 @@ beforeEach(() => {
     ],
     cc_aviso_ot: ["gerencia@proyinstelec.mx"],
     cotizador: { ASESORIA_PCT_DEFAULT: 10, BASE_NODOS_ESTUDIO: 10, HORAS_DIA_ESTUDIO: 8 },
+  });
+});
+
+describe("enviarARevision", () => {
+  /**
+   * Dos versiones en PROCESO a la vez: se puede, porque crear una versión
+   * nueva no exige ningún estatus. El flujo tiene que mover **la que se le
+   * pide**, no "la vigente" — que es la más alta, y por tanto la otra.
+   *
+   * El falso modela lo que `cambiarEstatus` hace de verdad: con versión toca
+   * esa fila; sin ella, la vigente. Es lo que distingue el arreglo del error
+   * que venía: la ruta congelaba la v0 y mandaba a revisión la v1.
+   */
+  function dosEnProceso() {
+    const filas = [
+      { ...vigente, version: 0, folio: "PCOTOP-001-2026", estatus: "PROCESO" },
+      { ...vigente, version: 1, folio: "PCOTOP-001-2026-v1", estatus: "PROCESO" },
+    ];
+    vi.mocked(cambiarEstatus).mockImplementation((async (
+      _numero: number,
+      _anio: number,
+      nuevo: string,
+      version?: number,
+    ) => {
+      const fila =
+        version === undefined
+          ? [...filas].sort((a, b) => b.version - a.version)[0]
+          : filas.find((f) => f.version === version);
+      if (!fila) throw new Error("Cotización no encontrada");
+      fila.estatus = nuevo;
+      return { ...fila };
+    }) as any);
+    return filas;
+  }
+
+  const estatus = (filas: Array<{ estatus: string }>) => filas.map((f) => f.estatus);
+
+  it("manda la v0 y deja la v1 en PROCESO", async () => {
+    const filas = dosEnProceso();
+
+    await enviarARevision({ numero: 1, anio: 2026, version: 0, usuario: "ana@proyinstelec.mx" });
+
+    expect(estatus(filas)).toEqual(["REVISION", "PROCESO"]);
+    expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "REVISION", 0);
+  });
+
+  it("y el simétrico: manda la v1 y deja la v0 en PROCESO", async () => {
+    const filas = dosEnProceso();
+
+    await enviarARevision({ numero: 1, anio: 2026, version: 1, usuario: "ana@proyinstelec.mx" });
+
+    expect(estatus(filas)).toEqual(["PROCESO", "REVISION"]);
+    expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "REVISION", 1);
+  });
+
+  // La columna guarda lo que se cargó: la recarga de 2026 metió 75 folios con
+  // "-v1". Un registro nuevo no repite esa convención.
+  it("la bitácora anota el folio canónico de esa versión, nunca el \"-v1\"", async () => {
+    dosEnProceso();
+
+    await enviarARevision({ numero: 1, anio: 2026, version: 1, usuario: "ana@proyinstelec.mx" });
+
+    expect(registrarBitacora).toHaveBeenCalledWith(
+      expect.objectContaining({ accion: "COTIZACION_A_REVISION", detalle: "PCOTOP-001-2026-1" }),
+    );
   });
 });
 
@@ -121,7 +188,8 @@ describe("solicitarCorreccion", () => {
       comentario: "Falta el desglose de materiales", usuario: "eduardo@proyinstelec.mx",
     });
 
-    expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "PROCESO");
+    // Sobre la fila que se validó, no sobre "la vigente de ahora".
+    expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "PROCESO", 0);
     const llamada = vi.mocked(enviarCorreo).mock.calls[0][0];
     expect(llamada.html).toContain("Falta el desglose de materiales");
   });
@@ -212,7 +280,9 @@ describe("enviarAlCliente", () => {
     expect(llamada.para).toEqual(["cliente@aceros.mx"]);
     expect(llamada.cc).toEqual(["eduardo@proyinstelec.mx"]); // el equipo menos la remitente
     expect(llamada.adjuntos?.[0].filename).toBe("PCOTOP-001-2026.pdf");
-    expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "ENVIADA");
+    // Sobre la versión cuya aprobación se verificó: la aprobación es por
+    // versión exacta, y ENVIADA no puede caer en otra.
+    expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "ENVIADA", 0);
   });
 
   // El estatus ENVIADA afirma que el cliente recibió la cotización. Si el correo

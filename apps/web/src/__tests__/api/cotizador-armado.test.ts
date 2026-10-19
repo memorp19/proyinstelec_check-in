@@ -284,6 +284,25 @@ describe("POST revisión", () => {
     expect(congelarVersion).not.toHaveBeenCalled();
   });
 
+  /**
+   * La versión que se congela y la que pasa a REVISION tienen que ser la
+   * misma. La ruta congelaba la que le pedían y el flujo mandó la vigente
+   * mientras `enviarARevision` no recibió versión: con dos en PROCESO,
+   * congelaba la v0 y mandaba la v1.
+   */
+  it.each([0, 1])("congela y manda la MISMA versión (v%i)", async (version) => {
+    vi.mocked(getArmado).mockResolvedValue({
+      ...completo,
+      cotizacion: { ...cotizacion, version, folio: `PCOTOP-450-2026${version > 0 ? `-${version}` : ""}` },
+      armado: { ...armado, version },
+    } as never);
+
+    expect((await POST_REVISION(pedir({ version }, "POST"), { params })).status).toBe(200);
+
+    expect(congelarVersion).toHaveBeenCalledWith(expect.objectContaining({ version }));
+    expect(enviarARevision).toHaveBeenCalledWith(expect.objectContaining({ version }));
+  });
+
   it("una transición que el flujo no permite, 422", async () => {
     vi.mocked(enviarARevision).mockRejectedValue(new Error("Transición no permitida: ENVIADA → REVISION"));
     expect((await POST_REVISION(pedir({ version: 0 }, "POST"), { params })).status).toBe(422);

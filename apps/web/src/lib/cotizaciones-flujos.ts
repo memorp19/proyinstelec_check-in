@@ -190,19 +190,38 @@ export async function crearNuevaVersionCompleta(params: {
 
 // ── 1. Enviar a revisión ──────────────────────────────────────────────────────
 
+/**
+ * Manda a revisión **la versión que se indica**, no la vigente.
+ *
+ * `version` es obligatoria a propósito. Crear una versión nueva no exige
+ * ningún estatus, así que dos pueden estar en PROCESO a la vez; con la versión
+ * opcional, la ruta del cotizador congelaba la v0 y mandaba a revisión la v1:
+ * el revisor recibía una versión que nadie congeló y la congelada se quedaba
+ * editable. Exigirla hace que el compilador marque cualquier llamada que no
+ * diga sobre cuál opera.
+ */
 export async function enviarARevision(params: {
   numero: number;
   anio: number;
+  version: number;
   usuario: string;
 }): Promise<{ cotizacion: Cotizacion; avisos: string[] }> {
   const avisos: string[] = [];
-  const cotizacion = await cambiarEstatus(params.numero, params.anio, "REVISION");
+  const cotizacion = await cambiarEstatus(
+    params.numero,
+    params.anio,
+    "REVISION",
+    params.version,
+  );
 
   await registrarBitacora({
     accion: "COTIZACION_A_REVISION",
     usuario: params.usuario,
     referencia: cotPk(cotizacion.numero, cotizacion.anio),
-    detalle: cotizacion.folio,
+    // El folio canónico de la versión que se mandó, no el de la columna: así la
+    // bitácora dice cuál fue, y las importadas de 2026 no repiten su "-v1" en un
+    // registro nuevo.
+    detalle: folioEsperado(cotizacion),
   });
 
   // PDF adjunto si ya existe en la carpeta (opcional en esta etapa)
@@ -321,7 +340,15 @@ export async function solicitarCorreccion(params: {
     throw new Error(`La cotización ya no está en revisión (estatus actual: ${vigente.estatus})`);
   }
 
-  const cotizacion = await cambiarEstatus(params.numero, params.anio, "PROCESO");
+  // Sobre la fila que se acaba de validar, no sobre "la vigente de ahora": si
+  // entre la lectura y la escritura nació una versión, la corrección caería
+  // sobre una que nadie revisó.
+  const cotizacion = await cambiarEstatus(
+    params.numero,
+    params.anio,
+    "PROCESO",
+    vigente.version,
+  );
   await registrarBitacora({
     accion: "COTIZACION_CORRECCION",
     usuario: params.usuario,
@@ -494,12 +521,20 @@ export async function enviarAlCliente(params: {
     throw new Error(motivoNoEnviado(resultado.motivo));
   }
 
-  // Estatus → ENVIADA (si venía de REVISION) y fecha de envío
+  // Estatus → ENVIADA (si venía de REVISION) y fecha de envío, sobre la
+  // versión cuya aprobación se verificó. La aprobación se guarda por
+  // versión exacta (regla del legacy): escribir ENVIADA en otra sellaría como
+  // enviada una versión que nadie aprobó, y con el PDF de esta.
   const ahora = new Date().toISOString();
   if (cotizacion.estatus === "REVISION") {
-    await cambiarEstatus(params.numero, params.anio, "ENVIADA");
+    await cambiarEstatus(params.numero, params.anio, "ENVIADA", cotizacion.version);
   }
-  await updateCotizacion(params.numero, params.anio, { fechaEnvio: ahora });
+  await updateCotizacion(
+    params.numero,
+    params.anio,
+    { fechaEnvio: ahora },
+    cotizacion.version,
+  );
 
   await registrarBitacora({
     accion: "COTIZACION_ENVIADA",
@@ -508,7 +543,7 @@ export async function enviarAlCliente(params: {
     detalle: `${cotizacion.folio} → ${params.destinatarios.join(", ")}`,
   });
 
-  const actualizada = await getVigente(params.numero, params.anio);
+  const actualizada = await getVersion(params.numero, params.anio, cotizacion.version);
   return { cotizacion: actualizada ?? cotizacion };
 }
 
