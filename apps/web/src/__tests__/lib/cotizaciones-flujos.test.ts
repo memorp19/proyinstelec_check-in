@@ -462,7 +462,7 @@ describe("ingresarOrdenCompra — elegir versión", () => {
   it("avisa si la versión no existe", async () => {
     vi.mocked(getVersion).mockResolvedValue(null);
 
-    await expect(ingresarOrdenCompra({ ...alta, version: 7 })).rejects.toThrow("versión 7");
+    await expect(ingresarOrdenCompra({ ...alta, version: 7 })).rejects.toThrow("PCOTOP-002-2026-7");
   });
 
   // Una cotización, una OT: sigue aplicando aunque se intente con otra versión.

@@ -992,11 +992,34 @@ puras en `src/lib/`.
 **Probable por sí mismo:** el reporte corre contra los datos reales y dice qué
 cargaría sin escribir.
 
-### PR 5 · La pantalla del cotizador
+### PR 5 · La pantalla del cotizador ✅ **hecho**
 
-Las cuatro secciones de §3, autoguardado, bloqueo por estatus y totales en vivo.
+Las cuatro secciones de §3 —partidas con su contenido del documento y sus
+conceptos, gastos, moneda y asesoría, condiciones y documento—, autoguardado
+con bloqueo optimista, edición según el estatus y los totales en vivo. Más las
+rutas `GET`/`PUT` del armado, que venían del PR anterior.
 
-**Probable por sí mismo:** se arma una cotización de cero y se vuelve a abrir.
+**Los totales se calculan en la pantalla**, con el mismo motor que el
+congelado. Es lo que convierte el cotizador en una herramienta de decisión y no
+en un formulario: se ve el efecto de mover una cantidad antes de guardar nada, y
+como el motor es puro los números son los que van a quedar.
+
+Entró también lo que la pantalla necesitaba para ser usable de verdad:
+
+| | |
+|---|---|
+| **Vista previa** | El último paso antes de mandar a revisión: las partidas con su unitario y su importe, totales, letra y condiciones. El PR del PDF la sustituye por el documento con marca de BORRADOR |
+| **Quién edita** | La arma quien la dio de alta —por `created_by` o por `elaboro` contra sus iniciales— y el gerente de operaciones con `cotizaciones.armar.todas` (§6.3) |
+| **Eliminar** | Solo lo que nunca salió: PROCESO, sin envío, sin OT y sin OC. El número no se reutiliza |
+| **El documento** | Llega escrito: contacto del catálogo de clientes, los dos párrafos redactados desde el título y las normas sugeridas. Lo escrito nunca se pisa |
+| **Los folios** | `PCOTOP-260-2026`, `-1`, `-2`… en toda la interfaz y en la bitácora nueva. Nunca "v1" |
+| **La presentación** | "57 Servicios" y no "57.0000 servicios"; el teléfono como `+ (52) 775 110 4791` |
+
+**Probado contra `recarga-2026`:** se armó una cotización de cero y se volvió a
+abrir; la 450 dio 65,841.60 y, con 15 % de utilidad en la primera partida,
+68,138.40; un estudio con sus parámetros cerró en 29,800 de costo → 32,780 con
+asesoría → 38,024.80 con IVA, con su importe en letra; y el congelado guardó en
+`cot_importes` exactamente lo que enseñaba la pantalla.
 
 ### PR 6 · El documento y el PDF
 
@@ -1007,11 +1030,14 @@ prefiriendo el id.
 **Probable por sí mismo:** se genera un PDF y se compara con el que produce Apps
 Script para la misma cotización. Es la prueba de aceptación de toda la fase.
 
-### PR 7 · Congelar los importes
+### PR 7 · Congelar los importes — *entró con el PR 5*
 
-La tabla `cot_importes` y `congelar()` ya están (PR 3). Falta engancharlo al
-flujo: congelar al pasar a `REVISION`, bloquear la edición después, y la lectura
-que prefiere lo congelado sobre lo calculado.
+La tabla `cot_importes` y `congelar()` llegaron con el PR 3, y el PR 5 los
+enganchó al flujo: se congela al mandar a revisión desde la vista previa, la
+versión queda en solo lectura y la pantalla enseña lo guardado.
+
+Queda una pieza para cuando exista el PDF: que la **reimpresión** prefiera lo
+congelado sobre lo calculado. Hoy no hay quien reimprima.
 
 **Probable por sí mismo:** se envía una versión, se cambia un costo del
 catálogo, y la versión enviada no se mueve mientras una nueva sí.

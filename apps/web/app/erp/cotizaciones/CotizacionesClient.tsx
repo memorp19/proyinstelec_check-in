@@ -1,6 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  IconoBote,
+  IconoCalculadora,
+  IconoCapas,
+  IconoCarpeta,
+  IconoCorreo,
+  IconoEnviar,
+  IconoLapiz,
+  IconoPaquete,
+  IconoRama,
+  IconoReloj,
+} from "./Iconos";
 
 // ── Tipos (espejo de la API) ──────────────────────────────────────────────────
 
@@ -24,6 +36,8 @@ interface Cot {
   folio_ot?: string;
   drive_folder_url?: string;
   aprobada?: boolean;
+  /** Todas las versiones de esta cotización, para las etiquetas. */
+  versiones?: Array<{ version: number; folio: string; estatus: string; orden_compra?: string }>;
 }
 
 interface Catalogos {
@@ -38,6 +52,7 @@ type Modal =
   | { tipo: "editar"; cot: Cot }
   | { tipo: "version"; cot: Cot }
   | { tipo: "versiones"; cot: Cot }
+  | { tipo: "eliminar"; cot: Cot }
   | { tipo: "enviar"; cot: Cot }
   | { tipo: "oc"; cot: Cot }
   | { tipo: "ot-sin-oc"; cot: Cot }
@@ -46,6 +61,14 @@ type Modal =
   | null;
 
 const key = (c: Cot) => `${String(c.numero).padStart(3, "0")}-${c.anio}`;
+
+/**
+ * El folio de una versión, que es como se nombra una cotización en toda la
+ * interfaz. Nunca "v1" ni "versión 1": el folio ya lo dice —`PCOTOP-260-2026`
+ * la primera, `-1` la siguiente— y es lo que el cliente tiene en la mano.
+ */
+const folioDeVersion = (c: Cot, version: number) =>
+  `PCOTOP-${String(c.numero).padStart(3, "0")}-${c.anio}${version > 0 ? `-${version}` : ""}`;
 
 const BADGE: Record<string, string> = {
   PROCESO: "bg-amber/20 border-amber/30 text-amber",
@@ -59,12 +82,32 @@ const BADGE: Record<string, string> = {
 };
 const badge = (e: string) => BADGE[e] ?? "bg-white/10 border-white/20 text-white/50";
 
+/**
+ * Estatus en los que la cotización todavía se arma. Los dependientes son una
+ * espera, no un cierre: se siguen editando.
+ */
+const ARMABLES = ["PROCESO", "DEPENDIENTE PROVEEDOR", "DEPENDIENTE CLIENTE"];
+
 const input =
   "w-full bg-white/10 border border-white/20 rounded-lg px-3 py-2 font-mono text-sm text-white placeholder-white/30 outline-none focus:border-blue";
 const btnPrimary =
   "bg-blue text-white font-mono text-sm font-bold px-4 py-2 rounded-lg disabled:opacity-40 active:scale-[0.97] transition-transform";
 const btnGhost =
   "font-mono text-[10px] text-white/50 hover:text-white border border-white/10 hover:border-white/30 rounded-lg px-3 py-1.5 transition-colors";
+
+/** Los botones de la tarjeta, todos con su ícono a la izquierda. */
+const conIcono =
+  "inline-flex items-center gap-1.5 font-mono text-[10px] font-bold rounded-lg px-3 py-2 min-h-tap active:scale-[0.97] transition-transform";
+/** La acción principal de la tarjeta: una sola por estado. */
+const btnAccion = `${conIcono} bg-blue text-white`;
+const btnVerde = `${conIcono} bg-green/80 text-navy`;
+const btnAmbar = `${conIcono} bg-amber text-navy`;
+/** Lo que siempre está: editar, carpeta, versiones. */
+const btnIcono = `${conIcono} border border-white/15 text-white/70 hover:text-white hover:border-white/30`;
+/** Borrar no se parece a nada más de la tarjeta, y es a propósito. */
+const btnBorrar = `${conIcono} border border-danger/25 text-danger/80 hover:text-danger hover:border-danger/60`;
+
+const etiquetaCampo = "font-mono text-[9px] text-white/40 uppercase tracking-widest";
 
 function fmtFecha(iso?: string) {
   if (!iso) return "—";
@@ -239,6 +282,9 @@ export function CotizacionesClient({
             <NuevaVersionForm cot={modal.cot} onDone={trasEscribir} />
           )}
           {modal.tipo === "versiones" && <Versiones cot={modal.cot} />}
+          {modal.tipo === "eliminar" && (
+            <EliminarForm cot={modal.cot} onDone={trasEscribir} />
+          )}
           {modal.tipo === "enviar" && (
             <EnviarForm cot={modal.cot} onDone={trasEscribir} />
           )}
@@ -285,7 +331,7 @@ function OcPosteriorForm({ cot, onDone }: { cot: Cot; onDone: (msg: string) => v
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "No se pudo registrar la orden de compra");
-      onDone(`OC ${data.ordenCompra} registrada en la v${data.version} y en ${data.folioOt}`);
+      onDone(`OC ${data.ordenCompra} registrada en ${folioDeVersion(cot, data.version)} y en ${data.folioOt}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error");
     } finally {
@@ -346,7 +392,9 @@ function OcModificarForm({ cot, onDone }: { cot: Cot; onDone: (msg: string) => v
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "No se pudo modificar la orden de compra");
-      onDone(`OC ${data.anterior} → ${data.ordenCompra} en la v${data.version} y en ${data.folioOt}`);
+      onDone(
+        `OC ${data.anterior} → ${data.ordenCompra} en ${folioDeVersion(cot, data.version)} y en ${data.folioOt}`,
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error");
     } finally {
@@ -393,6 +441,7 @@ function tituloModal(m: NonNullable<Modal>) {
     editar: "Editar",
     version: "Nueva versión",
     versiones: "Versiones",
+    eliminar: "Eliminar la cotización",
     enviar: "Enviar al cliente",
     oc: "Ingresar OC → Generar OT",
     "ot-sin-oc": "Generar OT sin OC",
@@ -451,7 +500,6 @@ function Buscador({
   const [resultados, setResultados] = useState<Cot[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [enviandoRevision, setEnviandoRevision] = useState<string | null>(null);
 
   const buscar = useCallback(async () => {
     setLoading(true);
@@ -483,22 +531,6 @@ function Buscador({
     buscar();
   }, [soloSinOc, recarga]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function enviarARevision(c: Cot) {
-    if (!confirm(`¿Enviar ${c.folio} a revisión? Se avisará a los revisores por correo.`)) return;
-    setEnviandoRevision(key(c));
-    try {
-      const res = await fetch(`/api/erp/cotizaciones/${key(c)}/revision`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Error");
-      setAviso(data.avisos?.length ? data.avisos.join(" · ") : `${c.folio} enviada a revisión`);
-      buscar();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Error");
-    } finally {
-      setEnviandoRevision(null);
-    }
-  }
-
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setFiltros((p) => ({ ...p, [k]: e.target.value }));
 
@@ -524,13 +556,13 @@ function Buscador({
           <span className="text-white/30">— la cola de OC por conseguir</span>
         </label>
         <select className={input} value={filtros.estatus} onChange={set("estatus")}>
-          <option value="" className="bg-navy">Estatus (todos)</option>
-          {(catalogos?.estatus ?? []).map((s) => <option key={s} value={s} className="bg-navy">{s}</option>)}
+          <option value="">Estatus (todos)</option>
+          {(catalogos?.estatus ?? []).map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
         <select className={input} value={filtros.mesEntrega} onChange={set("mesEntrega")}>
-          <option value="" className="bg-navy">Mes entrega</option>
+          <option value="">Mes entrega</option>
           {Array.from({ length: 12 }, (_, i) => (
-            <option key={i + 1} value={i + 1} className="bg-navy">
+            <option key={i + 1} value={i + 1}>
               {new Date(2026, i, 1).toLocaleDateString("es-MX", { month: "long" })}
             </option>
           ))}
@@ -539,7 +571,7 @@ function Buscador({
         <input className={input} placeholder="Orden de compra" value={filtros.oc} onChange={set("oc")} />
         <select className={input} value={filtros.anio} onChange={set("anio")}>
           {[anioActual, anioActual - 1, anioActual - 2].map((a) => (
-            <option key={a} value={a} className="bg-navy">{a}</option>
+            <option key={a} value={a}>{a}</option>
           ))}
         </select>
         <button type="submit" disabled={loading} className={`${btnPrimary} col-span-2 md:col-span-3`}>
@@ -566,109 +598,205 @@ function Buscador({
             <p className="font-mono text-sm text-white/40">Sin resultados</p>
           </div>
         ) : (
-          resultados.map((c) => (
-            <div key={key(c)} className="bg-white/10 border border-white/10 rounded-xl px-4 py-4">
-              {/* Sin flex-wrap y con la columna de texto en flex-1: así los botones
-                  quedan SIEMPRE arriba a la derecha. Antes el contenedor envolvía,
-                  y un título largo ensanchaba la columna izquierda hasta empujarlos
-                  al renglón de abajo — la misma tarjeta cambiaba de forma según el
-                  texto. */}
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-head text-sm font-bold text-white">{c.folio}</p>
-                    <span className={`font-mono text-[9px] px-2 py-0.5 rounded-full border ${badge(c.estatus)}`}>
-                      {c.estatus}
-                    </span>
-                    {/* Solo visual: el estatus sigue siendo ASIGNADA. Marca que el
-                        trabajo se ejecutó y falta el número del cliente para poder
-                        facturar. Desaparece sola al registrar la OC. */}
-                    {c.estatus === "ASIGNADA" && !c.orden_compra && (
-                      <span
-                        className="font-mono text-[9px] px-2 py-0.5 rounded-full bg-amber/15 border border-amber/30 text-amber"
-                        title="Asignada sin orden de compra: el trabajo se ejecuta y la OC del cliente está pendiente"
-                      >
-                        SIN OC
-                      </span>
-                    )}
-                    {c.estatus === "REVISION" && !c.aprobada && (
-                      <span className="font-mono text-[9px] px-2 py-0.5 rounded-full bg-white/10 border border-white/20 text-white/50">
-                        Esperando aprobación del revisor
-                      </span>
-                    )}
-                  </div>
-                  <p className="font-mono text-xs text-white/60 mt-1 truncate">{c.cliente} · {c.titulo}</p>
-                  <p className="font-mono text-[10px] text-white/35 mt-1">
-                    Dirigida: {c.dirigida_a} · Elaboró: {c.elaboro} · Entrega: {fmtFecha(c.fecha_entrega)}
-                    {c.folio_ot ? ` · OT ${c.folio_ot}` : ""}{c.orden_compra ? ` · OC ${c.orden_compra}` : ""}
-                  </p>
-                  <div className="mt-1.5">
-                    <Montos cot={c} />
-                  </div>
-                </div>
-
-                {/* Acción principal según estado (regla del legacy) */}
-                <div className="shrink-0 flex items-center gap-1.5 flex-wrap justify-end">
-                  {c.estatus === "PROCESO" && (
-                    <button
-                      onClick={() => enviarARevision(c)}
-                      disabled={enviandoRevision === key(c)}
-                      className="font-mono text-[10px] font-bold text-white bg-blue rounded-lg px-3 py-1.5 disabled:opacity-40 active:scale-[0.97] transition-transform"
-                    >
-                      {enviandoRevision === key(c) ? "…" : "Enviar a Revisión"}
-                    </button>
-                  )}
-                  {c.estatus === "REVISION" && c.aprobada && puedeEnviar && (
-                    <button onClick={() => abrirModal({ tipo: "enviar", cot: c })} className="font-mono text-[10px] font-bold text-white bg-green/80 rounded-lg px-3 py-1.5 active:scale-[0.97] transition-transform">
-                      Enviar al Cliente
-                    </button>
-                  )}
-                  {c.estatus === "ENVIADA" && !c.folio_ot && puedeCrearOT && (
-                    <>
-                      <button onClick={() => abrirModal({ tipo: "oc", cot: c })} className="font-mono text-[10px] font-bold text-navy bg-amber rounded-lg px-3 py-1.5 active:scale-[0.97] transition-transform">
-                        Ingresar OC
-                      </button>
-                      {/* El cliente puede aceptar sin emitir OC; la OT se genera igual */}
-                      <button onClick={() => abrirModal({ tipo: "ot-sin-oc", cot: c })} className={`${btnGhost} ml-1.5`}>
-                        Generar OT sin OC
-                      </button>
-                    </>
-                  )}
-                  {/* Trabajo ejecutado y OC pendiente: la OT ya existe y solo falta el numero */}
-                  {c.estatus === "ASIGNADA" && !c.orden_compra && puedeCrearOT && (
-                    <button onClick={() => abrirModal({ tipo: "oc-posterior", cot: c })} className="font-mono text-[10px] font-bold text-navy bg-amber rounded-lg px-3 py-1.5 active:scale-[0.97] transition-transform">
-                      Registrar OC
-                    </button>
-                  )}
-                  {/* Corregir una OC ya registrada es reescribir el número con el que
-                      se factura: permiso aparte y más alto, y motivo obligatorio. */}
-                  {c.estatus === "ASIGNADA" && c.orden_compra && puedeModificarOC && (
-                    <button onClick={() => abrirModal({ tipo: "oc-modificar", cot: c })} className={btnGhost}>
-                      Modificar OC
-                    </button>
-                  )}
-                  {c.estatus === "ENVIADA" && puedeEnviar && (
-                    <button onClick={() => abrirModal({ tipo: "enviar", cot: c })} className={`${btnGhost} ml-1.5`}>
-                      Reenviar
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              <div className="mt-3 pt-3 border-t border-white/10 flex items-center gap-1.5 flex-wrap">
-                <button onClick={() => abrirModal({ tipo: "editar", cot: c })} className={btnGhost}>Editar</button>
-                <button onClick={() => abrirModal({ tipo: "version", cot: c })} className={btnGhost}>Nueva Versión</button>
-                <button onClick={() => abrirModal({ tipo: "versiones", cot: c })} className={btnGhost}>Versiones</button>
-                {c.drive_folder_url && (
-                  <a href={c.drive_folder_url} target="_blank" rel="noopener noreferrer" className={btnGhost}>
-                    Ver Carpeta
-                  </a>
-                )}
-              </div>
-            </div>
-          ))
+          resultados.map((c) => <Tarjeta
+            key={key(c)}
+            c={c}
+            puedeEnviar={puedeEnviar}
+            puedeCrearOT={puedeCrearOT}
+            puedeModificarOC={puedeModificarOC}
+            onModal={abrirModal}
+          />)
         )}
       </div>
+    </div>
+  );
+}
+
+// ── La tarjeta de una cotización ──────────────────────────────────────────────
+
+/**
+ * Sigue el orden del buscador de Apps Script, que es el que la gente ya tiene
+ * en la cabeza: arriba el folio con su estatus y los botones; en medio las
+ * cuatro columnas que se miran para decidir; abajo la OT y la OC.
+ *
+ * Los botones llevan ícono porque en una lista larga se busca la forma antes
+ * que la palabra.
+ */
+function Tarjeta({
+  c,
+  puedeEnviar,
+  puedeCrearOT,
+  puedeModificarOC,
+  onModal,
+}: {
+  c: Cot;
+  puedeEnviar: boolean;
+  puedeCrearOT: boolean;
+  puedeModificarOC: boolean;
+  onModal: (m: Modal) => void;
+}) {
+  const cotizable = ARMABLES.includes(c.estatus);
+  const armar = `/erp/cotizaciones/${key(c)}/armar?version=${c.version}`;
+
+  // En qué versión quedó la orden de compra: no siempre es la vigente, porque
+  // el cliente puede aceptar una anterior.
+  const conOc = (c.versiones ?? []).find((v) => v.orden_compra);
+  const otras = (c.versiones ?? []).filter((v) => v.version !== c.version);
+
+  return (
+    <div className="bg-white/10 border border-white/10 rounded-xl px-5 py-4">
+      {/* Encabezado: folio, estatus y acciones */}
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <p className={etiquetaCampo}>No. cotización</p>
+          <div className="flex items-center gap-2 flex-wrap mt-1">
+            <p className="font-head text-lg font-bold text-white">{c.folio}</p>
+            <span className={`font-mono text-[9px] px-2.5 py-1 rounded-full border ${badge(c.estatus)}`}>
+              {c.estatus}
+            </span>
+            {c.estatus === "REVISION" && c.aprobada && (
+              <span className="font-mono text-[9px] px-2.5 py-1 rounded-full bg-green/15 border border-green/30 text-green">
+                APROBADA
+              </span>
+            )}
+            {/* Solo visual: el estatus sigue siendo ASIGNADA. Marca que el
+                trabajo se ejecutó y falta el número del cliente para facturar. */}
+            {c.estatus === "ASIGNADA" && !c.orden_compra && (
+              <span
+                className="font-mono text-[9px] px-2.5 py-1 rounded-full bg-amber/15 border border-amber/30 text-amber"
+                title="Asignada sin orden de compra: el trabajo se ejecuta y la OC del cliente está pendiente"
+              >
+                SIN OC
+              </span>
+            )}
+          </div>
+          <p className="font-body text-xs text-white/50 mt-1 truncate">{c.titulo}</p>
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          {/* La acción principal, según el estado */}
+          {c.estatus === "PROCESO" && (
+            <a href={`${armar}&vistaPrevia=1`} className={btnAccion}>
+              <IconoEnviar /> Enviar a revisión
+            </a>
+          )}
+          {c.estatus === "REVISION" && !c.aprobada && (
+            <span className="flex items-center gap-1.5 font-mono text-[10px] text-white/50 bg-white/5 border border-white/15 rounded-lg px-3 py-2">
+              <IconoReloj /> Esperando al revisor
+            </span>
+          )}
+          {c.estatus === "REVISION" && c.aprobada && puedeEnviar && (
+            <button onClick={() => onModal({ tipo: "enviar", cot: c })} className={btnVerde}>
+              <IconoCorreo /> Enviar al cliente
+            </button>
+          )}
+          {c.estatus === "ENVIADA" && !c.folio_ot && puedeCrearOT && (
+            <>
+              <button onClick={() => onModal({ tipo: "oc", cot: c })} className={btnAmbar}>
+                <IconoPaquete /> Ingresar OC
+              </button>
+              {/* El cliente puede aceptar sin emitir OC; la OT se genera igual */}
+              <button onClick={() => onModal({ tipo: "ot-sin-oc", cot: c })} className={btnIcono}>
+                Generar OT sin OC
+              </button>
+            </>
+          )}
+          {c.estatus === "ASIGNADA" && !c.orden_compra && puedeCrearOT && (
+            <button onClick={() => onModal({ tipo: "oc-posterior", cot: c })} className={btnAmbar}>
+              <IconoPaquete /> Registrar OC
+            </button>
+          )}
+          {c.estatus === "ENVIADA" && puedeEnviar && (
+            <button onClick={() => onModal({ tipo: "enviar", cot: c })} className={btnIcono}>
+              <IconoCorreo /> Reenviar
+            </button>
+          )}
+
+          {/* Cotizar: mientras se puede tocar se arma; después se consulta */}
+          <a href={armar} className={cotizable ? btnAccion : btnIcono}>
+            <IconoCalculadora /> {cotizable ? "Cotizar" : "Ver cotización"}
+          </a>
+        </div>
+      </div>
+
+      {/* Las cuatro columnas que se miran para decidir */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+        <Campo titulo="Cliente" valor={c.cliente} />
+        <Campo titulo="Dirigida a" valor={c.dirigida_a} />
+        <Campo titulo="Elaboró" valor={c.elaboro} />
+        <Campo titulo="Fecha entrega" valor={fmtFecha(c.fecha_entrega)} />
+      </div>
+
+      {/* OT y OC */}
+      <div className="mt-4 pt-3 border-t border-white/10 flex flex-wrap gap-x-8 gap-y-2 items-center">
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-[10px] text-white/40">OT interna:</span>
+          <span className="font-mono text-xs text-white">{c.folio_ot || "—"}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-[10px] text-white/40">Orden de compra:</span>
+          <span className={`font-mono text-xs ${c.orden_compra ? "text-green" : "text-white/40"}`}>
+            {c.orden_compra || "—"}
+          </span>
+          {/* La OC puede vivir en otra versión: decir en cuál evita buscarla */}
+          {!c.orden_compra && conOc && (
+            <span className="font-mono text-[9px] text-amber">en {conOc.folio}</span>
+          )}
+        </div>
+        <Montos cot={c} />
+      </div>
+
+      {/* Las otras versiones, con su folio y su estatus */}
+      {otras.length > 0 && (
+        <p className="mt-2 font-mono text-[10px] text-white/35">
+          También:{" "}
+          {otras.map((v, i) => (
+            <span key={v.version}>
+              {i > 0 && " · "}
+              {v.folio} <span className="text-white/25">{v.estatus}</span>
+            </span>
+          ))}
+        </p>
+      )}
+
+      {/* El resto, en su renglón */}
+      <div className="mt-3 pt-3 border-t border-white/10 flex items-center gap-2 flex-wrap">
+        <button onClick={() => onModal({ tipo: "editar", cot: c })} className={btnIcono}>
+          <IconoLapiz /> Editar
+        </button>
+        {c.drive_folder_url && (
+          <a href={c.drive_folder_url} target="_blank" rel="noopener noreferrer" className={btnIcono}>
+            <IconoCarpeta /> Ver carpeta
+          </a>
+        )}
+        <button onClick={() => onModal({ tipo: "version", cot: c })} className={btnIcono}>
+          <IconoRama /> Nueva versión
+        </button>
+        <button onClick={() => onModal({ tipo: "versiones", cot: c })} className={btnIcono}>
+          <IconoCapas /> Versiones
+        </button>
+        {c.estatus === "ASIGNADA" && c.orden_compra && puedeModificarOC && (
+          <button onClick={() => onModal({ tipo: "oc-modificar", cot: c })} className={btnIcono}>
+            <IconoPaquete /> Modificar OC
+          </button>
+        )}
+        {/* Eliminar solo asoma donde de verdad se puede: en PROCESO, sin envío,
+            sin OT y sin OC. El servidor lo vuelve a comprobar. */}
+        {c.estatus === "PROCESO" && !c.fecha_envio && !c.folio_ot && !c.orden_compra && (
+          <button onClick={() => onModal({ tipo: "eliminar", cot: c })} className={btnBorrar}>
+            <IconoBote /> Eliminar
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Campo({ titulo, valor }: { titulo: string; valor?: string }) {
+  return (
+    <div className="min-w-0">
+      <p className={etiquetaCampo}>{titulo}</p>
+      <p className="font-body text-sm text-white/90 truncate mt-0.5">{valor || "—"}</p>
     </div>
   );
 }
@@ -754,7 +882,7 @@ function NuevaCotizacion({
         <input className={input} placeholder="Elaboró (iniciales) *" value={form.elaboro} onChange={set("elaboro")} list="dl-elab2" required />
         <select className={input} value={form.prioridad} onChange={set("prioridad")}>
           {(catalogos?.prioridades ?? ["BAJA", "MEDIA", "ALTA"]).map((p) => (
-            <option key={p} value={p} className="bg-navy">{p}</option>
+            <option key={p} value={p}>{p}</option>
           ))}
         </select>
       </div>
@@ -826,7 +954,7 @@ function EditarForm({ cot, catalogos, onDone }: { cot: Cot; catalogos: Catalogos
       <input className={input} value={form.dirigidaA} onChange={(e) => setForm((p) => ({ ...p, dirigidaA: e.target.value }))} placeholder="Dirigida a" />
       <div className="grid grid-cols-2 gap-2">
         <select className={input} value={form.prioridad} onChange={(e) => setForm((p) => ({ ...p, prioridad: e.target.value }))}>
-          {(catalogos?.prioridades ?? ["BAJA", "MEDIA", "ALTA"]).map((p) => <option key={p} value={p} className="bg-navy">{p}</option>)}
+          {(catalogos?.prioridades ?? ["BAJA", "MEDIA", "ALTA"]).map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
         <input type="date" className={input} value={form.fechaEntrega} onChange={(e) => setForm((p) => ({ ...p, fechaEntrega: e.target.value }))} />
       </div>
@@ -838,9 +966,9 @@ function EditarForm({ cot, catalogos, onDone }: { cot: Cot; catalogos: Catalogos
       <div>
         <p className="font-mono text-[9px] text-white/40 uppercase tracking-widest mb-1">Cambio de estatus manual (opcional)</p>
         <select className={input} value={form.estatus} onChange={(e) => setForm((p) => ({ ...p, estatus: e.target.value }))}>
-          <option value="" className="bg-navy">Sin cambio ({cot.estatus})</option>
+          <option value="">Sin cambio ({cot.estatus})</option>
           {["PROCESO", "DEPENDIENTE PROVEEDOR", "DEPENDIENTE CLIENTE", "CANCELADA"].map((s) => (
-            <option key={s} value={s} className="bg-navy">{s}</option>
+            <option key={s} value={s}>{s}</option>
           ))}
         </select>
         <p className="font-mono text-[10px] text-white/30 mt-1">
@@ -872,7 +1000,7 @@ function NuevaVersionForm({ cot, onDone }: { cot: Cot; onDone: (msg: string) => 
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Error");
-      onDone(`Versión ${data.cotizacion.version} creada (${data.cotizacion.folio})`);
+      onDone(`${data.cotizacion.folio} creada`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error");
       setSaving(false);
@@ -882,13 +1010,13 @@ function NuevaVersionForm({ cot, onDone }: { cot: Cot; onDone: (msg: string) => 
   return (
     <div className="space-y-3">
       <p className="font-mono text-xs text-white/60">
-        Se creará la versión {cot.version + 1} en PROCESO, heredando cliente y título. La versión actual
+        Se creará {folioDeVersion(cot, cot.version + 1)} en PROCESO, heredando cliente y título. La versión actual
         deja de contar en el buscador y el dashboard; se copian de nuevo las plantillas a la misma carpeta.
       </p>
       {error && <p className="font-mono text-xs text-red-400">{error}</p>}
       <div className="flex justify-end">
         <button onClick={crear} disabled={saving} className={btnPrimary}>
-          {saving ? "Creando…" : `Crear versión ${cot.version + 1}`}
+          {saving ? "Creando…" : `Crear ${folioDeVersion(cot, cot.version + 1)}`}
         </button>
       </div>
     </div>
@@ -924,6 +1052,100 @@ function Versiones({ cot }: { cot: Cot }) {
           )}
         </div>
       ))}
+    </div>
+  );
+}
+
+// ── Eliminar una cotización que nunca salió ───────────────────────────────────
+
+/**
+ * Borrar de verdad, y por eso la confirmación es teclear el folio.
+ *
+ * Un "¿estás seguro?" se contesta que sí sin leerlo. Copiar `PCOTOP-260-2026`
+ * obliga a mirar **cuál** se está borrando, que es el error que de verdad
+ * ocurre: eliminar la de al lado.
+ */
+function EliminarForm({ cot, onDone }: { cot: Cot; onDone: (msg: string) => void }) {
+  const [confirmacion, setConfirmacion] = useState("");
+  const [borrando, setBorrando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const coincide = confirmacion.trim().toUpperCase() === cot.folio.toUpperCase();
+
+  async function eliminar() {
+    setBorrando(true);
+    setError(null);
+    try {
+      const r = await fetch(`/api/erp/cotizaciones/${key(cot)}/eliminar`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ version: cot.version, confirmacion }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error ?? "No se pudo eliminar");
+      onDone(
+        `${d.folio} eliminada.` +
+          (d.carpeta ? " Su carpeta de Drive sigue ahí: revísala si hay que limpiarla." : ""),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error");
+      setBorrando(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="bg-danger/10 border border-danger/25 rounded-xl p-3">
+        <p className="font-body text-sm text-white">
+          Se va a borrar <span className="font-mono text-danger">{cot.folio}</span> y todo lo que
+          tenga armado: partidas, conceptos y gastos.
+        </p>
+        <p className="font-body text-xs text-white/60 mt-2">
+          No se recupera. <strong>El número no se reutiliza</strong>: la siguiente cotización será
+          la que sigue, no esta. Si lo que quieres es dejar constancia de que existió y ya no va a
+          ocurrir, ciérrala como CANCELADA desde Editar.
+        </p>
+      </div>
+
+      <div className="font-mono text-[11px] text-white/50 space-y-0.5">
+        <p>{cot.cliente}</p>
+        <p>{cot.titulo}</p>
+        <p>Elaboró {cot.elaboro}</p>
+      </div>
+
+      {cot.drive_folder_url && (
+        <p className="font-body text-xs text-amber bg-amber/10 border border-amber/25 rounded-lg px-3 py-2">
+          Su carpeta de Drive <strong>no se toca</strong>: puede tener dentro algo que no puso el
+          sistema. Queda el enlace en la bitácora por si hay que limpiarla a mano.
+        </p>
+      )}
+
+      <div>
+        <p className="font-mono text-[9px] text-white/40 uppercase tracking-widest mb-1">
+          Escribe {cot.folio} para confirmar
+        </p>
+        <input
+          value={confirmacion}
+          onChange={(e) => setConfirmacion(e.target.value)}
+          placeholder={cot.folio}
+          autoComplete="off"
+          className={input}
+        />
+      </div>
+
+      {error && (
+        <p className="font-mono text-[10px] text-red-400 bg-danger/10 border border-danger/20 rounded-lg px-3 py-2">
+          {error}
+        </p>
+      )}
+
+      <button
+        onClick={() => void eliminar()}
+        disabled={borrando || !coincide}
+        className="w-full min-h-tap font-mono text-xs font-bold text-white bg-danger/80 rounded-xl disabled:opacity-40"
+      >
+        {borrando ? "Eliminando…" : "Eliminar definitivamente"}
+      </button>
     </div>
   );
 }
@@ -1186,7 +1408,7 @@ function OcForm({
           >
             {/* Sin prefijo de versión: el folio ya termina en ella */}
             {enviadas.map((v) => (
-              <option key={v.version} value={v.version} className="bg-navy">
+              <option key={v.version} value={v.version}>
                 {v.folio} · {fmtFecha(v.fecha_solicitud)}
               </option>
             ))}
@@ -1219,7 +1441,7 @@ function OcForm({
 
       {elegida && elegida.version !== cot.version && (
         <p className="font-mono text-[10px] text-blue-mid bg-blue/10 border border-blue/20 rounded-lg px-3 py-2">
-          Se registrará sobre la v{elegida.version}, que no es la vigente (v{cot.version}).
+          Se registrará sobre {elegida.folio}, que no es la vigente ({cot.folio}).
         </p>
       )}
       {sinOc ? (
@@ -1235,12 +1457,12 @@ function OcForm({
       <div>
         <p className="font-mono text-[9px] text-white/40 uppercase tracking-widest mb-1">Responsable de la actividad *</p>
         <select className={input} value={responsable} onChange={(e) => setResponsable(e.target.value)}>
-          <option value="" className="bg-navy">Seleccionar…</option>
+          <option value="">Seleccionar…</option>
           {(catalogos?.responsables ?? []).map((r) => (
-            <option key={r.email} value={r.email} className="bg-navy">{r.nombre} ({r.iniciales})</option>
+            <option key={r.email} value={r.email}>{r.nombre} ({r.iniciales})</option>
           ))}
           {(catalogos?.responsablesSinIniciales ?? []).map((r) => (
-            <option key={r.email} value={r.email} disabled className="bg-navy">{r.nombre} — sin iniciales, no seleccionable</option>
+            <option key={r.email} value={r.email} disabled>{r.nombre} — sin iniciales, no seleccionable</option>
           ))}
         </select>
         <p className="font-mono text-[10px] text-white/30 mt-1">Sin iniciales no puede cruzar con el control operativo.</p>

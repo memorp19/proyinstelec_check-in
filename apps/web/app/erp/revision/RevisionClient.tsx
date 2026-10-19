@@ -118,7 +118,7 @@ export function RevisionClient() {
                   </div>
                   <p className="font-mono text-xs text-white/60 mt-1 truncate">{c.cliente} · {c.titulo}</p>
                   <p className="font-mono text-[10px] text-white/35 mt-1">
-                    Dirigida: {c.dirigida_a} · Elaboró: {c.elaboro} · v{c.version}
+                    Dirigida: {c.dirigida_a} · Elaboró: {c.elaboro}
                   </p>
                 </div>
                 <div className="shrink-0 flex gap-1.5">
