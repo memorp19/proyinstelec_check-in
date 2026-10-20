@@ -21,6 +21,7 @@
     "auditar:pdfs": "tsx scripts/auditar-pdfs-cotizaciones.ts",
     "importar:2026": "tsx scripts/importar-excel-2026.ts",
     "catalogo:importar": "tsx scripts/importar-catalogo-2026.ts",
+    "clientes:importar": "tsx scripts/importar-clientes.ts",
     "prueba:068": "tsx scripts/prueba-068.ts"
   },
   "devDependencies": {
