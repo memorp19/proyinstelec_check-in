@@ -110,6 +110,7 @@ export interface ContactoEnErp {
   puesto: string | null;
   telefono: string | null;
   correo: string | null;
+  direccion: string | null;
 }
 
 export interface ClienteEnErp {
@@ -149,6 +150,7 @@ export interface ContactoNuevo {
   puesto: string | null;
   telefono: string | null;
   correo: string | null;
+  direccion: string | null;
   /** Para el reporte. */
   cliente: string;
   fila: number;
@@ -161,6 +163,7 @@ export interface CambioDeContacto {
   puesto?: string;
   telefono?: string;
   correo?: string;
+  direccion?: string;
 }
 
 export interface SinCliente {
@@ -170,8 +173,14 @@ export interface SinCliente {
 }
 
 export interface Plan {
-  /** Direcciones que estaban vacías (o que se pisan con `sobrescribir`). */
-  direcciones: Array<{ id: string; cliente: string; direccion: string }>;
+  /**
+   * La dirección de respaldo del cliente: la más repetida entre sus contactos.
+   *
+   * El dato bueno vive en cada contacto. Esta es la que usa el documento
+   * cuando no se encuentra a la persona, igual que `datosDelCliente_` en el
+   * legacy, y por eso se elige por mayoría y no por orden de aparición.
+   */
+  direcciones: Array<{ id: string; cliente: string; direccion: string; deCuantos: number }>;
   contactosNuevos: ContactoNuevo[];
   contactosActualizados: CambioDeContacto[];
   /** Todo lo que se llena, para contarlo y enseñarlo campo por campo. */
@@ -234,6 +243,26 @@ function mismoValor(campo: string, a: string, b: string): boolean {
 /** El valor tal como se va a guardar. */
 function paraGuardar(campo: string, valor: string): string {
   return campo === "correo" ? normalizarCorreo(valor) : valor.trim();
+}
+
+/**
+ * La dirección que más veces aparece entre los contactos de una empresa.
+ *
+ * Empata por orden de aparición, que para este caso es el orden de la hoja.
+ * Se agrupa por el texto aplanado para que "Calle 1,  Ciudad" y "Calle 1,
+ * Ciudad" cuenten como la misma; se devuelve la primera escritura de las dos.
+ */
+export function masRepetida(
+  vistas: Array<{ direccion: string; fila: number }>,
+): { direccion: string; fila: number; veces: number } {
+  const grupos = new Map<string, { direccion: string; fila: number; veces: number }>();
+  for (const v of vistas) {
+    const llave = aplanar(v.direccion).toLowerCase();
+    const ya = grupos.get(llave);
+    if (ya) ya.veces++;
+    else grupos.set(llave, { direccion: v.direccion, fila: v.fila, veces: 1 });
+  }
+  return [...grupos.values()].reduce((a, b) => (b.veces > a.veces ? b : a));
 }
 
 interface Decision {
@@ -332,12 +361,12 @@ export function planearCarga(params: {
   // El estado que se va acumulando a lo largo de la corrida: la hoja trae un
   // renglón por contacto, así que una misma empresa aparece varias veces y la
   // segunda tiene que ver lo que decidió la primera.
-  const direccionDe = new Map<string, string | null>();
+  /** Las direcciones que trajo cada renglón, para elegir la del cliente al final. */
+  const direccionesVistas = new Map<string, Array<{ direccion: string; fila: number }>>();
   const contactosDe = new Map<string, Map<string, { id: string; nombre: string; fila: number }>>();
   const cambiosDe = new Map<string, CambioDeContacto>();
 
   for (const cliente of params.clientes) {
-    direccionDe.set(cliente.id, cliente.direccion);
     contactosDe.set(
       cliente.id,
       new Map(
@@ -377,24 +406,13 @@ export function planearCarga(params: {
       continue;
     }
 
-    // ── La dirección, que es del cliente y no de la persona ──────────────────
-    const decision = decidir(
-      "dirección",
-      direccionDe.get(cliente.id) ?? null,
-      f.direccion,
-      { quien: cliente.razonSocial, fila: f.fila, sobrescribir },
-      plan,
-    );
-    if (decision.escribir !== null) {
-      direccionDe.set(cliente.id, decision.escribir);
-      const yaPlaneada = plan.direcciones.find((d) => d.id === cliente.id);
-      if (yaPlaneada) yaPlaneada.direccion = decision.escribir;
-      else
-        plan.direcciones.push({
-          id: cliente.id,
-          cliente: cliente.razonSocial,
-          direccion: decision.escribir,
-        });
+    // La dirección del renglón es de la PERSONA, no de la empresa: una misma
+    // empresa puede atender desde varios sitios. Un renglón sin contacto solo
+    // aporta su dirección al respaldo del cliente, abajo.
+    if (f.direccion) {
+      const vistas = direccionesVistas.get(cliente.id) ?? [];
+      vistas.push({ direccion: f.direccion.trim(), fila: f.fila });
+      direccionesVistas.set(cliente.id, vistas);
     }
 
     if (!f.contacto) continue;
@@ -417,6 +435,7 @@ export function planearCarga(params: {
         puesto: f.puesto.trim() || null,
         telefono: f.telefono.trim() || null,
         correo: normalizarCorreo(f.correo) || null,
+        direccion: f.direccion.trim() || null,
         cliente: cliente.razonSocial,
         fila: f.fila,
       });
@@ -441,6 +460,10 @@ export function planearCarga(params: {
       ["puesto", enErp.puesto, f.puesto, "puesto"],
       ["teléfono", enErp.telefono, f.telefono, "telefono"],
       ["correo", enErp.correo, f.correo, "correo"],
+      // La diferencia de dirección se le atribuye a la persona, que es de
+      // quien es: antes salían varios renglones de la misma empresa que en
+      // realidad eran dos domicilios distintos de dos grupos de contactos.
+      ["dirección", enErp.direccion, f.direccion, "direccion"],
     ];
 
     let tocado = false;
@@ -455,6 +478,27 @@ export function planearCarga(params: {
     if (tocado && !cambiosDe.has(existente.id)) {
       cambiosDe.set(existente.id, cambio);
       plan.contactosActualizados.push(cambio);
+    }
+  }
+
+  // ── El respaldo del cliente: la dirección más repetida entre sus contactos ─
+  for (const [clienteId, vistas] of direccionesVistas) {
+    const cliente = params.clientes.find((c) => c.id === clienteId)!;
+    const ganadora = masRepetida(vistas);
+    const d = decidir(
+      "dirección",
+      cliente.direccion,
+      ganadora.direccion,
+      { quien: `${cliente.razonSocial} (respaldo)`, fila: ganadora.fila, sobrescribir },
+      plan,
+    );
+    if (d.escribir !== null) {
+      plan.direcciones.push({
+        id: cliente.id,
+        cliente: cliente.razonSocial,
+        direccion: d.escribir,
+        deCuantos: ganadora.veces,
+      });
     }
   }
 
@@ -508,10 +552,11 @@ export function insertarContacto<T>(
     puesto: string | null;
     telefono: string | null;
     correo: string | null;
+    direccion: string | null;
   },
 ): T {
-  return sql`INSERT INTO contactos (id, cliente_id, nombre, nombre_normalizado, puesto, telefono, correo)
-     VALUES (${c.id}, ${c.clienteId}, ${c.nombre}, ${c.nombreNormalizado}, ${c.puesto}, ${c.telefono}, ${c.correo})
+  return sql`INSERT INTO contactos (id, cliente_id, nombre, nombre_normalizado, puesto, telefono, correo, direccion)
+     VALUES (${c.id}, ${c.clienteId}, ${c.nombre}, ${c.nombreNormalizado}, ${c.puesto}, ${c.telefono}, ${c.correo}, ${c.direccion})
      ON CONFLICT (cliente_id, nombre_normalizado) DO NOTHING`;
 }
 
@@ -522,7 +567,7 @@ export function insertarContacto<T>(
  */
 export function actualizarContacto<T>(
   sql: ConsultaSql<T>,
-  c: { id: string; puesto?: string; telefono?: string; correo?: string },
+  c: { id: string; puesto?: string; telefono?: string; correo?: string; direccion?: string },
 ): T[] {
   const consultas: T[] = [];
   if (c.puesto !== undefined) {
@@ -533,6 +578,9 @@ export function actualizarContacto<T>(
   }
   if (c.correo !== undefined) {
     consultas.push(sql`UPDATE contactos SET correo = ${c.correo}, updated_at = now() WHERE id = ${c.id}`);
+  }
+  if (c.direccion !== undefined) {
+    consultas.push(sql`UPDATE contactos SET direccion = ${c.direccion}, updated_at = now() WHERE id = ${c.id}`);
   }
   return consultas;
 }

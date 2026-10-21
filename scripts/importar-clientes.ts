@@ -144,7 +144,8 @@ async function leerBase(): Promise<ClienteEnErp[]> {
   }>;
 
   const personas = (await sql`
-    SELECT id, cliente_id, nombre, nombre_normalizado, puesto, telefono, correo FROM contactos
+    SELECT id, cliente_id, nombre, nombre_normalizado, puesto, telefono, correo, direccion
+    FROM contactos
   `) as Array<{
     id: string;
     cliente_id: string;
@@ -153,6 +154,7 @@ async function leerBase(): Promise<ClienteEnErp[]> {
     puesto: string | null;
     telefono: string | null;
     correo: string | null;
+    direccion: string | null;
   }>;
 
   const porCliente = new Map<string, ClienteEnErp["contactos"]>();
@@ -165,6 +167,7 @@ async function leerBase(): Promise<ClienteEnErp[]> {
       puesto: p.puesto,
       telefono: p.telefono,
       correo: p.correo,
+      direccion: p.direccion,
     });
     porCliente.set(p.cliente_id, lista);
   }
@@ -195,15 +198,20 @@ function reportar(plan: Plan, clientes: ClienteEnErp[], ignoradas: number[]): vo
       `${plan.diferencias.length} diferencias`,
   );
 
+  // La del cliente es el respaldo: la que usa el documento cuando no encuentra
+  // a la persona. El dato bueno va en cada contacto.
   lista(
-    "📍  Direcciones que se escriben:",
-    plan.direcciones.map((d) => `${d.cliente}  →  ${d.direccion}`),
+    "📍  Dirección de respaldo del cliente (la más repetida entre sus contactos):",
+    plan.direcciones.map((d) => `${d.cliente}  [${d.deCuantos} contacto(s)]  →  ${d.direccion}`),
   );
 
   lista(
     "👤  Contactos que se agregan:",
     plan.contactosNuevos.map(
-      (c) => `[${String(c.fila).padStart(4)}] ${c.cliente} · ${c.nombre}${c.puesto ? ` (${c.puesto})` : ""}`,
+      (c) =>
+        `[${String(c.fila).padStart(4)}] ${c.cliente} · ${c.nombre}${c.puesto ? ` (${c.puesto})` : ""}` +
+        (c.direccion ? `
+           ${c.direccion}` : ""),
     ),
   );
 
@@ -326,6 +334,15 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("\n❌ ", err instanceof Error ? err.message : err);
+  const msg = err instanceof Error ? err.message : String(err);
+  console.error("\n❌ ", msg);
+  // La 0007 agrega `contactos.direccion`. Sin ella, el error de Postgres no
+  // dice qué hacer, y lo que hay que hacer es una sola cosa.
+  if (/column "direccion" does not exist/i.test(msg)) {
+    console.error(
+      "\n    Falta la migración 0007 en esta base. Aplícala y vuelve a intentar:\n" +
+        "      pnpm db:migrate\n",
+    );
+  }
   process.exit(1);
 });

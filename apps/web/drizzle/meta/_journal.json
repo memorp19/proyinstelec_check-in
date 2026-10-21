@@ -50,6 +50,13 @@
       "when": 1791921411312,
       "tag": "0006_cotizador_modelo",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792619376949,
+      "tag": "0007_direccion_por_contacto",
+      "breakpoints": true
     }
   ]
 }

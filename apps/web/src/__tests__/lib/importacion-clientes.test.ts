@@ -46,6 +46,7 @@ const persona = (over: Partial<ClienteEnErp["contactos"][number]> = {}) => ({
   puesto: null,
   telefono: null,
   correo: null,
+  direccion: null,
   ...over,
 });
 
@@ -255,10 +256,10 @@ describe("emparejado por razón social normalizada", () => {
 // ── La regla: solo llenar vacíos ─────────────────────────────────────────────
 
 describe("solo llena lo que está vacío", () => {
-  it("llena la dirección vacía", () => {
+  it("llena la dirección de respaldo vacía del cliente", () => {
     const plan = planear([fila(renglon("Aceros del Norte", "", "", "", "", "Calle 1, Ciudad"))], [empresa()]);
     expect(plan.direcciones).toEqual([
-      { id: "cli-1", cliente: "Aceros del Norte S.A. de C.V.", direccion: "Calle 1, Ciudad" },
+      { id: "cli-1", cliente: "Aceros del Norte S.A. de C.V.", direccion: "Calle 1, Ciudad", deCuantos: 1 },
     ]);
     expect(plan.diferencias).toEqual([]);
   });
@@ -288,7 +289,7 @@ describe("solo llena lo que está vacío", () => {
       [
         empresa({
           direccion: "Calle 1, Ciudad",
-          contactos: [persona({ puesto: "Compras" })],
+          contactos: [persona({ puesto: "Compras", direccion: "Calle 1, Ciudad" })],
         }),
       ],
     );
@@ -393,7 +394,12 @@ describe("--sobrescribir", () => {
       true,
     );
     expect(plan.direcciones).toEqual([
-      { id: "cli-1", cliente: "Aceros del Norte S.A. de C.V.", direccion: "Calle 2, Otra Ciudad" },
+      {
+        id: "cli-1",
+        cliente: "Aceros del Norte S.A. de C.V.",
+        direccion: "Calle 2, Otra Ciudad",
+        deCuantos: 1,
+      },
     ]);
     expect(plan.contactosActualizados).toEqual([
       {
@@ -401,6 +407,7 @@ describe("--sobrescribir", () => {
         cliente: "Aceros del Norte S.A. de C.V.",
         nombre: "Juana Pérez",
         telefono: "555 110 4791",
+        direccion: "Calle 2, Otra Ciudad",
       },
     ]);
     // Se escribe, pero sigue apareciendo en el reporte: es un dato que alguien
@@ -437,6 +444,7 @@ describe("contactos nuevos", () => {
         puesto: "Mantenimiento",
         telefono: "555 999 8888",
         correo: "luis@norte.mx",
+        direccion: null,
         cliente: "Aceros del Norte S.A. de C.V.",
         fila: 8,
       },
@@ -474,20 +482,7 @@ describe("contactos nuevos", () => {
     ]);
   });
 
-  it("la dirección se toma del primer renglón que la traiga", () => {
-    const plan = planear(
-      [
-        fila(renglon("Aceros del Norte", "Luis Soto"), 3),
-        fila(renglon("Aceros del Norte", "Ana Ruiz", "", "", "", "Calle 1, Ciudad"), 4),
-      ],
-      [empresa()],
-    );
-    expect(plan.direcciones).toEqual([
-      { id: "cli-1", cliente: "Aceros del Norte S.A. de C.V.", direccion: "Calle 1, Ciudad" },
-    ]);
-  });
-
-  it("dos direcciones distintas para la misma empresa: la segunda es diferencia", () => {
+  it("cada contacto se lleva la dirección de SU renglón", () => {
     const plan = planear(
       [
         fila(renglon("Aceros del Norte", "Luis Soto", "", "", "", "Calle 1, Ciudad"), 3),
@@ -495,10 +490,76 @@ describe("contactos nuevos", () => {
       ],
       [empresa()],
     );
-    expect(plan.direcciones).toHaveLength(1);
-    expect(plan.diferencias).toMatchObject([
-      { campo: "dirección", enErp: "Calle 1, Ciudad", enExcel: "Calle 2, Otra", fila: 4 },
+    expect(plan.contactosNuevos.map((c) => [c.nombre, c.direccion])).toEqual([
+      ["Luis Soto", "Calle 1, Ciudad"],
+      ["Ana Ruiz", "Calle 2, Otra"],
     ]);
+    // Dos sitios de la misma empresa no son una diferencia: son dos sitios.
+    expect(plan.diferencias).toEqual([]);
+  });
+
+  /**
+   * El caso real: una empresa con dos domicilios, nueve contactos en uno y
+   * cuatro en el otro. Con la dirección por cliente, los cuatro se perdían
+   * como "diferencia" contra el primero que hubiera llegado.
+   */
+  it("el respaldo del cliente es la dirección más repetida, no la primera", () => {
+    const uno = "Carretera del Norte 2977, El Robledal";
+    const dos = "Paseo de los Fresnos 2977, San Mateo";
+    const plan = planear(
+      [
+        fila(renglon("Aceros del Norte", "Luis Soto", "", "", "", uno), 3),
+        fila(renglon("Aceros del Norte", "Ana Ruiz", "", "", "", dos), 4),
+        fila(renglon("Aceros del Norte", "Jorge Díaz", "", "", "", dos), 5),
+      ],
+      [empresa()],
+    );
+    expect(plan.direcciones).toEqual([
+      { id: "cli-1", cliente: "Aceros del Norte S.A. de C.V.", direccion: dos, deCuantos: 2 },
+    ]);
+    // Y el que está en el otro sitio conserva el suyo.
+    expect(plan.contactosNuevos.find((c) => c.nombre === "Luis Soto")!.direccion).toBe(uno);
+    expect(plan.diferencias).toEqual([]);
+  });
+
+  it("un renglón sin contacto solo aporta su dirección al respaldo", () => {
+    const plan = planear(
+      [fila(renglon("Aceros del Norte", "", "", "", "", "Calle 1, Ciudad"), 3)],
+      [empresa()],
+    );
+    expect(plan.contactosNuevos).toEqual([]);
+    expect(plan.direcciones).toHaveLength(1);
+  });
+
+  it("la misma dirección escrita con espacios de más cuenta como una sola", () => {
+    const plan = planear(
+      [
+        fila(renglon("Aceros del Norte", "Luis Soto", "", "", "", "Calle 1,  Ciudad"), 3),
+        fila(renglon("Aceros del Norte", "Ana Ruiz", "", "", "", "Calle 1, Ciudad"), 4),
+        fila(renglon("Aceros del Norte", "Jorge Díaz", "", "", "", "Calle 2, Otra"), 5),
+      ],
+      [empresa()],
+    );
+    expect(plan.direcciones[0]).toMatchObject({ direccion: "Calle 1,  Ciudad", deCuantos: 2 });
+  });
+
+  // La diferencia es de la persona, no de la empresa: antes salían seis
+  // renglones de la misma empresa que eran dos domicilios de dos grupos.
+  it("una dirección distinta de un contacto que ya existe se le atribuye a él", () => {
+    const plan = planear(
+      [fila(renglon("Aceros del Norte", "Juana Pérez", "", "", "", "Calle 2, Otra"), 7)],
+      [empresa({ contactos: [persona({ direccion: "Calle 1, Ciudad" })] })],
+    );
+    expect(plan.diferencias).toMatchObject([
+      {
+        quien: "Aceros del Norte S.A. de C.V. · Juana Pérez",
+        campo: "dirección",
+        enErp: "Calle 1, Ciudad",
+        enExcel: "Calle 2, Otra",
+        fila: 7,
+      },
+    ]);
+    expect(plan.contactosActualizados).toEqual([]);
   });
 });
 
@@ -596,9 +657,10 @@ describe("sentencias del plan", () => {
     );
 
     const sentencias = sentenciasDelPlan(sqlFalso, plan);
-    expect(sentencias).toHaveLength(4); // 1 dirección + 1 alta + 2 campos de Juana
+    expect(sentencias).toHaveLength(4); // 1 respaldo + 1 alta + 2 campos de Juana
     expect(sentencias[0]).toContain("UPDATE clientes SET direccion");
     expect(sentencias[1]).toContain("INSERT INTO contactos");
+    expect(sentencias[1]).toContain("direccion");
     // Repetible: si alguien agregó el contacto entre la lectura y la escritura,
     // la carga no se cae ni pisa lo que esa persona puso.
     expect(sentencias[1]).toContain("ON CONFLICT (cliente_id, nombre_normalizado) DO NOTHING");
