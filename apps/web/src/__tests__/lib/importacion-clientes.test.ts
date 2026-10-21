@@ -177,6 +177,35 @@ describe("emparejado por razón social normalizada", () => {
     }
   });
 
+  /**
+   * `clientes.razon_normalizada` no está limpia: una carga anterior dejó filas
+   * con la razón social en mayúsculas, con su puntuación y su sufijo legal.
+   * Comparar la columna tal cual no encontraba a NADIE —85 renglones contra 55
+   * clientes, cero coincidencias—. Se vuelve a normalizar, igual que hace
+   * `resolverCliente` en el importador de 2026.
+   */
+  it("encuentra al cliente aunque la columna normalizada esté sucia", () => {
+    const sucia = empresa({
+      razonSocial: "ADMINISTRADORA DE CENTROS COMERCIALES SANTA FE S.A. de C.V.",
+      razonNormalizada: "ADMINISTRADORA DE CENTROS COMERCIALES SANTA FE S.A. DE C.V.",
+    });
+    const plan = planear(
+      [fila(renglon("Administradora de Centros Comerciales Santa Fe S.A. de C.V.", "Ana Ruiz"))],
+      [sucia],
+    );
+    expect(plan.sinCliente).toEqual([]);
+    expect(plan.contactosNuevos).toHaveLength(1);
+  });
+
+  it("y también si la columna normalizada viene vacía", () => {
+    const plan = planear(
+      [fila(renglon("Aceros del Norte S.A. de C.V.", "Ana Ruiz"))],
+      [empresa({ razonNormalizada: "" })],
+    );
+    expect(plan.sinCliente).toEqual([]);
+    expect(plan.contactosNuevos).toHaveLength(1);
+  });
+
   it("una razón social que no está en el ERP se reporta y NO se crea", () => {
     const plan = planear(
       [fila(renglon("Textiles del Bajío S.A. de C.V.", "Ana Ruiz"), 4)],

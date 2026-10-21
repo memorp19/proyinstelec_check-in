@@ -309,7 +309,22 @@ export function planearCarga(params: {
     ignoradas: 0,
   };
 
-  const porNorm = new Map(params.clientes.map((c) => [c.razonNormalizada, c]));
+  /**
+   * El emparejado **vuelve a normalizar** lo que trae la base, igual que hace
+   * `resolverCliente` en el importador de 2026.
+   *
+   * `clientes.razon_normalizada` no está limpia: muchas filas guardan la razón
+   * social en mayúsculas, con su puntuación y su "S.A. de C.V." intactos —las
+   * escribió una carga anterior—. Comparar la columna tal cual no encuentra a
+   * nadie. Se indexa además por la razón social normalizada, que es el dato de
+   * verdad, para que una fila con la columna sucia también se encuentre.
+   */
+  const porNorm = new Map<string, ClienteEnErp>();
+  for (const c of params.clientes) {
+    for (const llave of [normalizarRazonSocial(c.razonNormalizada), normalizarRazonSocial(c.razonSocial)]) {
+      if (llave && !porNorm.has(llave)) porNorm.set(llave, c);
+    }
+  }
   const sinCliente = new Map<string, SinCliente>();
   // ID Emp -> las razones sociales distintas que se le vieron, con sus filas.
   const razonesPorId = new Map<string, Map<string, number[]>>();
