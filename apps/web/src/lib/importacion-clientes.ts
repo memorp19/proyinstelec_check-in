@@ -14,6 +14,7 @@
  * Sin base y sin red: todo entra como dato para poder probarlo entero.
  */
 import { normalizarNombreContacto, normalizarRazonSocial } from "./clientes";
+import { texto, type Fila } from "./excel";
 
 // ── Lo que trae la hoja ───────────────────────────────────────────────────────
 
@@ -33,6 +34,45 @@ export interface FilaClienteExcel {
 }
 
 const celda = (valores: string[], i: number) => (valores[i] ?? "").trim();
+
+/** Las ocho columnas que se leen, en orden. `I` (ASESORIA) no se usa. */
+const COLUMNAS = ["A", "B", "C", "D", "E", "F", "G", "H"] as const;
+
+/**
+ * Un renglón de `.xlsx` con la forma que devuelve Google Sheets.
+ *
+ * Las dos fuentes convergen aquí y de aquí en adelante hay **un solo lector**.
+ * Sheets entrega `string[]` ya; el libro entrega celdas indexadas por letra,
+ * y es esto lo que las aplana. Una celda vacía en medio no corre a las demás
+ * de lugar, que es lo que pasaría al recorrer solo las que traen valor.
+ */
+export function filaDesdeCeldas(celdas: Fila): string[] {
+  return COLUMNAS.map((c) => texto(celdas[c]));
+}
+
+/**
+ * Lee todos los renglones de datos y dice cuáles descartó.
+ *
+ * Los descartados no son ruido: un renglón con contacto y teléfono pero sin
+ * razón social es un dato que alguien capturó y que esta carga no puede
+ * colocar. Antes se contaban; ahora se nombran, para que se puedan arreglar.
+ */
+export function leerFilas(
+  valores: string[][],
+  primeraFila = 2,
+): { filas: FilaClienteExcel[]; ignoradas: number[] } {
+  const filas: FilaClienteExcel[] = [];
+  const ignoradas: number[] = [];
+  valores.forEach((v, i) => {
+    const n = i + primeraFila;
+    const fila = leerFilaCliente(n, v);
+    // Un renglón enteramente vacío no es un descarte que valga la pena
+    // reportar: las hojas traen cientos al final.
+    if (fila) filas.push(fila);
+    else if (v.some((c) => (c ?? "").trim())) ignoradas.push(n);
+  });
+  return { filas, ignoradas };
+}
 
 /**
  * Lee un renglón del rango `Clientes!A2:H`.
@@ -141,6 +181,23 @@ export interface Plan {
   sinCliente: SinCliente[];
   /** Dos renglones para la misma persona de la misma empresa: gana el primero. */
   duplicados: Array<{ quien: string; fila: number; primeraFila: number }>;
+  /**
+   * Un mismo `ID Emp` con razones sociales distintas.
+   *
+   * O el id se reusó, o una de las dos está mal escrita. En cualquiera de los
+   * dos casos el emparejado por razón social va a mandar los contactos a
+   * clientes distintos, que es exactamente lo que nadie nota.
+   */
+  idsAmbiguos: Array<{ idEmp: string; razones: string[]; filas: number[] }>;
+  /**
+   * Contactos con correo del dominio de la empresa.
+   *
+   * Un contacto del cliente no tiene correo nuestro: o se capturó el del
+   * asesor en la columna equivocada, o es un registro interno que no debería
+   * estar en el catálogo de clientes. Se carga igual —el dato es el dato— pero
+   * se señala.
+   */
+  correosInternos: Array<{ quien: string; correo: string; fila: number }>;
   /** Renglones sin razón social, que no son nada. */
   ignoradas: number;
 }
@@ -230,10 +287,13 @@ export function planearCarga(params: {
   filas: FilaClienteExcel[];
   clientes: ClienteEnErp[];
   sobrescribir?: boolean;
+  /** El dominio de la empresa: un contacto de cliente no debería usarlo. */
+  dominioInterno?: string;
   /** Inyectable para que las pruebas no dependan de uuid al azar. */
   nuevoId?: () => string;
 }): Plan {
   const sobrescribir = params.sobrescribir ?? false;
+  const dominio = (params.dominioInterno ?? "proyinstelec.mx").toLowerCase();
   const nuevoId = params.nuevoId ?? (() => crypto.randomUUID());
 
   const plan: Plan = {
@@ -244,11 +304,15 @@ export function planearCarga(params: {
     diferencias: [],
     sinCliente: [],
     duplicados: [],
+    idsAmbiguos: [],
+    correosInternos: [],
     ignoradas: 0,
   };
 
   const porNorm = new Map(params.clientes.map((c) => [c.razonNormalizada, c]));
   const sinCliente = new Map<string, SinCliente>();
+  // ID Emp -> las razones sociales distintas que se le vieron, con sus filas.
+  const razonesPorId = new Map<string, Map<string, number[]>>();
 
   // El estado que se va acumulando a lo largo de la corrida: la hoja trae un
   // renglón por contacto, así que una misma empresa aparece varias veces y la
@@ -269,6 +333,22 @@ export function planearCarga(params: {
 
   for (const f of params.filas) {
     const norm = normalizarRazonSocial(f.razonSocial);
+
+    // Los dos avisos se recogen antes de nada: valen igual para un renglón que
+    // al final no se va a cargar, porque lo que señalan es la captura.
+    if (f.idEmp && norm) {
+      const porRazon = razonesPorId.get(f.idEmp) ?? new Map<string, number[]>();
+      porRazon.set(norm, [...(porRazon.get(norm) ?? []), f.fila]);
+      razonesPorId.set(f.idEmp, porRazon);
+    }
+    if (f.correo.trim().toLowerCase().endsWith(`@${dominio}`)) {
+      plan.correosInternos.push({
+        quien: `${f.razonSocial}${f.contacto ? ` · ${f.contacto}` : ""}`,
+        correo: f.correo.trim(),
+        fila: f.fila,
+      });
+    }
+
     if (!norm) {
       plan.ignoradas++;
       continue;
@@ -364,6 +444,20 @@ export function planearCarga(params: {
   }
 
   plan.sinCliente = [...sinCliente.values()];
+
+  for (const [idEmp, porRazon] of razonesPorId) {
+    if (porRazon.size < 2) continue;
+    plan.idsAmbiguos.push({
+      idEmp,
+      // La razón tal como se escribió la primera vez, no la normalizada: la
+      // normalizada esconde justo la diferencia que hay que mirar.
+      razones: [...porRazon.keys()].map(
+        (n) => params.filas.find((f) => normalizarRazonSocial(f.razonSocial) === n)!.razonSocial,
+      ),
+      filas: [...porRazon.values()].flat().sort((a, b) => a - b),
+    });
+  }
+
   return plan;
 }
 

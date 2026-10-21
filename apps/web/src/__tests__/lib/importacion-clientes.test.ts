@@ -1,12 +1,15 @@
 import { describe, it, expect } from "vitest";
 import {
   actualizarContacto,
+  filaDesdeCeldas,
   leerFilaCliente,
+  leerFilas,
   planearCarga,
   sentenciasDelPlan,
   type ClienteEnErp,
   type FilaClienteExcel,
 } from "@/src/lib/importacion-clientes";
+import type { Fila } from "@/src/lib/excel";
 
 /**
  * Todos los datos de este archivo son inventados. El catálogo real tiene
@@ -91,6 +94,69 @@ describe("leerFilaCliente", () => {
     const f = leerFilaCliente(5, ["", "", "Minera Sur"])!;
     expect(f.telefono).toBe("");
     expect(f.direccion).toBe("");
+  });
+});
+
+// ── El .xlsx y la hoja de Google, por el mismo sitio ─────────────────────────
+
+describe("filaDesdeCeldas", () => {
+  /** Una celda de texto como la devuelve `LibroExcel`. */
+  const txt = (valor: string): Fila[string] => ({ valor, tipo: "s", conFormatoDeFecha: false });
+
+  it("aplana las columnas A..H en el mismo orden que entrega Sheets", () => {
+    const celdas: Fila = {
+      A: txt("E-1"), B: txt("C-1"), C: txt("Minera Sur"), D: txt("Ana Ruiz"),
+      E: txt("Compras"), F: txt("555 123 4567"), G: txt("ana@sur.mx"), H: txt("Calle 1, Ciudad"),
+    };
+    expect(filaDesdeCeldas(celdas)).toEqual([
+      "E-1", "C-1", "Minera Sur", "Ana Ruiz", "Compras", "555 123 4567", "ana@sur.mx", "Calle 1, Ciudad",
+    ]);
+  });
+
+  // Recorrer solo las celdas con valor correría las demás de lugar: el puesto
+  // acabaría leyéndose como teléfono.
+  it("una celda vacía en medio no corre a las demás de su columna", () => {
+    const celdas: Fila = { C: txt("Minera Sur"), D: txt("Ana Ruiz"), H: txt("Calle 1, Ciudad") };
+    const valores = filaDesdeCeldas(celdas);
+    expect(valores).toEqual(["", "", "Minera Sur", "Ana Ruiz", "", "", "", "Calle 1, Ciudad"]);
+    expect(leerFilaCliente(2, valores)).toMatchObject({
+      razonSocial: "Minera Sur",
+      contacto: "Ana Ruiz",
+      puesto: "",
+      telefono: "",
+      direccion: "Calle 1, Ciudad",
+    });
+  });
+
+  // La columna I es de quién atiende la cuenta, no del cliente.
+  it("la columna I (ASESORIA) no se lee", () => {
+    const celdas: Fila = { C: txt("Minera Sur"), I: txt("EAOL"), J: txt("nota suelta") };
+    expect(filaDesdeCeldas(celdas)).toHaveLength(8);
+    expect(filaDesdeCeldas(celdas)).not.toContain("EAOL");
+  });
+});
+
+describe("leerFilas", () => {
+  it("numera desde la fila 2, porque la 1 es el encabezado", () => {
+    const { filas } = leerFilas([renglon("Minera Sur", "Ana Ruiz"), renglon("Aceros", "Luis Soto")]);
+    expect(filas.map((f) => f.fila)).toEqual([2, 3]);
+  });
+
+  // Antes se contaban; nombrarlos es lo que permite arreglarlos.
+  it("nombra los renglones que descarta por no traer razón social", () => {
+    const { filas, ignoradas } = leerFilas([
+      renglon("Minera Sur", "Ana Ruiz"),
+      ["", "", "", "Luis Soto", "", "555 111 2222"], // tiene datos, no tiene empresa
+      renglon("Aceros", "Jorge Díaz"),
+    ]);
+    expect(filas).toHaveLength(2);
+    expect(ignoradas).toEqual([3]);
+  });
+
+  // Las hojas traen cientos de renglones vacíos al final.
+  it("un renglón enteramente vacío no se reporta como descarte", () => {
+    const { ignoradas } = leerFilas([renglon("Minera Sur", "Ana Ruiz"), [], ["", "  ", ""]]);
+    expect(ignoradas).toEqual([]);
   });
 });
 
@@ -404,6 +470,83 @@ describe("contactos nuevos", () => {
     expect(plan.diferencias).toMatchObject([
       { campo: "dirección", enErp: "Calle 1, Ciudad", enExcel: "Calle 2, Otra", fila: 4 },
     ]);
+  });
+});
+
+// ── Avisos del reporte ───────────────────────────────────────────────────────
+
+describe("avisos del reporte", () => {
+  /** Un renglón con su ID Emp propio, que el helper `renglon` fija en "E-1". */
+  const conId = (idEmp: string, razon: string, contacto = "", correo = "") =>
+    [idEmp, "C-1", razon, contacto, "", "", correo, ""];
+
+  // O el id se reusó, o una razón está mal escrita. En los dos casos el
+  // emparejado manda los contactos a clientes distintos sin que nadie lo note.
+  it("un mismo ID Emp con razones sociales distintas se reporta", () => {
+    const plan = planear(
+      [
+        fila(conId("035", "Embobinados Industriales"), 85),
+        fila(conId("035", "ITESE JC"), 86),
+        fila(conId("036", "Minera Sur"), 87),
+      ],
+      [empresa()],
+    );
+    expect(plan.idsAmbiguos).toEqual([
+      { idEmp: "035", razones: ["Embobinados Industriales", "ITESE JC"], filas: [85, 86] },
+    ]);
+  });
+
+  it("el mismo ID Emp con la misma razón escrita distinto NO se reporta", () => {
+    const plan = planear(
+      [
+        fila(conId("035", "ACEROS DEL NORTE, S.A. DE C.V."), 85),
+        fila(conId("035", "Aceros del Nórte S.A de C.V"), 86),
+      ],
+      [empresa()],
+    );
+    expect(plan.idsAmbiguos).toEqual([]);
+  });
+
+  it("un renglón sin ID Emp no entra al aviso", () => {
+    const plan = planear([fila(conId("", "Minera Sur"), 5)], [empresa()]);
+    expect(plan.idsAmbiguos).toEqual([]);
+  });
+
+  // Un contacto del cliente no tiene correo nuestro: o es el del asesor
+  // capturado en la columna equivocada, o es un registro interno.
+  it("un correo del dominio de la empresa se reporta", () => {
+    const plan = planear(
+      [fila(conId("E-1", "Aceros del Norte", "Luis Soto", "asesora.interna@proyinstelec.mx"), 2)],
+      [empresa()],
+    );
+    expect(plan.correosInternos).toEqual([
+      {
+        quien: "Aceros del Norte · Luis Soto",
+        correo: "asesora.interna@proyinstelec.mx",
+        fila: 2,
+      },
+    ]);
+    // Se carga igual: el dato es el dato.
+    expect(plan.contactosNuevos[0].correo).toBe("asesora.interna@proyinstelec.mx");
+  });
+
+  it("el dominio se puede cambiar, y un correo de cliente no se reporta", () => {
+    const filas = [fila(conId("E-1", "Aceros del Norte", "Luis Soto", "luis@otra-empresa.com"), 2)];
+    expect(planear(filas, [empresa()]).correosInternos).toEqual([]);
+    expect(
+      planearCarga({ filas, clientes: [empresa()], dominioInterno: "otra-empresa.com" }).correosInternos,
+    ).toHaveLength(1);
+  });
+
+  // Vale para un renglón que al final no se va a cargar: lo que señala es la
+  // captura, no el resultado.
+  it("los avisos salen aunque el cliente no exista en el ERP", () => {
+    const plan = planear(
+      [fila(conId("035", "Textiles del Bajío", "Ana Ruiz", "ana@proyinstelec.mx"), 9)],
+      [empresa()],
+    );
+    expect(plan.sinCliente).toHaveLength(1);
+    expect(plan.correosInternos).toHaveLength(1);
   });
 });
 
