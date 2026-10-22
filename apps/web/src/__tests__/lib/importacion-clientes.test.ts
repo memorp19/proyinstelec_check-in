@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   actualizarContacto,
+  contieneTodas,
   filaDesdeCeldas,
+  limpiarDireccion,
   leerFilaCliente,
   leerFilas,
   planearCarga,
@@ -637,6 +639,122 @@ describe("avisos del reporte", () => {
     );
     expect(plan.sinCliente).toHaveLength(1);
     expect(plan.correosInternos).toHaveLength(1);
+  });
+});
+
+// ── Limpieza de la dirección ─────────────────────────────────────────────────
+
+describe("limpiarDireccion", () => {
+  // En la hoja hay direcciones que terminan en comilla tipográfica y ninguna
+  // que empiece así: son restos de copiar y pegar.
+  it.each([
+    ['Calle 1, Ciudad”', "Calle 1, Ciudad"],
+    ['“Calle 1, Ciudad”', "Calle 1, Ciudad"],
+    ['"Calle 1, Ciudad"', "Calle 1, Ciudad"],
+    ['  Calle 1, Ciudad ” ', "Calle 1, Ciudad"],
+  ])("quita las comillas sueltas de los extremos (%s)", (entra, sale) => {
+    expect(limpiarDireccion(entra)).toBe(sale);
+  });
+
+  // Una comilla en medio puede ser parte del domicilio.
+  it('no toca una comilla interior: Calle "B" No. 12', () => {
+    expect(limpiarDireccion('Calle "B" No. 12, Parque Industrial')).toBe(
+      'Calle "B" No. 12, Parque Industrial',
+    );
+  });
+
+  it("una dirección limpia se queda igual", () => {
+    expect(limpiarDireccion("Calle 1, Ciudad")).toBe("Calle 1, Ciudad");
+    expect(limpiarDireccion("")).toBe("");
+  });
+
+  it("la fila guarda lo limpio y lo crudo, y el plan lo reporta", () => {
+    const sucia = 'Calle 1, Ciudad”';
+    const f = fila(renglon("Aceros del Norte", "Luis Soto", "", "", "", sucia), 4);
+    expect(f.direccion).toBe("Calle 1, Ciudad");
+    expect(f.direccionCruda).toBe(sucia);
+
+    const plan = planear([f], [empresa()]);
+    expect(plan.limpiezas).toEqual([
+      { fila: 4, campo: "dirección", antes: sucia, despues: "Calle 1, Ciudad" },
+    ]);
+    // Y lo que se guarda es lo limpio.
+    expect(plan.contactosNuevos[0].direccion).toBe("Calle 1, Ciudad");
+  });
+});
+
+// ── Posibles duplicados ──────────────────────────────────────────────────────
+
+describe("contieneTodas", () => {
+  it("un nombre contenido en otro, sin importar el orden", () => {
+    expect(contieneTodas("david ramirez", "jose david ramirez")).toBe(true);
+    expect(contieneTodas("ramirez david", "jose david ramirez")).toBe(true);
+  });
+
+  it("no al revés, ni consigo mismo, ni con uno vacío", () => {
+    expect(contieneTodas("jose david ramirez", "david ramirez")).toBe(false);
+    expect(contieneTodas("david ramirez", "david ramirez")).toBe(false);
+    expect(contieneTodas("", "david ramirez")).toBe(false);
+  });
+
+  it("dos nombres distintos no se contienen", () => {
+    expect(contieneTodas("ana ruiz", "luis soto")).toBe(false);
+  });
+});
+
+describe("posibles duplicados", () => {
+  it("avisa cuando un nombre de la hoja contiene al otro, en el mismo cliente", () => {
+    const plan = planear(
+      [
+        fila(renglon("Aceros del Norte", "David Ramirez"), 8),
+        fila(renglon("Aceros del Norte", "Jose David Ramirez"), 9),
+      ],
+      [empresa()],
+    );
+    expect(plan.posiblesDuplicados).toEqual([
+      {
+        cliente: "Aceros del Norte S.A. de C.V.",
+        nombres: ["David Ramirez", "Jose David Ramirez"],
+        filas: [8, 9],
+      },
+    ]);
+    // Aviso y nada más: los dos se agregan.
+    expect(plan.contactosNuevos).toHaveLength(2);
+  });
+
+  // El par puede estar repartido entre el ERP y la hoja: así es como se crea
+  // el duplicado de verdad.
+  it("avisa si uno ya está en el ERP y el otro viene en la hoja", () => {
+    const plan = planear(
+      [fila(renglon("Aceros del Norte", "Jose David Ramirez"), 9)],
+      [empresa({ contactos: [persona({ nombre: "David Ramirez", nombreNormalizado: "david ramirez" })] })],
+    );
+    expect(plan.posiblesDuplicados).toMatchObject([
+      { nombres: ["David Ramirez", "Jose David Ramirez"], filas: [9] },
+    ]);
+  });
+
+  it("no avisa entre clientes distintos", () => {
+    const otra = empresa({ id: "cli-2", razonSocial: "Minera Sur", razonNormalizada: "minera sur" });
+    const plan = planear(
+      [
+        fila(renglon("Aceros del Norte", "David Ramirez"), 8),
+        fila(renglon("Minera Sur", "Jose David Ramirez"), 9),
+      ],
+      [empresa(), otra],
+    );
+    expect(plan.posiblesDuplicados).toEqual([]);
+  });
+
+  it("dos nombres sin relación no se reportan", () => {
+    const plan = planear(
+      [
+        fila(renglon("Aceros del Norte", "Ana Ruiz"), 8),
+        fila(renglon("Aceros del Norte", "Luis Soto"), 9),
+      ],
+      [empresa()],
+    );
+    expect(plan.posiblesDuplicados).toEqual([]);
   });
 });
 

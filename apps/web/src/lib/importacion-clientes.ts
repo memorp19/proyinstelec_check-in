@@ -30,7 +30,23 @@ export interface FilaClienteExcel {
   puesto: string;
   telefono: string;
   correo: string;
+  /** Ya sin las comillas sueltas; `direccionCruda` guarda lo que venía. */
   direccion: string;
+  direccionCruda: string;
+}
+
+/**
+ * Quita las comillas sueltas del principio y del final de una dirección.
+ *
+ * En la hoja hay direcciones que terminan en `”` y ninguna que empiece así:
+ * son restos de copiar y pegar, no comillas que signifiquen algo. Si entran
+ * tal cual acaban impresas en la carta del cliente.
+ *
+ * Solo los extremos: una comilla en medio puede ser parte del domicilio
+ * —`Calle "B" No. 12`— y esa no se toca.
+ */
+export function limpiarDireccion(valor: string): string {
+  return valor.replace(/^[\s"\u201c\u201d]+/, "").replace(/[\s"\u201c\u201d]+$/, "");
 }
 
 const celda = (valores: string[], i: number) => (valores[i] ?? "").trim();
@@ -97,7 +113,8 @@ export function leerFilaCliente(fila: number, valores: string[]): FilaClienteExc
     puesto: celda(valores, 4),
     telefono: celda(valores, 5),
     correo: celda(valores, 6),
-    direccion: celda(valores, 7),
+    direccion: limpiarDireccion(celda(valores, 7)),
+    direccionCruda: celda(valores, 7),
   };
 }
 
@@ -207,6 +224,17 @@ export interface Plan {
    * se señala.
    */
   correosInternos: Array<{ quien: string; correo: string; fila: number }>;
+  /** Lo que se corrigió al leer: comillas sueltas al principio o al final. */
+  limpiezas: Array<{ fila: number; campo: string; antes: string; despues: string }>;
+  /**
+   * Dos contactos del mismo cliente donde un nombre contiene todas las
+   * palabras del otro: "David Ramirez" y "Jose David Ramirez".
+   *
+   * Puede ser la misma persona capturada dos veces, o dos personas que
+   * comparten nombre. No se fusionan: decidirlo necesita a alguien que
+   * conozca al cliente.
+   */
+  posiblesDuplicados: Array<{ cliente: string; nombres: [string, string]; filas: number[] }>;
   /** Renglones sin razón social, que no son nada. */
   ignoradas: number;
 }
@@ -263,6 +291,23 @@ export function masRepetida(
     else grupos.set(llave, { direccion: v.direccion, fila: v.fila, veces: 1 });
   }
   return [...grupos.values()].reduce((a, b) => (b.veces > a.veces ? b : a));
+}
+
+/** Las palabras de un nombre ya normalizado, sin vacíos. */
+const palabrasDe = (nombreNormalizado: string) => nombreNormalizado.split(" ").filter(Boolean);
+
+/**
+ * ¿Todas las palabras de `corto` están en `largo`, siendo nombres distintos?
+ *
+ * Es la regla de `palabrasDeNombre_` del legacy: "David Ramirez" está
+ * contenido en "Jose David Ramirez". No mira el orden, porque el apellido
+ * materno a veces se captura primero.
+ */
+export function contieneTodas(corto: string, largo: string): boolean {
+  const a = palabrasDe(corto);
+  const b = palabrasDe(largo);
+  if (a.length === 0 || a.length >= b.length) return false;
+  return a.every((p) => b.includes(p));
 }
 
 interface Decision {
@@ -335,6 +380,8 @@ export function planearCarga(params: {
     duplicados: [],
     idsAmbiguos: [],
     correosInternos: [],
+    limpiezas: [],
+    posiblesDuplicados: [],
     ignoradas: 0,
   };
 
@@ -384,6 +431,14 @@ export function planearCarga(params: {
       const porRazon = razonesPorId.get(f.idEmp) ?? new Map<string, number[]>();
       porRazon.set(norm, [...(porRazon.get(norm) ?? []), f.fila]);
       razonesPorId.set(f.idEmp, porRazon);
+    }
+    if (f.direccionCruda !== f.direccion) {
+      plan.limpiezas.push({
+        fila: f.fila,
+        campo: "dirección",
+        antes: f.direccionCruda,
+        despues: f.direccion,
+      });
     }
     if (f.correo.trim().toLowerCase().endsWith(`@${dominio}`)) {
       plan.correosInternos.push({
@@ -499,6 +554,35 @@ export function planearCarga(params: {
         direccion: d.escribir,
         deCuantos: ganadora.veces,
       });
+    }
+  }
+
+  // ── Nombres que se contienen, dentro del mismo cliente ────────────────────
+  // Se miran los de la hoja y los que ya están en el ERP: el par puede estar
+  // repartido entre las dos fuentes, que es como se crea el duplicado.
+  for (const cliente of params.clientes) {
+    const vistos = new Map<string, { nombre: string; fila: number }>();
+    for (const c of cliente.contactos) {
+      vistos.set(normalizarNombreContacto(c.nombre), { nombre: c.nombre, fila: 0 });
+    }
+    for (const f of params.filas) {
+      if (porNorm.get(normalizarRazonSocial(f.razonSocial))?.id !== cliente.id) continue;
+      const n = normalizarNombreContacto(f.contacto);
+      if (n && !vistos.has(n)) vistos.set(n, { nombre: f.contacto, fila: f.fila });
+    }
+
+    const lista = [...vistos.entries()];
+    for (let i = 0; i < lista.length; i++) {
+      for (let j = i + 1; j < lista.length; j++) {
+        const [na, a] = lista[i];
+        const [nb, b] = lista[j];
+        if (!contieneTodas(na, nb) && !contieneTodas(nb, na)) continue;
+        plan.posiblesDuplicados.push({
+          cliente: cliente.razonSocial,
+          nombres: [a.nombre, b.nombre],
+          filas: [a.fila, b.fila].filter((n) => n > 0),
+        });
+      }
     }
   }
 

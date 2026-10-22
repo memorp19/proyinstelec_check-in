@@ -266,6 +266,26 @@ function reportar(plan: Plan, clientes: ClienteEnErp[], ignoradas: number[]): vo
     "Se cargan igual, pero probablemente sea el correo del asesor.",
   );
 
+  // Restos de copiar y pegar que, sin esto, acaban impresos en la carta.
+  lista(
+    "🧹  Limpieza al leer (comillas sueltas):",
+    plan.limpiezas.map((l) => `[${String(l.fila).padStart(4)}] ${l.campo}
+           ${l.antes}
+           ${l.despues}`),
+  );
+
+  // Puede ser la misma persona capturada dos veces, o dos que comparten
+  // nombre. No se fusionan: decidirlo necesita a alguien que conozca al cliente.
+  lista(
+    "👥  Posibles duplicados (un nombre contiene al otro):",
+    plan.posiblesDuplicados.map(
+      (d) => `${d.cliente}
+           «${d.nombres[0]}»  y  «${d.nombres[1]}»` +
+        (d.filas.length ? `   (filas ${d.filas.join(", ")})` : "   (los dos ya en el ERP)"),
+    ),
+    "Solo aviso: no se fusiona nada.",
+  );
+
   // Los descartados se nombran, no se cuentan: cada uno es un dato que alguien
   // capturó y que esta carga no puede colocar en ningún cliente.
   const sinRazon = [...ignoradas].sort((a, b) => a - b);
