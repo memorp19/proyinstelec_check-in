@@ -1,0 +1,1 @@
+ALTER TABLE "contactos" ADD COLUMN "direccion" text;
