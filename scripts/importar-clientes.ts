@@ -233,9 +233,11 @@ function reportar(plan: Plan, clientes: ClienteEnErp[], ignoradas: number[]): vo
         `           ERP:   ${d.enErp}\n` +
         `           Excel: ${d.enExcel}${d.seEscribe ? "   ← se sobrescribe" : ""}`,
     ),
-    SOBRESCRIBIR
-      ? "Se van a escribir las del Excel (--sobrescribir)."
-      : "No se tocan. Para reemplazarlas: --sobrescribir (además de --aplicar).",
+    // La nota solo aplica a las que de verdad se quedan como están: un empate
+    // parcial completa el nombre siempre, y decirle "no se toca" sería falso.
+    plan.diferencias.some((d) => !d.seEscribe)
+      ? "Las marcadas se quedan como están. Para reemplazarlas: --sobrescribir (además de --aplicar)."
+      : "Todas se escriben.",
   );
 
   lista(
@@ -264,6 +266,17 @@ function reportar(plan: Plan, clientes: ClienteEnErp[], ignoradas: number[]): vo
     `📨  Contactos con correo interno (@${DOMINIO}):`,
     plan.correosInternos.map((c) => `[${String(c.fila).padStart(4)}] ${c.quien}  →  ${c.correo}`),
     "Se cargan igual, pero probablemente sea el correo del asesor.",
+  );
+
+  // Aquí no se decide: elegir mal fusiona a dos personas, y agregarlo como
+  // nuevo crea el duplicado que la regla viene a evitar.
+  lista(
+    "🤔  Nombres que podrían ser dos contactos distintos (no se tocan):",
+    plan.ambiguos.map(
+      (a) => `[${String(a.fila).padStart(4)}] ${a.quien}
+           candidatos: ${a.candidatos.join("  |  ")}`,
+    ),
+    "El renglón se deja pasar. Resuélvelo a mano y vuelve a correr.",
   );
 
   // Restos de copiar y pegar que, sin esto, acaban impresos en la carta.

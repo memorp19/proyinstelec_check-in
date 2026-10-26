@@ -176,11 +176,20 @@ export interface ContactoNuevo {
 export interface CambioDeContacto {
   id: string;
   cliente: string;
+  /** El nombre que tiene hoy en el ERP, para el reporte. */
   nombre: string;
   puesto?: string;
   telefono?: string;
   correo?: string;
   direccion?: string;
+  /**
+   * Solo cuando el empate fue parcial: el nombre completo de la hoja.
+   *
+   * No es «pisar un dato»: el guardado está a medias —`Mariana Bravo`
+   * contra `Mariana Bravo Nieto`— y completarlo es lo que lo vuelve
+   * encontrable la próxima vez.
+   */
+  nombreCompleto?: { nombre: string; normalizado: string };
 }
 
 export interface SinCliente {
@@ -224,6 +233,14 @@ export interface Plan {
    * se señala.
    */
   correosInternos: Array<{ quien: string; correo: string; fila: number }>;
+  /**
+   * Un nombre de la hoja que podría ser dos contactos distintos del ERP.
+   *
+   * Aquí no se decide ni se agrega: elegir mal fusiona a dos personas, y
+   * agregarlo como nuevo crea el duplicado que esta regla viene a evitar. El
+   * renglón se deja pasar y alguien que conozca al cliente lo resuelve.
+   */
+  ambiguos: Array<{ quien: string; fila: number; candidatos: string[] }>;
   /** Lo que se corrigió al leer: comillas sueltas al principio o al final. */
   limpiezas: Array<{ fila: number; campo: string; antes: string; despues: string }>;
   /**
@@ -380,6 +397,7 @@ export function planearCarga(params: {
     duplicados: [],
     idsAmbiguos: [],
     correosInternos: [],
+    ambiguos: [],
     limpiezas: [],
     posiblesDuplicados: [],
     ignoradas: 0,
@@ -413,13 +431,26 @@ export function planearCarga(params: {
   const contactosDe = new Map<string, Map<string, { id: string; nombre: string; fila: number }>>();
   const cambiosDe = new Map<string, CambioDeContacto>();
 
+  /**
+   * Igual que con la razón social, el nombre guardado **se vuelve a
+   * normalizar**: `contactos.nombre_normalizado` tiene el mismo problema que
+   * `clientes.razon_normalizada` —filas con el nombre en mayúsculas y con
+   * acentos, nunca pasadas por el normalizador—. Comparar la columna tal cual
+   * no encontraba a 55 de los 57 contactos, y como el índice único compara
+   * cadenas, el alta de los 55 habría pasado sin un solo error.
+   */
   for (const cliente of params.clientes) {
-    contactosDe.set(
-      cliente.id,
-      new Map(
-        cliente.contactos.map((c) => [c.nombreNormalizado, { id: c.id, nombre: c.nombre, fila: 0 }]),
-      ),
-    );
+    const porNombre = new Map<string, { id: string; nombre: string; fila: number }>();
+    for (const c of cliente.contactos) {
+      const entrada = { id: c.id, nombre: c.nombre, fila: 0 };
+      for (const llave of [
+        normalizarNombreContacto(c.nombreNormalizado),
+        normalizarNombreContacto(c.nombre),
+      ]) {
+        if (llave && !porNombre.has(llave)) porNombre.set(llave, entrada);
+      }
+    }
+    contactosDe.set(cliente.id, porNombre);
   }
 
   for (const f of params.filas) {
@@ -478,7 +509,30 @@ export function planearCarga(params: {
 
     const quien = `${cliente.razonSocial} · ${f.contacto}`;
     const existentes = contactosDe.get(cliente.id)!;
-    const existente = existentes.get(nombreNorm);
+
+    /**
+     * Exacto primero y, si no, la regla de `datosDelCliente_`: el nombre
+     * guardado está contenido en el de la hoja. `Mariana Bravo` es la
+     * misma persona que `Mariana Bravo Nieto`, capturada sin el materno.
+     */
+    let existente = existentes.get(nombreNorm);
+    let parcial = false;
+    if (!existente) {
+      const candidatos = [...new Set(existentes.values())].filter(
+        // Solo contra lo que YA estaba en el ERP (`fila === 0`). Dos renglones
+        // distintos de la hoja son dos contactos: quien la capturó los escribió
+        // por separado, y fusionarlos es una decisión suya, no de esta carga.
+        // Para ese caso está el aviso de posibles duplicados.
+        (c) => c.fila === 0 && contieneTodas(normalizarNombreContacto(c.nombre), nombreNorm),
+      );
+      if (candidatos.length === 1) {
+        existente = candidatos[0];
+        parcial = true;
+      } else if (candidatos.length > 1) {
+        plan.ambiguos.push({ quien, fila: f.fila, candidatos: candidatos.map((c) => c.nombre) });
+        continue;
+      }
+    }
 
     if (!existente) {
       const id = nuevoId();
@@ -506,10 +560,24 @@ export function planearCarga(params: {
       continue;
     }
 
-    const enErp = cliente.contactos.find((c) => c.nombreNormalizado === nombreNorm)!;
+    const enErp = cliente.contactos.find((c) => c.id === existente!.id)!;
     const cambio: CambioDeContacto =
       cambiosDe.get(existente.id) ??
       ({ id: existente.id, cliente: cliente.razonSocial, nombre: enErp.nombre } as CambioDeContacto);
+
+    // El empate parcial completa el nombre guardado. Se reporta como
+    // diferencia porque es un dato que cambia, no un hueco que se llena.
+    if (parcial && !cambio.nombreCompleto) {
+      cambio.nombreCompleto = { nombre: f.contacto, normalizado: nombreNorm };
+      plan.diferencias.push({
+        quien,
+        campo: "nombre (empate parcial)",
+        enErp: enErp.nombre,
+        enExcel: f.contacto,
+        fila: f.fila,
+        seEscribe: true,
+      });
+    }
 
     const campos: Array<[string, string | null, string, keyof CambioDeContacto]> = [
       ["puesto", enErp.puesto, f.puesto, "puesto"],
@@ -521,7 +589,7 @@ export function planearCarga(params: {
       ["dirección", enErp.direccion, f.direccion, "direccion"],
     ];
 
-    let tocado = false;
+    let tocado = parcial;
     for (const [campo, actual, entrante, llave] of campos) {
       const d = decidir(campo, actual, entrante, { quien, fila: f.fila, sobrescribir }, plan);
       if (d.escribir !== null) {
@@ -651,9 +719,23 @@ export function insertarContacto<T>(
  */
 export function actualizarContacto<T>(
   sql: ConsultaSql<T>,
-  c: { id: string; puesto?: string; telefono?: string; correo?: string; direccion?: string },
+  c: {
+    id: string;
+    puesto?: string;
+    telefono?: string;
+    correo?: string;
+    direccion?: string;
+    nombreCompleto?: { nombre: string; normalizado: string };
+  },
 ): T[] {
   const consultas: T[] = [];
+  // Las dos columnas en la misma sentencia: dejar el normalizado viejo con el
+  // nombre nuevo es exactamente la incoherencia que causó todo esto.
+  if (c.nombreCompleto) {
+    consultas.push(
+      sql`UPDATE contactos SET nombre = ${c.nombreCompleto.nombre}, nombre_normalizado = ${c.nombreCompleto.normalizado}, updated_at = now() WHERE id = ${c.id}`,
+    );
+  }
   if (c.puesto !== undefined) {
     consultas.push(sql`UPDATE contactos SET puesto = ${c.puesto}, updated_at = now() WHERE id = ${c.id}`);
   }

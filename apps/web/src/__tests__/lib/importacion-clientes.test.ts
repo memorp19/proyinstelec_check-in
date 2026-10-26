@@ -642,6 +642,125 @@ describe("avisos del reporte", () => {
   });
 });
 
+// ── Empate con lo que ya está en el ERP ──────────────────────────────────────
+
+describe("empate con los contactos existentes", () => {
+  /**
+   * El caso que dejaba 55 de 57 contactos sin emparejar:
+   * `contactos.nombre_normalizado` guarda el nombre en mayúsculas y con
+   * acentos, nunca pasado por el normalizador. Y como el índice único compara
+   * cadenas, el alta de los 55 habría pasado sin un solo error.
+   */
+  it("encuentra al contacto aunque la columna normalizada esté sucia", () => {
+    const sucio = persona({ nombre: "Alberto Díaz", nombreNormalizado: "ALBERTO DÍAZ" });
+    const plan = planear(
+      [fila(renglon("Aceros del Norte", "Alberto Díaz", "Compras"))],
+      [empresa({ contactos: [sucio] })],
+    );
+    expect(plan.contactosNuevos).toEqual([]);
+    expect(plan.contactosActualizados).toMatchObject([{ id: "con-1", puesto: "Compras" }]);
+  });
+
+  it("y también si el normalizado guardado viene vacío", () => {
+    const plan = planear(
+      [fila(renglon("Aceros del Norte", "Alberto Díaz", "Compras"))],
+      [empresa({ contactos: [persona({ nombre: "Alberto Díaz", nombreNormalizado: "" })] })],
+    );
+    expect(plan.contactosNuevos).toEqual([]);
+  });
+
+  // La regla de datosDelCliente_: el nombre guardado está contenido en el de
+  // la hoja. Capturado sin el apellido materno.
+  it("empata parcial y completa el nombre a medias", () => {
+    const aMedias = persona({ nombre: "Mariana Bravo", nombreNormalizado: "MARIANA BRAVO" });
+    const plan = planear(
+      [fila(renglon("Aceros del Norte", "Mariana Bravo Nieto", "Supervisor"), 46)],
+      [empresa({ contactos: [aMedias] })],
+    );
+    expect(plan.contactosNuevos).toEqual([]);
+    expect(plan.contactosActualizados).toEqual([
+      {
+        id: "con-1",
+        cliente: "Aceros del Norte S.A. de C.V.",
+        nombre: "Mariana Bravo",
+        nombreCompleto: { nombre: "Mariana Bravo Nieto", normalizado: "mariana bravo nieto" },
+        puesto: "Supervisor",
+      },
+    ]);
+    // Es un dato que cambia, no un hueco que se llena: va a diferencias.
+    expect(plan.diferencias).toMatchObject([
+      {
+        campo: "nombre (empate parcial)",
+        enErp: "Mariana Bravo",
+        enExcel: "Mariana Bravo Nieto",
+        fila: 46,
+        seEscribe: true,
+      },
+    ]);
+  });
+
+  it("el nombre y su normalizado se escriben en la misma sentencia", () => {
+    const sqlFalso = (p: TemplateStringsArray, ...v: unknown[]) =>
+      p.reduce((acc, parte, i) => acc + parte + (i < v.length ? JSON.stringify(v[i]) : ""), "");
+    const plan = planear(
+      [fila(renglon("Aceros del Norte", "Mariana Bravo Nieto"), 46)],
+      [empresa({ contactos: [persona({ nombre: "Mariana Bravo", nombreNormalizado: "MARIANA BRAVO" })] })],
+    );
+    const sentencias = sentenciasDelPlan(sqlFalso, plan);
+    expect(sentencias).toHaveLength(1);
+    expect(sentencias[0]).toContain("nombre =");
+    expect(sentencias[0]).toContain("nombre_normalizado =");
+  });
+
+  // Elegir mal fusiona a dos personas; agregarlo crea el duplicado que la
+  // regla viene a evitar. Así que no se hace ninguna de las dos.
+  it("con dos candidatos no decide: lo reporta y deja el renglón", () => {
+    const plan = planear(
+      [fila(renglon("Aceros del Norte", "Juan Carlos Pérez Ruiz"), 12)],
+      [
+        empresa({
+          contactos: [
+            persona({ id: "con-1", nombre: "Juan Pérez", nombreNormalizado: "juan perez" }),
+            persona({ id: "con-2", nombre: "Carlos Ruiz", nombreNormalizado: "carlos ruiz" }),
+          ],
+        }),
+      ],
+    );
+    expect(plan.ambiguos).toEqual([
+      {
+        quien: "Aceros del Norte S.A. de C.V. · Juan Carlos Pérez Ruiz",
+        fila: 12,
+        candidatos: ["Juan Pérez", "Carlos Ruiz"],
+      },
+    ]);
+    expect(plan.contactosNuevos).toEqual([]);
+    expect(plan.contactosActualizados).toEqual([]);
+  });
+
+  // Dos renglones de la hoja son dos contactos: quien la capturó los escribió
+  // por separado. Para eso está el aviso de posibles duplicados.
+  it("el empate parcial NO fusiona dos renglones de la hoja", () => {
+    const plan = planear(
+      [
+        fila(renglon("Aceros del Norte", "David Ramirez"), 8),
+        fila(renglon("Aceros del Norte", "Jose David Ramirez"), 9),
+      ],
+      [empresa()],
+    );
+    expect(plan.contactosNuevos).toHaveLength(2);
+    expect(plan.ambiguos).toEqual([]);
+    expect(plan.posiblesDuplicados).toHaveLength(1);
+  });
+
+  it("un nombre más corto que el guardado no empata", () => {
+    const plan = planear(
+      [fila(renglon("Aceros del Norte", "Mariana Bravo"), 46)],
+      [empresa({ contactos: [persona({ nombre: "Mariana Bravo Nieto", nombreNormalizado: "mariana bravo nieto" })] })],
+    );
+    expect(plan.contactosNuevos).toHaveLength(1);
+  });
+});
+
 // ── Limpieza de la dirección ─────────────────────────────────────────────────
 
 describe("limpiarDireccion", () => {
