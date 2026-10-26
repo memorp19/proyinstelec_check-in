@@ -73,6 +73,56 @@ Por eso la carga de producción empieza por un corte, en este orden y sin saltos
 5. **Desde ese momento todo se captura en el ERP.** Apps Script queda como
    consulta histórica, de solo lectura.
 
+#### El consecutivo: comprobarlo, no fijarlo
+
+El chequeo previo de Apps Script dice con qué número va a seguir el alta: al 22
+de octubre de 2026, **la última cotización con datos es la 278 y la siguiente
+sería la 279**. Conviene volver a correrlo el día del corte, porque si el equipo
+capturó más, el número sube.
+
+**No hay un contador que ajustar.** El número que el ERP propone sale de
+`siguienteNumeroCotizacion`, que es `MAX(numero) + 1` sobre las filas del año;
+la tabla `contadores` no interviene en el folio de cotización. Si la carga llega
+completa hasta la 278, la primera alta propone 279 sola.
+
+Lo que sí hay que comprobar, y por eso está aquí:
+
+```sql
+-- El máximo cargado tiene que coincidir con el del chequeo previo.
+SELECT max(numero) FROM cotizaciones WHERE anio = 2026;
+```
+
+Si sale **menos** que lo que dice Apps Script, la carga quedó incompleta por
+arriba: faltan las últimas cotizaciones del año, y la primera alta en el ERP
+**propondría un número que ya existe en Apps Script**. No es un problema del
+contador sino del paso 0 — los Excel se exportaron antes de que se capturaran.
+Se corrige volviendo a exportar y recargando, no tocando ningún número a mano.
+
+> El número del POST viene del cuerpo, no del GET: la sugerencia es solo eso.
+> Quien dé de alta puede teclear otro, y nada se lo impide.
+
+#### Los permisos, y de dónde salen
+
+El mismo chequeo previo lista quién hace qué en Apps Script. Es la fuente para
+dar de alta los permisos en el ERP, y conviene copiarla tal cual en vez de
+reconstruirla de memoria:
+
+| Permiso | Quién (iniciales) |
+|---|---|
+| `cotizaciones.aprobar` | JGM |
+| `cotizaciones.enviar` | EAOL, MNAA, JGM |
+
+**La copia del correo al cliente no se configura.** `enviarAlCliente` pone en
+CC a todos los que tienen `cotizaciones.enviar` menos quien manda, que es
+exactamente lo que hace el sistema viejo. Con la tabla de arriba, el
+comportamiento sale solo.
+
+**El elaborador se reconoce por sus iniciales**, que es la llave con la que el
+ERP identifica personas: `users.iniciales` tiene índice único y las
+cotizaciones importadas solo traen eso. Antes del corte hay que comprobar que
+cada persona del equipo tenga las suyas capturadas; sin ellas no puede ser
+responsable de una OT ni se le reconoce como dueña de su cotización.
+
 **El caso que lo motivó:** la cotización **267 tenía una v1 y una v2 en Apps
 Script que no estaban en el Excel**. Sin el corte, la recarga las habría
 borrado — no quedan "sin actualizar", desaparecen: `--limpiar` reemplaza el año
