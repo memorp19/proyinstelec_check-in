@@ -45,6 +45,10 @@ import { listUsers, type UserProfile } from "./users";
  * mensaje de error interpolara ese valor, le pediría al equipo generar el PDF
  * con el nombre malo — es decir, invitaría a renombrar los PDF a la convención
  * que este mismo cambio viene a quitar.
+ *
+ * Por lo mismo sale de aquí **todo** folio que este módulo escriba: los asuntos
+ * y cuerpos de los correos, y el detalle de la bitácora. Un correo con "-v1" le
+ * enseña al equipo —y al cliente— una convención que ya no existe.
  */
 function folioEsperado(cotizacion: Cotizacion): string {
   return folioCotizacion(cotizacion.numero, cotizacion.anio, cotizacion.version);
@@ -137,7 +141,7 @@ export async function crearCotizacionCompleta(params: {
     cotizacion.drive_folder_url = carpeta.folderUrl;
     await copiarPlantillasCotizacion({
       folderId: carpeta.folderId,
-      folio: cotizacion.folio,
+      folio: folioEsperado(cotizacion),
       titulo: cotizacion.titulo,
     });
   } catch (err) {
@@ -148,7 +152,7 @@ export async function crearCotizacionCompleta(params: {
     accion: "COTIZACION_CREADA",
     usuario: params.createdBy,
     referencia: cotPk(cotizacion.numero, cotizacion.anio),
-    detalle: cotizacion.folio,
+    detalle: folioEsperado(cotizacion),
   });
   return { cotizacion, avisos };
 }
@@ -172,7 +176,7 @@ export async function crearNuevaVersionCompleta(params: {
       : await ensureCarpetaCotizacion(params.numero, params.anio);
     await copiarPlantillasCotizacion({
       folderId: carpeta.folderId,
-      folio: cotizacion.folio,
+      folio: folioEsperado(cotizacion),
       titulo: cotizacion.titulo,
     });
   } catch (err) {
@@ -183,26 +187,43 @@ export async function crearNuevaVersionCompleta(params: {
     accion: "COTIZACION_NUEVA_VERSION",
     usuario: params.createdBy,
     referencia: cotPk(cotizacion.numero, cotizacion.anio),
-    detalle: cotizacion.folio,
+    detalle: folioEsperado(cotizacion),
   });
   return { cotizacion, avisos };
 }
 
 // ── 1. Enviar a revisión ──────────────────────────────────────────────────────
 
+/**
+ * Manda a revisión **la versión que se indica**, no la vigente.
+ *
+ * `version` es obligatoria a propósito. Crear una versión nueva no exige
+ * ningún estatus, así que dos pueden estar en PROCESO a la vez; con la versión
+ * opcional, la ruta del cotizador congelaba la v0 y mandaba a revisión la v1:
+ * el revisor recibía una versión que nadie congeló y la congelada se quedaba
+ * editable. Exigirla hace que el compilador marque cualquier llamada que no
+ * diga sobre cuál opera.
+ */
 export async function enviarARevision(params: {
   numero: number;
   anio: number;
+  version: number;
   usuario: string;
 }): Promise<{ cotizacion: Cotizacion; avisos: string[] }> {
   const avisos: string[] = [];
-  const cotizacion = await cambiarEstatus(params.numero, params.anio, "REVISION");
+  const cotizacion = await cambiarEstatus(
+    params.numero,
+    params.anio,
+    "REVISION",
+    params.version,
+  );
+  const folio = folioEsperado(cotizacion);
 
   await registrarBitacora({
     accion: "COTIZACION_A_REVISION",
     usuario: params.usuario,
     referencia: cotPk(cotizacion.numero, cotizacion.anio),
-    detalle: cotizacion.folio,
+    detalle: folio,
   });
 
   // PDF adjunto si ya existe en la carpeta (opcional en esta etapa)
@@ -211,7 +232,7 @@ export async function enviarARevision(params: {
     try {
       const { pdf, nombresEnCarpeta } = await buscarPdfCotizacion({
         folderId: cotizacion.drive_folder_id,
-        folio: folioEsperado(cotizacion),
+        folio,
       });
       if (pdf) {
         adjuntos = [{ filename: pdf.filename, mimeType: "application/pdf", contenido: pdf.contenido }];
@@ -232,10 +253,10 @@ export async function enviarARevision(params: {
   } else {
     await enviarCorreo({
       para: revisores,
-      asunto: `Lista para Revisión · ${cotizacion.folio} · ${cotizacion.cliente}`,
+      asunto: `Lista para Revisión · ${folio} · ${cotizacion.cliente}`,
       html: plantillaCorreo({
         titulo: "Cotización lista para revisión",
-        cuerpoHtml: `<table>${filaTabla("Folio", cotizacion.folio)}${filaTabla("Cliente", cotizacion.cliente)}${filaTabla("Título", cotizacion.titulo)}${filaTabla("Elaboró", cotizacion.elaboro)}</table>
+        cuerpoHtml: `<table>${filaTabla("Folio", folio)}${filaTabla("Cliente", cotizacion.cliente)}${filaTabla("Título", cotizacion.titulo)}${filaTabla("Elaboró", cotizacion.elaboro)}</table>
           <p style="margin:16px 0 0;"><a href="${urlSistema()}/erp/revision" style="display:inline-block;background:#1d4ed8;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-size:13px;font-weight:bold;">Revisar en el sistema</a></p>
           <p style="color:#6b7280;font-size:12px;margin-top:12px;">Desde ahí puedes aprobarla o solicitar una corrección.</p>`,
       }),
@@ -250,10 +271,10 @@ export async function enviarARevision(params: {
   if (correoElab && correoElab !== params.usuario) {
     await enviarCorreo({
       para: [correoElab],
-      asunto: `Enviada a revisión · ${cotizacion.folio}`,
+      asunto: `Enviada a revisión · ${folio}`,
       html: plantillaCorreo({
         titulo: "Tu cotización fue enviada a revisión",
-        cuerpoHtml: `<p style="font-size:13px;color:#111827;">${cotizacion.folio} · ${cotizacion.cliente}. Te avisaremos cuando el revisor la apruebe o pida una corrección.</p>`,
+        cuerpoHtml: `<p style="font-size:13px;color:#111827;">${folio} · ${cotizacion.cliente}. Te avisaremos cuando el revisor la apruebe o pida una corrección.</p>`,
       }),
       registradoPor: params.usuario,
       referencia: cotPk(cotizacion.numero, cotizacion.anio),
@@ -282,21 +303,22 @@ export async function aprobarCotizacion(params: {
     version: vigente.version,
     aprobadoPor: params.aprobadoPor,
   });
+  const folio = folioEsperado(vigente);
   await registrarBitacora({
     accion: "COTIZACION_APROBADA",
     usuario: params.aprobadoPor,
     referencia: cotPk(vigente.numero, vigente.anio),
-    detalle: `${vigente.folio} v${vigente.version}`,
+    detalle: folio,
   });
 
   const correoElab = await correoDeElaborador(vigente.elaboro);
   if (correoElab) {
     await enviarCorreo({
       para: [correoElab],
-      asunto: `Aprobada · ${vigente.folio}`,
+      asunto: `Aprobada · ${folio}`,
       html: plantillaCorreo({
         titulo: "Cotización aprobada",
-        cuerpoHtml: `<p style="font-size:13px;color:#111827;">${vigente.folio} · ${vigente.cliente} fue aprobada. Ya puedes enviarla al cliente desde el sistema.</p>`,
+        cuerpoHtml: `<p style="font-size:13px;color:#111827;">${folio} · ${vigente.cliente} fue aprobada. Ya puedes enviarla al cliente desde el sistema.</p>`,
       }),
       registradoPor: params.aprobadoPor,
       referencia: cotPk(vigente.numero, vigente.anio),
@@ -321,7 +343,16 @@ export async function solicitarCorreccion(params: {
     throw new Error(`La cotización ya no está en revisión (estatus actual: ${vigente.estatus})`);
   }
 
-  const cotizacion = await cambiarEstatus(params.numero, params.anio, "PROCESO");
+  // Sobre la fila que se acaba de validar, no sobre "la vigente de ahora": si
+  // entre la lectura y la escritura nació una versión, la corrección caería
+  // sobre una que nadie revisó.
+  const cotizacion = await cambiarEstatus(
+    params.numero,
+    params.anio,
+    "PROCESO",
+    vigente.version,
+  );
+  const folio = folioEsperado(cotizacion);
   await registrarBitacora({
     accion: "COTIZACION_CORRECCION",
     usuario: params.usuario,
@@ -333,10 +364,10 @@ export async function solicitarCorreccion(params: {
   if (correoElab) {
     await enviarCorreo({
       para: [correoElab],
-      asunto: `Corrección solicitada · ${cotizacion.folio}`,
+      asunto: `Corrección solicitada · ${folio}`,
       html: plantillaCorreo({
         titulo: "Se solicitó una corrección",
-        cuerpoHtml: `<table>${filaTabla("Folio", cotizacion.folio)}${filaTabla("Cliente", cotizacion.cliente)}</table>
+        cuerpoHtml: `<table>${filaTabla("Folio", folio)}${filaTabla("Cliente", cotizacion.cliente)}</table>
           <p style="font-size:13px;color:#111827;margin-top:12px;">La cotización regresó a PROCESO. Comentarios del revisor:</p>
           <blockquote style="border-left:3px solid #d1d5db;margin:8px 0;padding:4px 12px;color:#374151;font-size:13px;">${params.comentario.trim()}</blockquote>`,
       }),
@@ -481,7 +512,7 @@ export async function enviarAlCliente(params: {
     para: params.destinatarios,
     cc,
     asunto,
-    html: plantillaCorreo({ titulo: `Cotización ${cotizacion.folio}`, cuerpoHtml: cuerpo }),
+    html: plantillaCorreo({ titulo: `Cotización ${esperado}`, cuerpoHtml: cuerpo }),
     adjuntos: [{ filename: pdf.filename, mimeType: "application/pdf", contenido: pdf.contenido }],
     registradoPor: params.remitente.email,
     referencia: cotPk(cotizacion.numero, cotizacion.anio),
@@ -494,21 +525,29 @@ export async function enviarAlCliente(params: {
     throw new Error(motivoNoEnviado(resultado.motivo));
   }
 
-  // Estatus → ENVIADA (si venía de REVISION) y fecha de envío
+  // Estatus → ENVIADA (si venía de REVISION) y fecha de envío, sobre la
+  // versión cuya aprobación se verificó. La aprobación se guarda por
+  // versión exacta (regla del legacy): escribir ENVIADA en otra sellaría como
+  // enviada una versión que nadie aprobó, y con el PDF de esta.
   const ahora = new Date().toISOString();
   if (cotizacion.estatus === "REVISION") {
-    await cambiarEstatus(params.numero, params.anio, "ENVIADA");
+    await cambiarEstatus(params.numero, params.anio, "ENVIADA", cotizacion.version);
   }
-  await updateCotizacion(params.numero, params.anio, { fechaEnvio: ahora });
+  await updateCotizacion(
+    params.numero,
+    params.anio,
+    { fechaEnvio: ahora },
+    cotizacion.version,
+  );
 
   await registrarBitacora({
     accion: "COTIZACION_ENVIADA",
     usuario: params.remitente.email,
     referencia: cotPk(cotizacion.numero, cotizacion.anio),
-    detalle: `${cotizacion.folio} → ${params.destinatarios.join(", ")}`,
+    detalle: `${esperado} → ${params.destinatarios.join(", ")}`,
   });
 
-  const actualizada = await getVigente(params.numero, params.anio);
+  const actualizada = await getVersion(params.numero, params.anio, cotizacion.version);
   return { cotizacion: actualizada ?? cotizacion };
 }
 
@@ -545,7 +584,7 @@ async function generarOT(params: {
     throw new Error(
       params.version === undefined
         ? "Cotización no encontrada"
-        : `La cotización no tiene versión ${params.version}`,
+        : `No existe ${folioCotizacion(params.numero, params.anio, params.version)}`,
     );
   }
   if (vigente.estatus !== "ENVIADA") {
@@ -674,7 +713,7 @@ async function generarOT(params: {
       asunto: `Nueva OT ${folio} · ${vigente.cliente} · ${areasValidas.map((a) => a.nombre).join(", ")}`,
       html: plantillaCorreo({
         titulo: `Nueva Orden de Trabajo ${folio}`,
-        cuerpoHtml: `<table>${filaTabla("Folio OT", folio)}${filaTabla("Responsable", `${responsable.nombre} (${responsable.iniciales})`)}${filaTabla("OC", ordenCompra ?? "Sin orden de compra")}${filaTabla("Cotización origen", vigente.folio)}${filaTabla("Cliente", vigente.cliente)}${filaTabla("Título", vigente.titulo)}${filaTabla("Áreas", areasValidas.map((a) => a.nombre).join(", "))}${montoParaCorreo(vigente)}</table>
+        cuerpoHtml: `<table>${filaTabla("Folio OT", folio)}${filaTabla("Responsable", `${responsable.nombre} (${responsable.iniciales})`)}${filaTabla("OC", ordenCompra ?? "Sin orden de compra")}${filaTabla("Cotización origen", folioEsperado(vigente))}${filaTabla("Cliente", vigente.cliente)}${filaTabla("Título", vigente.titulo)}${filaTabla("Áreas", areasValidas.map((a) => a.nombre).join(", "))}${montoParaCorreo(vigente)}</table>
         ${carpetaUrl ? `<p style="margin-top:12px;font-size:13px;"><a href="${carpetaUrl}" style="color:#1d4ed8;">Carpeta de la OT en Drive</a></p>` : ""}`,
       }),
       registradoPor: params.usuario,
@@ -686,7 +725,7 @@ async function generarOT(params: {
     accion: "OT_CREADA",
     usuario: params.usuario,
     referencia: `OT#${ot.folio}`,
-    detalle: `${folio} desde ${vigente.folio} · ${ordenCompra ? `OC ${ordenCompra}` : "sin OC"}`,
+    detalle: `${folio} desde ${folioEsperado(vigente)} · ${ordenCompra ? `OC ${ordenCompra}` : "sin OC"}`,
   });
 
   return { folioOt: folio, avisos };
@@ -783,7 +822,7 @@ export async function registrarOcPosterior(params: {
   }
   if (asignada.ordenCompra) {
     throw new Error(
-      `La v${asignada.version} ya tiene la orden de compra ${asignada.ordenCompra}`,
+      `${folioCotizacion(params.numero, params.anio, asignada.version)} ya tiene la orden de compra ${asignada.ordenCompra}`,
     );
   }
 
@@ -813,7 +852,7 @@ export async function registrarOcPosterior(params: {
     accion: "COTIZACION_OC_POSTERIOR",
     usuario: params.usuario,
     referencia: cotPk(params.numero, params.anio),
-    detalle: `OC registrada después de asignar: ${oc} (v${asignada.version}, ${asignada.folioOt})`,
+    detalle: `OC registrada después de asignar: ${oc} (${folioCotizacion(params.numero, params.anio, asignada.version)}, ${asignada.folioOt})`,
   });
 
   return { version: asignada.version, folioOt: asignada.folioOt, ordenCompra: oc };
@@ -879,7 +918,7 @@ export async function modificarOcPosterior(params: {
   // más alto que esta operación exige.
   if (!asignada.ordenCompra) {
     throw new Error(
-      `La v${asignada.version} todavía no tiene orden de compra; regístrala en vez de modificarla`,
+      `${folioCotizacion(params.numero, params.anio, asignada.version)} todavía no tiene orden de compra; regístrala en vez de modificarla`,
     );
   }
   const anterior = asignada.ordenCompra;
@@ -906,7 +945,7 @@ export async function modificarOcPosterior(params: {
     accion: "COTIZACION_OC_MODIFICADA",
     usuario: params.usuario,
     referencia: cotPk(params.numero, params.anio),
-    detalle: `OC ${anterior} → ${oc} (v${asignada.version}, ${asignada.folioOt}). Motivo: ${motivo}`,
+    detalle: `OC ${anterior} → ${oc} (${folioCotizacion(params.numero, params.anio, asignada.version)}, ${asignada.folioOt}). Motivo: ${motivo}`,
   });
 
   return { version: asignada.version, folioOt: asignada.folioOt, anterior, ordenCompra: oc };
