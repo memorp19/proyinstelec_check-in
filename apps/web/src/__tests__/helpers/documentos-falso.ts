@@ -137,7 +137,7 @@ export interface DocumentosFalso extends Documentos {
 
 export function documentosFalso(
   plantilla?: DocumentoDocs,
-  opciones: { fallaAlAplicar?: Error } = {},
+  opciones: { fallaAlAplicar?: Error; fallaAlApartar?: string } = {},
 ): DocumentosFalso {
   const docs = new Map<string, DocumentoDocs>();
   const aplicadas: LlamadaAplicar[] = [];
@@ -191,6 +191,9 @@ export function documentosFalso(
     },
 
     async moverAPapelera(id) {
+      if (opciones.fallaAlApartar === id) {
+        throw new Error(`Drive no dejó apartar ${id}`);
+      }
       papelera.push(id);
       docs.delete(id);
     },

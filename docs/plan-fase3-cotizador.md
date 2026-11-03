@@ -799,22 +799,53 @@ nunca pasaron por aquí.
 Esto arregla de paso el problema de las v0 históricas: en cuanto una cotización
 genere su PDF desde el ERP, deja de depender del nombre.
 
-### 4.5 Rehacer el PDF
+### 4.5 Un solo botón: «Ver cotización»
 
-Dos botones, como hoy:
+*(Reescrito: el plan describía dos botones y una edición a mano que el sistema
+viejo ya no tiene.)*
 
-- **Generar documento** — copia la plantilla, la llena, exporta el PDF. Se
-  niega si el revisor o el cliente ya tienen ese PDF, salvo que se fuerce
-  (`COT_05:320-344`).
-- **Actualizar PDF** — rehace solo el PDF desde el Doc como esté ahora, para
-  recoger ediciones hechas a mano en el documento (`COT_05:597`). Antes de
-  mandar a revisión, solo si el Doc cambió después del PDF — con dos minutos de
-  tolerancia (`COT_05:626-630`).
+El Apps Script quitó el botón «Regenerar» el 19 de octubre de 2026: **«Ver
+cotización» rehace el documento desde la plantilla cada vez**. No hay borrador,
+no hay un paso intermedio, y lo que el botón enseña es el documento de verdad
+con su PDF, ya en la carpeta del folio.
 
-Lo anterior se aparta **después** de tener lo nuevo: si algo falla a medio
-camino, el documento anterior sigue ahí (`COT_05:399-401`).
+El ERP hace lo mismo, y **no replica la edición a mano**. El viejo todavía trae
+`docEditadoAMano_` y un «Actualizar PDF» que rehace el PDF conservando lo que
+alguien escribió dentro del Doc; eso se queda fuera a propósito. Un documento
+que se edita por fuera del cotizador deja de cuadrar con lo que la base dice
+que vale la cotización, y el congelado existe justo para que eso no pase.
 
----
+#### El orden, que es lo único delicado
+
+1. Guardar lo que haya en la pantalla.
+2. Copiar la plantilla a la carpeta del folio, con el nombre bueno.
+3. Leerla, armar **todas** las solicitudes y aplicarlas en un solo
+   `batchUpdate`.
+4. Exportar el PDF.
+5. Guardar `doc_drive_id` y `pdf_drive_id`.
+6. **Al final**, apartar los anteriores.
+
+Lo anterior se aparta después de tener lo nuevo (`COT_05:399-401`): si algo
+falla a medio camino, el documento que el equipo ya conocía sigue ahí. Y si
+falla antes de exportar, la copia a medio llenar se va a la papelera — si se
+quedara con el nombre bueno, la siguiente corrida crearía una segunda y nadie
+sabría cuál es la buena.
+
+En un solo lote y no en varios porque la API los aplica como una unidad: media
+lista de solicitudes deja un documento que parece bueno y no lo es.
+
+#### La fecha no se mueve
+
+Se guarda en la primera generación y **no cambia al regenerar**. Una cotización
+que se rehace una semana después —porque se corrigió un precio— tiene que
+seguir diciendo la fecha con la que el cliente la recibió. Si se moviera, dos
+PDF del mismo folio dirían fechas distintas y ninguna sería la buena.
+
+#### Lo que sí se queda para después
+
+Generar al mandar a revisión, el bloqueo desde la aprobación y que
+`enviarAlCliente` use `pdf_drive_id` en vez de buscar por nombre. Son del flujo,
+no del documento, y entran cuando el documento ya salga bien.
 
 ## 5. Copiar a una versión nueva
 
