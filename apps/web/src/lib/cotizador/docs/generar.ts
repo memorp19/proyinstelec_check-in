@@ -20,10 +20,14 @@
 import type { Documentos } from "../../documentos-google";
 import type { Armado } from "../armado";
 import type { Condiciones, DatosDocumento } from "../documento";
+import { normasElegidas } from "../normas";
+import type { ResultadoCotizacion } from "../tipos";
 import type { Solicitud } from "./tipos";
 import { nombreDelDocumento } from "./nombre";
 import { sustituciones, type Marcador } from "./marcadores";
+import { quitarNormas } from "./normas-plantilla";
 import { ocultarRenglones } from "./ocultar";
+import { solicitudesDeTabla, tablaDeCotizacion } from "./tabla";
 import { fechaFija, valoresDeMarcadores } from "./valores";
 
 export interface DatosDeGeneracion {
@@ -33,6 +37,8 @@ export interface DatosDeGeneracion {
   cliente: string;
   titulo: string;
   armado: Armado;
+  /** Lo que cobró el motor. De aquí salen los importes del cuadro. */
+  calculo: ResultadoCotizacion;
   documento: DatosDocumento;
   condiciones: Condiciones;
   /** La del contacto; si no tiene, la del cliente. Ver `valoresDeMarcadores`. */
@@ -69,6 +75,20 @@ export interface DocumentoGenerado {
  * Separada de `generarDocumento` a propósito: es la parte que decide cómo
  * queda el documento, y es pura. Recibe el JSON de la plantilla y los datos;
  * devuelve la lista y los avisos.
+ *
+ * ── El orden del lote ──
+ *
+ * `batchUpdate` aplica en orden y cada inserción o borrado corre los índices
+ * posteriores. Como todo se calcula sobre el JSON original, lo que cambia
+ * longitudes se emite **de abajo hacia arriba del documento**:
+ *
+ * 1. La **tabla de partidas**, que está al final (índice ~3000).
+ * 2. Las **normas** que no se eligieron (~1000).
+ * 3. Los **renglones del destinatario** que no salen (~300).
+ * 4. Las **sustituciones**, que no usan índices: `replaceAllText` compara
+ *    texto. Van al final porque cambian longitudes en todo el documento.
+ *
+ * Al revés, el primer borrado invalidaría todos los índices de abajo.
  */
 export function solicitudesDelDocumento(
   plantilla: Parameters<typeof sustituciones>[0],
@@ -86,8 +106,13 @@ export function solicitudesDelDocumento(
     direccionCliente: d.direccionCliente,
   });
 
-  // Primero quitar, después sustituir: el renglón se localiza por su marcador,
-  // y una vez sustituido ya no hay por dónde agarrarlo.
+  const cuadro = solicitudesDeTabla(plantilla, tablaDeCotizacion(d.armado, d.calculo));
+
+  const elegidas = normasElegidas(d.documento.normas, d.titulo).map((n) => n.id);
+  const normas = quitarNormas(plantilla, elegidas);
+
+  // Quitar antes de sustituir: el renglón se localiza por su marcador, y una
+  // vez sustituido ya no hay por dónde agarrarlo.
   const quitados = ocultarRenglones(plantilla, ocultos);
   const puestos = sustituciones(plantilla, valores as Record<Marcador, string>);
 
@@ -96,8 +121,13 @@ export function solicitudesDelDocumento(
   );
 
   return {
-    solicitudes: [...quitados.solicitudes, ...puestos.solicitudes],
-    avisos: [...avisos, ...deFaltantes],
+    solicitudes: [
+      ...cuadro.solicitudes,
+      ...normas.solicitudes,
+      ...quitados.solicitudes,
+      ...puestos.solicitudes,
+    ],
+    avisos: [...avisos, ...cuadro.avisos, ...normas.avisos, ...deFaltantes],
   };
 }
 

@@ -59,10 +59,31 @@ export interface Parrafo {
   bullet?: Vineta;
 }
 
+/** Un borde de celda. `width: 0` y color blanco es como se "quita" una línea. */
+export interface Borde {
+  color?: { color?: { rgbColor?: { red?: number; green?: number; blue?: number } } };
+  width?: { magnitude: number; unit: string };
+  dashStyle?: string;
+}
+
+export interface EstiloCelda {
+  borderLeft?: Borde;
+  borderRight?: Borde;
+  borderTop?: Borde;
+  borderBottom?: Borde;
+  /** Solo de lectura: cuántas filas y columnas ocupa una celda ya unida. */
+  rowSpan?: number;
+  columnSpan?: number;
+  paddingTop?: { magnitude: number; unit: string };
+  paddingBottom?: { magnitude: number; unit: string };
+  contentAlignment?: string;
+}
+
 export interface CeldaTabla {
   startIndex?: number;
   endIndex?: number;
   content?: ElementoEstructural[];
+  tableCellStyle?: EstiloCelda;
 }
 
 export interface FilaTabla {
@@ -117,7 +138,9 @@ export type Solicitud =
   | SolicitudEstiloParrafo
   | SolicitudBorrarFila
   | SolicitudInsertarFila
-  | SolicitudVinetas;
+  | SolicitudVinetas
+  | SolicitudUnirCeldas
+  | SolicitudEstiloCelda;
 
 export interface SolicitudReemplazarTexto {
   replaceAllText: {
@@ -160,8 +183,35 @@ export interface Rango {
   segmentId?: string;
 }
 
+export interface SolicitudUnirCeldas {
+  mergeTableCells: { tableRange: RangoTabla };
+}
+
+export interface SolicitudEstiloCelda {
+  updateTableCellStyle: {
+    tableRange: RangoTabla;
+    tableCellStyle: EstiloCelda;
+    fields: string;
+  };
+}
+
 export interface UbicacionCelda {
   tableStartLocation: { index: number };
   rowIndex: number;
   columnIndex: number;
+}
+
+/**
+ * Un bloque rectangular de celdas.
+ *
+ * Habla en **filas y columnas**, no en índices de carácter: por eso unir
+ * celdas y pintar bordes se puede emitir al final del lote, cuando los
+ * índices de dentro de la tabla ya se movieron. Lo único que tiene que seguir
+ * siendo válido es `tableStartLocation`, y eso solo cambia si se borra o se
+ * inserta algo **antes** de la tabla.
+ */
+export interface RangoTabla {
+  tableCellLocation: UbicacionCelda;
+  rowSpan: number;
+  columnSpan: number;
 }

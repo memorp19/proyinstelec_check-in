@@ -7,6 +7,7 @@ import {
   type DatosDeGeneracion,
 } from "@/src/lib/cotizador/docs/generar";
 import type { Armado } from "@/src/lib/cotizador/armado";
+import type { ResultadoCotizacion } from "@/src/lib/cotizador/tipos";
 import { ArmaDocumento, documentosFalso } from "../../../helpers/documentos-falso";
 
 /** Todos los datos son inventados. */
@@ -16,9 +17,33 @@ const armadoCon = (partidas: number): Armado =>
     numero: 1,
     anio: 2026,
     version: 0,
-    partidas: Array.from({ length: partidas }, (_, i) => ({ id: `P${i}` })),
+    documento: documentoVacio(),
+    partidas: Array.from({ length: partidas }, (_, i) => ({
+      id: `P${i}`,
+      orden: i + 1,
+      titulo: `Partida ${i + 1}`,
+      bloques: [],
+      cantidad: 1,
+      unidad: "servicio",
+      formato: "NORMAL",
+    })),
     gastos: [],
   }) as unknown as Armado;
+
+const calculoCon = (partidas: number): ResultadoCotizacion =>
+  ({
+    moneda: "MXN",
+    partidas: Array.from({ length: partidas }, (_, i) => ({
+      id: `P${i}`,
+      orden: i + 1,
+      cantidad: 1,
+      precioUnitario: 1000,
+      importe: 1000,
+    })),
+    subtotal: 1000 * partidas,
+    iva: 160 * partidas,
+    total: 1160 * partidas,
+  }) as unknown as ResultadoCotizacion;
 
 const datos = (sobre: Partial<DatosDeGeneracion> = {}): DatosDeGeneracion => ({
   numero: 1,
@@ -27,10 +52,20 @@ const datos = (sobre: Partial<DatosDeGeneracion> = {}): DatosDeGeneracion => ({
   cliente: "Minera Sur",
   titulo: "Servicio de Mantenimiento",
   armado: armadoCon(1),
+  calculo: calculoCon(1),
   documento: { ...documentoVacio(), fecha: "2026-10-05" },
   condiciones: { ...CONDICIONES_POR_OMISION, lugar: "la planta" },
   ...sobre,
 });
+
+/** Un cuadro con la forma del de la plantilla: encabezado, molde y totales. */
+const cuadroDePartidas = (): Array<Array<string>> => [
+  ["Partida", "Concepto", "Cantidad", "Precio unitario", "Costo"],
+  ["", "", "", "", ""],
+  ["", "", "", "Subtotal:", "$ 45,000.00 MXN"],
+  ["", "", "", "IVA:", "$ 7,200.00 MXN"],
+  ["", "", "", "Total:", "$ 52,200.00 MXN"],
+];
 
 const plantillaCompleta = () =>
   new ArmaDocumento()
@@ -42,7 +77,7 @@ const plantillaCompleta = () =>
     .parrafo("{{EMAIL}}")
     .parrafo("{{FOLIO}} · {{FECHA}} · {{TITULO}}")
     .parrafo("{{PAGO}} {{ENTREGA}} {{LUGAR}} {{VIGENCIA}}")
-    .tabla([["PARTIDA", "CONCEPTO"]])
+    .tabla(cuadroDePartidas())
     .construir();
 
 const entorno = (plantilla = plantillaCompleta(), anteriores: string[] = []) => {
@@ -111,6 +146,37 @@ describe("solicitudesDelDocumento", () => {
     const { avisos } = solicitudesDelDocumento(doc, datos(), "2026-10-05");
     expect(avisos.join(" ")).toContain("{{FOLIO}}");
     expect(avisos.join(" ")).toContain("{{CONTACTO}}");
+  });
+
+  /**
+   * Todo se calcula sobre el JSON original. Si un borrado de arriba se
+   * aplicara antes que algo de abajo, correría sus índices y el lote
+   * escribiría en el lugar equivocado — sin fallar.
+   */
+  it("lo de abajo del documento va antes que lo de arriba", () => {
+    const doc = plantillaCompleta();
+    const d = datos({
+      documento: { ...documentoVacio(), fecha: "2026-10-05", ocultar: { telefono: true } },
+    });
+    const { solicitudes } = solicitudesDelDocumento(doc, d, "2026-10-05");
+
+    const indices = solicitudes.flatMap((s) =>
+      "insertText" in s
+        ? [s.insertText.location.index]
+        : "deleteContentRange" in s
+          ? [s.deleteContentRange.range.startIndex]
+          : [],
+    );
+    expect(indices.length).toBeGreaterThan(1);
+    expect(indices).toEqual([...indices].sort((a, b) => b - a));
+  });
+
+  it("las sustituciones van al final: cambian longitudes en todo el documento", () => {
+    const doc = plantillaCompleta();
+    const { solicitudes } = solicitudesDelDocumento(doc, datos(), "2026-10-05");
+    const primeraSustitucion = solicitudes.findIndex((s) => "replaceAllText" in s);
+    expect(primeraSustitucion).toBeGreaterThan(-1);
+    expect(solicitudes.slice(primeraSustitucion).every((s) => "replaceAllText" in s)).toBe(true);
   });
 
   it("junta los huecos del contacto con los marcadores faltantes", () => {
@@ -196,9 +262,9 @@ describe("generarDocumento", () => {
 
   it("una cotización sin partidas no genera nada", async () => {
     const { documentos, entorno: e } = entorno();
-    await expect(generarDocumento(datos({ armado: armadoCon(0) }), e)).rejects.toThrow(
-      "no tiene partidas",
-    );
+    await expect(
+      generarDocumento(datos({ armado: armadoCon(0), calculo: calculoCon(0) }), e),
+    ).rejects.toThrow("no tiene partidas");
     expect(documentos.copiados).toEqual([]);
   });
 
