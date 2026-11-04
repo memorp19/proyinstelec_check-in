@@ -423,6 +423,19 @@ export function solicitudesDeTabla(
     cursor += largoDeFila(fila);
   }
 
+  // Sin viñetas en todo el cuerpo de la tabla.
+  //
+  // La copia de la plantilla para el ERP trae una viñeta molde en la celda
+  // Concepto del renglón 1, y un párrafo nuevo **hereda la viñeta** de aquel
+  // en el que se inserta: sin esto, el título de la primera partida saldría
+  // con viñeta y sus viñetas saldrían con dos guiones. No cambia longitudes,
+  // así que va con los estilos.
+  solicitudes.push({
+    deleteParagraphBullets: {
+      range: { startIndex: ubicada.tabla.tableRows![1].startIndex!, endIndex: cursor },
+    },
+  });
+
   // Arial 8 negro en todo el cuerpo de la tabla, marcas de párrafo incluidas:
   // es lo que le da color y tamaño al guion de las viñetas (`COT_05:1657`).
   solicitudes.push({

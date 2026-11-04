@@ -250,6 +250,27 @@ describe("solicitudesDeTabla · el orden del lote", () => {
     expect(indices).toEqual([...indices].sort((a, b) => b - a));
   });
 
+  /**
+   * La copia de la plantilla trae una viñeta molde en la celda Concepto del
+   * renglón 1. Un párrafo nuevo hereda la viñeta de aquel en el que se
+   * inserta: sin quitarlas, el título saldría con viñeta y las viñetas con
+   * dos guiones.
+   */
+  it("quita las viñetas heredadas de todo el cuerpo de la tabla", () => {
+    const { solicitudes, tabla } = armarYAplicar(
+      datos({ partidas: [partida(), partida({ numero: 2 })] }),
+    );
+    const quitar = solicitudes.find((s) => "deleteParagraphBullets" in s);
+    expect(quitar).toBeDefined();
+
+    const rango = (quitar as { deleteParagraphBullets: { range: { startIndex: number; endIndex: number } } })
+      .deleteParagraphBullets.range;
+    // Desde el primer renglón de partidas hasta el final del cuadro: el
+    // encabezado no se toca.
+    expect(rango.startIndex).toBe(tabla.inicioDeFila(1));
+    expect(rango.endIndex).toBe(tabla.inicioDeFila(tabla.numeroDeFilas));
+  });
+
   it("los estilos van después de todo lo que cambia longitudes", () => {
     const { solicitudes } = armarYAplicar(datos());
     const ultimoTexto = solicitudes.map((s) => "insertText" in s).lastIndexOf(true);

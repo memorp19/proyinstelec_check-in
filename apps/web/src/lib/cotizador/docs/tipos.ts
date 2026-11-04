@@ -139,6 +139,7 @@ export type Solicitud =
   | SolicitudBorrarFila
   | SolicitudInsertarFila
   | SolicitudVinetas
+  | SolicitudQuitarVinetas
   | SolicitudUnirCeldas
   | SolicitudEstiloCelda;
 
@@ -175,6 +176,18 @@ export interface SolicitudInsertarFila {
 
 export interface SolicitudVinetas {
   createParagraphBullets: { range: Rango; bulletPreset: string };
+}
+
+/**
+ * Quita la viñeta de los párrafos del rango.
+ *
+ * No cambia el texto, así que no corre ningún índice. Hace falta porque un
+ * párrafo nuevo **hereda la viñeta** de aquel en el que se inserta: donde la
+ * plantilla tiene una viñeta molde, todo lo que se escriba en esa celda sale
+ * con viñeta si no se quita.
+ */
+export interface SolicitudQuitarVinetas {
+  deleteParagraphBullets: { range: Rango };
 }
 
 export interface Rango {
