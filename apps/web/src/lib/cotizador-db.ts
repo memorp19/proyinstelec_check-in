@@ -24,6 +24,7 @@ import {
   armadoDesdeFilas,
   calcularCotizacion,
   completarDocumento,
+  direccionParaLaCarta,
   lineasDeDireccion,
   telefonoParaDocumento,
   textosSugeridos,
@@ -110,7 +111,9 @@ async function machoteDelDocumento(cotizacion: Cotizacion) {
     dirigidaA: cotizacion.dirigida_a,
   }).catch(() => ({ empresa: null, contacto: null }));
 
-  const [direccion1, direccion2] = lineasDeDireccion(empresa?.direccion);
+  const [direccion1, direccion2] = lineasDeDireccion(
+    direccionParaLaCarta(contacto?.direccion, empresa?.direccion),
+  );
   const textos = textosSugeridos(cotizacion.titulo, cotizacion.cliente);
 
   return {

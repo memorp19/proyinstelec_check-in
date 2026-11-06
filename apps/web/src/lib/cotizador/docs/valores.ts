@@ -13,7 +13,7 @@
  * cotización lo ve antes de mandarla, y además sale en la lista de avisos.
  */
 import type { Condiciones, DatosDocumento } from "../documento";
-import { lineasDeDireccion } from "../documento";
+import { direccionParaLaCarta, lineasDeDireccion } from "../documento";
 import { sitioDelProyecto, tituloParaDocumento } from "../normas";
 import { telefonoParaDocumento } from "../presentacion";
 import type { Marcador } from "./marcadores";
@@ -105,18 +105,19 @@ const COMO_SE_LLAMA: Partial<Record<Marcador, string>> = {
  *
  * La dirección sale **del contacto** y, si no tiene, la del cliente — es la
  * regla de `datosDelCliente_`: una empresa puede atender desde varios sitios
- * y la carta va dirigida a una persona en uno de ellos. Hoy el dato llega
- * como parámetro; la lectura de `contactos.direccion` se conecta cuando entre
- * el #25.
+ * y la carta va dirigida a una persona en uno de ellos. El dato llega como
+ * parámetro; quien lo lee de `contactos.direccion` es `machoteDelDocumento`.
  */
 export function valoresDeMarcadores(d: DatosParaMarcadores): Valores {
   const doc = d.documento;
   const c = doc.contacto;
 
-  // La del contacto manda; la del cliente es el respaldo. Lo que el cotizador
-  // haya escrito a mano en `contacto.direccion1` manda sobre las dos.
-  const direccion = (d.direccionContacto ?? "").trim() || (d.direccionCliente ?? "").trim();
-  const [auto1, auto2] = lineasDeDireccion(direccion);
+  // La del contacto manda y la del cliente es el respaldo
+  // (`direccionParaLaCarta`). Lo que el cotizador haya escrito a mano en
+  // `contacto.direccion1` manda sobre las dos.
+  const [auto1, auto2] = lineasDeDireccion(
+    direccionParaLaCarta(d.direccionContacto, d.direccionCliente),
+  );
   const direccion1 = c.direccion1.trim() || auto1;
   const direccion2 = c.direccion2.trim() || (c.direccion1.trim() ? "" : auto2);
 
