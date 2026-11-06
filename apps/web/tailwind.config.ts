@@ -8,6 +8,12 @@ const config: Config = {
   ],
   theme: {
     extend: {
+      /**
+       * Los renglones del cotizador caben de corrido desde unos 900 px, que es
+       * bastante menos que el `lg` de Tailwind (1024). Con `lg` una laptop de
+       * 1366 con el navegador a media pantalla ya se apilaba sin necesidad.
+       */
+      screens: { ancho: "900px" },
       // ── Design tokens — mockup.html ──────────────────────────────────────
       colors: {
         blue: {

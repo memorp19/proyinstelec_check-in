@@ -182,7 +182,7 @@ export function OTClient({ puedeReasignar }: { puedeReasignar: boolean }) {
           onChange={(e) => setAnio(parseInt(e.target.value, 10))}
         >
           {anios.map((a) => (
-            <option key={a} value={a} className="bg-navy">
+            <option key={a} value={a}>
               {a}
             </option>
           ))}

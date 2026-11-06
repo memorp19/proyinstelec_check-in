@@ -15,3 +15,33 @@
   .font-head { font-family: 'Barlow Condensed', sans-serif; }
   .font-mono { font-family: 'Space Mono', monospace; }
 }
+
+@layer base {
+  /**
+   * Las listas desplegables, legibles.
+   *
+   * El menú de un `<select>` no lo dibuja la página: lo dibuja el sistema
+   * operativo, y por omisión lo hace en claro. Sobre el navy de la app las
+   * opciones salían con fondo blanco y texto casi blanco — ilegibles, y no por
+   * una clase que faltara en un `<select>` concreto sino en todos.
+   *
+   * `color-scheme: dark` es la manera de decírselo al sistema; el color de las
+   * `option` es para los navegadores que además lo heredan del documento.
+   */
+  select {
+    color-scheme: dark;
+  }
+
+  select option,
+  select optgroup {
+    background-color: #0A1628;
+    color: #ffffff;
+  }
+
+  /* Lo mismo para los calendarios y relojes nativos de los input de fecha. */
+  input[type="date"],
+  input[type="time"],
+  input[type="datetime-local"] {
+    color-scheme: dark;
+  }
+}

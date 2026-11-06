@@ -60,7 +60,7 @@ describe("registrarOcPosterior", () => {
     // Misma referencia que el resto de los flujos de cotización
     expect(arg.referencia).toBe("COT#224-2026");
     expect(arg.detalle).toContain("4501122596");
-    expect(arg.detalle).toContain("v1");
+    expect(arg.detalle).toContain("PCOTOP-224-2026-1");
     expect(arg.detalle).toContain("OT224261");
   });
 

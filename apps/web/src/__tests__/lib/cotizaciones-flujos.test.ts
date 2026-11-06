@@ -45,12 +45,14 @@ import {
   registrarAprobacion,
   updateCotizacion,
 } from "@/src/lib/cotizaciones";
+import { registrarBitacora } from "@/src/lib/bitacora";
 import { buscarPdfCotizacion } from "@/src/lib/drive-erp";
-import { enviarCorreo } from "@/src/lib/correo";
+import { enviarCorreo, plantillaCorreo } from "@/src/lib/correo";
 import { createOT } from "@/src/lib/ot";
 import { listUsers } from "@/src/lib/users";
 import { getConfigErp } from "@/src/lib/config-erp";
 import {
+  enviarARevision,
   aprobarCotizacion,
   solicitarCorreccion,
   enviarAlCliente,
@@ -81,6 +83,86 @@ beforeEach(() => {
     ],
     cc_aviso_ot: ["gerencia@proyinstelec.mx"],
     cotizador: { ASESORIA_PCT_DEFAULT: 10, BASE_NODOS_ESTUDIO: 10, HORAS_DIA_ESTUDIO: 8 },
+  });
+});
+
+describe("enviarARevision", () => {
+  /**
+   * Dos versiones en PROCESO a la vez: se puede, porque crear una versión
+   * nueva no exige ningún estatus. El flujo tiene que mover **la que se le
+   * pide**, no "la vigente" — que es la más alta, y por tanto la otra.
+   *
+   * El falso modela lo que `cambiarEstatus` hace de verdad: con versión toca
+   * esa fila; sin ella, la vigente. Es lo que distingue el arreglo del error
+   * que venía: la ruta congelaba la v0 y mandaba a revisión la v1.
+   */
+  function dosEnProceso() {
+    const filas = [
+      { ...vigente, version: 0, folio: "PCOTOP-001-2026", estatus: "PROCESO" },
+      { ...vigente, version: 1, folio: "PCOTOP-001-2026-v1", estatus: "PROCESO" },
+    ];
+    vi.mocked(cambiarEstatus).mockImplementation((async (
+      _numero: number,
+      _anio: number,
+      nuevo: string,
+      version?: number,
+    ) => {
+      const fila =
+        version === undefined
+          ? [...filas].sort((a, b) => b.version - a.version)[0]
+          : filas.find((f) => f.version === version);
+      if (!fila) throw new Error("Cotización no encontrada");
+      fila.estatus = nuevo;
+      return { ...fila };
+    }) as any);
+    return filas;
+  }
+
+  const estatus = (filas: Array<{ estatus: string }>) => filas.map((f) => f.estatus);
+
+  it("manda la v0 y deja la v1 en PROCESO", async () => {
+    const filas = dosEnProceso();
+
+    await enviarARevision({ numero: 1, anio: 2026, version: 0, usuario: "ana@proyinstelec.mx" });
+
+    expect(estatus(filas)).toEqual(["REVISION", "PROCESO"]);
+    expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "REVISION", 0);
+  });
+
+  it("y el simétrico: manda la v1 y deja la v0 en PROCESO", async () => {
+    const filas = dosEnProceso();
+
+    await enviarARevision({ numero: 1, anio: 2026, version: 1, usuario: "ana@proyinstelec.mx" });
+
+    expect(estatus(filas)).toEqual(["PROCESO", "REVISION"]);
+    expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "REVISION", 1);
+  });
+
+  // Los correos salen de la empresa: con el folio crudo le enseñarían al equipo
+  // —y al revisor— la convención "-v1" que esta rama vino a quitar.
+  it("los dos correos llevan el folio canónico de esa versión", async () => {
+    dosEnProceso();
+
+    await enviarARevision({ numero: 1, anio: 2026, version: 1, usuario: "ana@proyinstelec.mx" });
+
+    const correos = vi.mocked(enviarCorreo).mock.calls.map(([c]) => c);
+    expect(correos).toHaveLength(2); // revisores + elaboradora
+    for (const correo of correos) {
+      expect(correo.asunto).toContain("PCOTOP-001-2026-1");
+      expect(`${correo.asunto} ${correo.html}`).not.toContain("-v1");
+    }
+  });
+
+  // La columna guarda lo que se cargó: la recarga de 2026 metió 75 folios con
+  // "-v1". Un registro nuevo no repite esa convención.
+  it("la bitácora anota el folio canónico de esa versión, nunca el \"-v1\"", async () => {
+    dosEnProceso();
+
+    await enviarARevision({ numero: 1, anio: 2026, version: 1, usuario: "ana@proyinstelec.mx" });
+
+    expect(registrarBitacora).toHaveBeenCalledWith(
+      expect.objectContaining({ accion: "COTIZACION_A_REVISION", detalle: "PCOTOP-001-2026-1" }),
+    );
   });
 });
 
@@ -121,9 +203,25 @@ describe("solicitarCorreccion", () => {
       comentario: "Falta el desglose de materiales", usuario: "eduardo@proyinstelec.mx",
     });
 
-    expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "PROCESO");
+    // Sobre la fila que se validó, no sobre "la vigente de ahora".
+    expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "PROCESO", 0);
     const llamada = vi.mocked(enviarCorreo).mock.calls[0][0];
     expect(llamada.html).toContain("Falta el desglose de materiales");
+  });
+
+  it("el correo lleva el folio canónico aunque la columna diga \"-v1\"", async () => {
+    const importada = { ...vigente, version: 1, folio: "PCOTOP-001-2026-v1", estatus: "REVISION" };
+    vi.mocked(getVigente).mockResolvedValue(importada as any);
+    vi.mocked(cambiarEstatus).mockResolvedValue({ ...importada, estatus: "PROCESO" } as any);
+
+    await solicitarCorreccion({
+      numero: 1, anio: 2026,
+      comentario: "Falta el desglose de materiales", usuario: "eduardo@proyinstelec.mx",
+    });
+
+    const llamada = vi.mocked(enviarCorreo).mock.calls[0][0];
+    expect(llamada.asunto).toBe("Corrección solicitada · PCOTOP-001-2026-1");
+    expect(llamada.html).not.toContain("-v1");
   });
 });
 
@@ -212,7 +310,33 @@ describe("enviarAlCliente", () => {
     expect(llamada.para).toEqual(["cliente@aceros.mx"]);
     expect(llamada.cc).toEqual(["eduardo@proyinstelec.mx"]); // el equipo menos la remitente
     expect(llamada.adjuntos?.[0].filename).toBe("PCOTOP-001-2026.pdf");
-    expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "ENVIADA");
+    // Sobre la versión cuya aprobación se verificó: la aprobación es por
+    // versión exacta, y ENVIADA no puede caer en otra.
+    expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "ENVIADA", 0);
+  });
+
+  // Este correo sale al CLIENTE, y el folio que lleva es el que va a citar en
+  // su orden de compra. El título viaja en `plantillaCorreo`, que el falso
+  // reduce al cuerpo: por eso se mira la llamada y no el html.
+  it("el correo al cliente lleva el folio canónico, no el de la columna", async () => {
+    const importada = { ...vigente, version: 1, folio: "PCOTOP-001-2026-v1" };
+    vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({ puede: true, cotizacion: importada as any });
+    vi.mocked(buscarPdfCotizacion).mockResolvedValue({
+      pdf: { filename: "PCOTOP-001-2026-1.pdf", contenido: Buffer.from("pdf") },
+      nombresEnCarpeta: ["PCOTOP-001-2026-1.pdf"],
+    });
+    vi.mocked(cambiarEstatus).mockResolvedValue({ ...importada, estatus: "ENVIADA" } as any);
+
+    await enviarAlCliente({
+      numero: 1, anio: 2026, destinatarios: ["cliente@aceros.mx"],
+      remitente: { email: "maria@proyinstelec.mx", nombre: "María" },
+    });
+
+    expect(vi.mocked(plantillaCorreo).mock.calls[0][0].titulo).toBe(
+      "Cotización PCOTOP-001-2026-1",
+    );
+    // Y el estatus cae en la versión aprobada, no en la vigente
+    expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "ENVIADA", 1);
   });
 
   // El estatus ENVIADA afirma que el cliente recibió la cotización. Si el correo
@@ -462,7 +586,7 @@ describe("ingresarOrdenCompra — elegir versión", () => {
   it("avisa si la versión no existe", async () => {
     vi.mocked(getVersion).mockResolvedValue(null);
 
-    await expect(ingresarOrdenCompra({ ...alta, version: 7 })).rejects.toThrow("versión 7");
+    await expect(ingresarOrdenCompra({ ...alta, version: 7 })).rejects.toThrow("PCOTOP-002-2026-7");
   });
 
   // Una cotización, una OT: sigue aplicando aunque se intente con otra versión.

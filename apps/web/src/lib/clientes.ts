@@ -291,3 +291,46 @@ export async function contactosParaEnvio(params: {
 
   return { empresa, contactos: lista, sugeridoId };
 }
+
+/**
+ * El contacto que va en la carta de una cotización.
+ *
+ * Parecido a `contactosParaEnvio`, con una diferencia que importa: aquí **no**
+ * se exige correo. Para mandar un PDF hace falta; para encabezar la carta no
+ * —"Ing. Pérez" con su teléfono es un contacto perfectamente válido—, y
+ * filtrar por correo dejaría la carta en blanco por un dato que no se usa.
+ *
+ * Se busca por `dirigida_a` con el mismo escalón del legacy: exacto, parcial,
+ * por palabra. Sin coincidencia devuelve el primero de la empresa, que suele
+ * ser el único.
+ */
+export async function contactoParaCarta(params: {
+  razonSocial: string;
+  dirigidaA?: string;
+}): Promise<{ empresa: ClienteEmpresa | null; contacto: Contacto | null }> {
+  const parecidas = await buscarEmpresasParecidas(params.razonSocial);
+  const empresa = parecidas[0]?.empresa ?? null;
+  if (!empresa) return { empresa: null, contacto: null };
+
+  const lista = await listContactos(empresa.cliente_id);
+  if (lista.length === 0) return { empresa, contacto: null };
+
+  const objetivo = normalizarNombreContacto(params.dirigidaA ?? "");
+  if (!objetivo) return { empresa, contacto: lista[0] };
+
+  const exacto = lista.find((c) => normalizarNombreContacto(c.nombre) === objetivo);
+  const parcial =
+    exacto ??
+    lista.find((c) => {
+      const n = normalizarNombreContacto(c.nombre);
+      return n.includes(objetivo) || objetivo.includes(n);
+    });
+  const porPalabra =
+    parcial ??
+    lista.find((c) => {
+      const palabras = normalizarNombreContacto(c.nombre).split(" ");
+      return objetivo.split(" ").some((p) => p.length > 2 && palabras.includes(p));
+    });
+
+  return { empresa, contacto: porPalabra ?? lista[0] };
+}

@@ -4,6 +4,7 @@ import { exigirPermiso } from "@/src/lib/permisos";
 import {
   buscarCotizaciones,
   siguienteNumeroCotizacion,
+  versionesDe,
   ESTATUS_COTIZACION,
   type EstatusCotizacion,
   type Prioridad,
@@ -41,7 +42,16 @@ export async function GET(req: NextRequest) {
       oc: q.get("oc") ?? undefined,
       sinOc: q.get("sinOc") === "1",
     });
-    return NextResponse.json({ cotizaciones: resultados });
+    // Las otras versiones van con el listado: la tarjeta dice en cuál quedó la
+    // orden de compra y qué más existe, y pedirlas una por una sería una
+    // consulta por tarjeta.
+    const hermanas = await versionesDe(resultados.map((c) => ({ numero: c.numero, anio: c.anio })));
+    return NextResponse.json({
+      cotizaciones: resultados.map((c) => ({
+        ...c,
+        versiones: hermanas.get(`${String(c.numero).padStart(3, "0")}-${c.anio}`) ?? [],
+      })),
+    });
   } catch (err) {
     console.error("[erp/cotizaciones GET]", err);
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });

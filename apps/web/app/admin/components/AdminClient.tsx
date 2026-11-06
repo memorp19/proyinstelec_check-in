@@ -139,9 +139,9 @@ function CrearProyectoForm({
         onChange={(e) => setEmpresaId(e.target.value)}
         className="w-full bg-white/10 border border-white/20 rounded-lg px-3 py-2 font-mono text-sm text-white outline-none focus:border-blue"
       >
-        <option value="" className="bg-navy">Seleccionar empresa cliente…</option>
+        <option value="">Seleccionar empresa cliente…</option>
         {empresas.map((e) => (
-          <option key={e.empresa_id} value={e.empresa_id} className="bg-navy">{e.nombre}</option>
+          <option key={e.empresa_id} value={e.empresa_id}>{e.nombre}</option>
         ))}
       </select>
 
@@ -634,9 +634,9 @@ export function AdminClient({ empresas: initialEmpresas, proyectosIniciales, esS
                   onChange={(e) => setFiltroEmpresa(e.target.value)}
                   className="flex-1 bg-white/10 border border-white/10 rounded-lg px-3 py-2 font-mono text-xs text-white outline-none"
                 >
-                  <option value="" className="bg-navy">Todas las empresas</option>
+                  <option value="">Todas las empresas</option>
                   {empresas.map((e) => (
-                    <option key={e.empresa_id} value={e.empresa_id} className="bg-navy">{e.nombre}</option>
+                    <option key={e.empresa_id} value={e.empresa_id}>{e.nombre}</option>
                   ))}
                 </select>
               </div>

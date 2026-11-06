@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, max, ne, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, ilike, max, ne, or, sql, type SQL } from "drizzle-orm";
 import { getDb } from "../db";
 import { aprobaciones, cotizaciones } from "../db/schema";
 import { folioCotizacion, pad } from "./folios";
@@ -581,8 +581,8 @@ export async function marcarNoAsignadas(
       accion: "COTIZACION_VERSIONES_DESCARTADAS",
       usuario,
       referencia: cotPk(numero, anio),
-      detalle: `Se asignó la v${versionAsignada}; quedaron NO ASIGNADA: ${filas
-        .map((f) => `v${f.version}`)
+      detalle: `Se asignó ${folioCotizacion(numero, anio, versionAsignada)}; quedaron NO ASIGNADA: ${filas
+        .map((f) => folioCotizacion(numero, anio, f.version))
         .join(", ")}`,
     });
   }
@@ -730,4 +730,131 @@ export async function puedeEnviarseAlCliente(
     return { puede: false, motivo: "Esperando aprobación del revisor", cotizacion: c };
   }
   return { puede: true, cotizacion: c };
+}
+
+// ── Eliminar una versión que nunca salió ──────────────────────────────────────
+
+/**
+ * Si una versión se puede eliminar, y si no, por qué.
+ *
+ * La regla es estrecha a propósito: **solo lo que nunca salió de la empresa**.
+ * Una cotización que el cliente ya tiene, o que generó una OT, es parte del
+ * historial del negocio aunque haya sido un error; para esas está CANCELADA,
+ * que deja constancia. Eliminar es para la que se dio de alta dos veces, o con
+ * el cliente equivocado, antes de que nadie la viera.
+ *
+ * Es pura para poder probarla sin base, y la usan la ruta y la pantalla: el
+ * botón se esconde con lo mismo que lo rechaza.
+ */
+export function puedeEliminarse(c: Cotizacion): { puede: boolean; motivo: string } {
+  if (c.estatus !== "PROCESO") {
+    return {
+      puede: false,
+      motivo:
+        `Está en ${c.estatus} y solo se elimina lo que sigue en PROCESO. ` +
+        "Si ya no va a ocurrir, cancélala: así queda constancia de que existió.",
+    };
+  }
+  if (c.fecha_envio) {
+    return { puede: false, motivo: "Ya se envió al cliente alguna vez: eso no se borra." };
+  }
+  if (c.folio_ot) {
+    return { puede: false, motivo: `Tiene la orden de trabajo ${c.folio_ot} colgando.` };
+  }
+  if (c.orden_compra) {
+    return { puede: false, motivo: `Tiene la orden de compra ${c.orden_compra} registrada.` };
+  }
+  return { puede: true, motivo: "" };
+}
+
+/**
+ * Borra una versión de cotización y todo lo que cuelga de ella.
+ *
+ * **El número no se reutiliza.** El contador de folios vive en su propia fila y
+ * solo sube (`src/lib/folios.ts`); borrar un renglón no lo mueve. Es lo
+ * correcto: si alguien ya vio pasar el PCOTOP-260-2026 en un correo, que otra
+ * cotización distinta use ese folio después sería peor que el hueco.
+ *
+ * El armado, las partidas, los conceptos, los gastos y el congelado se van con
+ * ella por las llaves foráneas de la 0006. La **carpeta de Drive no se toca**:
+ * puede tener dentro algo que no puso el ERP, y borrar archivos de alguien más
+ * desde aquí no es una decisión de esta pantalla. Su enlace queda en bitácora.
+ */
+export async function eliminarVersion(params: {
+  numero: number;
+  anio: number;
+  version: number;
+}): Promise<{ eliminada: boolean }> {
+  const filas = await getDb()
+    .delete(cotizaciones)
+    .where(
+      and(
+        eq(cotizaciones.numero, params.numero),
+        eq(cotizaciones.anio, params.anio),
+        eq(cotizaciones.version, params.version),
+        // La condición de estatus viaja DENTRO del DELETE, no antes: entre
+        // mirar y borrar cabe que alguien la mande a revisión.
+        eq(cotizaciones.estatus, "PROCESO"),
+      ),
+    )
+    .returning({ numero: cotizaciones.numero });
+
+  return { eliminada: filas.length > 0 };
+}
+
+// ── Las otras versiones, para las etiquetas de la tarjeta ─────────────────────
+
+export interface Hermana {
+  version: number;
+  folio: string;
+  estatus: EstatusCotizacion;
+  /** La orden de compra, si la tiene. Solo una versión la lleva. */
+  orden_compra?: string;
+}
+
+/**
+ * Las versiones de cada cotización de una lista, en una sola consulta.
+ *
+ * La tarjeta enseña la vigente, pero necesita decir dos cosas de las demás: en
+ * cuál quedó la orden de compra —que no siempre es la vigente, porque el
+ * cliente puede aceptar una anterior— y qué más existe. Pedirlas de una en una
+ * sería una consulta por tarjeta.
+ */
+export async function versionesDe(
+  claves: Array<{ numero: number; anio: number }>,
+): Promise<Map<string, Hermana[]>> {
+  const fuera = new Map<string, Hermana[]>();
+  if (claves.length === 0) return fuera;
+
+  const filas = await getDb()
+    .select({
+      numero: cotizaciones.numero,
+      anio: cotizaciones.anio,
+      version: cotizaciones.version,
+      folio: cotizaciones.folio,
+      estatus: cotizaciones.estatus,
+      ordenCompra: cotizaciones.ordenCompra,
+    })
+    .from(cotizaciones)
+    .where(
+      or(
+        ...claves.map((c) => and(eq(cotizaciones.numero, c.numero), eq(cotizaciones.anio, c.anio))),
+      ),
+    )
+    .orderBy(desc(cotizaciones.version));
+
+  for (const f of filas) {
+    const clave = cotPk(f.numero, f.anio);
+    const lista = fuera.get(clave) ?? [];
+    lista.push({
+      version: f.version,
+      // El folio canónico, no el que guarde la columna: la carga de 2026 metió
+      // 75 con "-v1" en vez de "-1" y la pantalla no debe repetir ese error.
+      folio: folioCotizacion(f.numero, f.anio, f.version),
+      estatus: f.estatus,
+      ...(f.ordenCompra ? { orden_compra: f.ordenCompra } : {}),
+    });
+    fuera.set(clave, lista);
+  }
+  return fuera;
 }
