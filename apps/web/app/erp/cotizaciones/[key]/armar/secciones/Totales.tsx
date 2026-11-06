@@ -16,6 +16,16 @@ import { conMoneda, etiqueta, pesos, tarjeta } from "../ui";
 export function Totales({ armado, resultado }: { armado: Armado; resultado: ResultadoCotizacion }) {
   const margen = (precio: number, costo: number) => (precio > 0 ? ((precio - costo) / precio) * 100 : 0);
 
+  /**
+   * El costo neto no existía cuando se congelaron las versiones viejas.
+   *
+   * Si no está, el panel lo dice y **no pinta margen**. Recalcularlo hoy sobre
+   * los parámetros de entonces daría un número que se ve igual de confiable
+   * que uno real y no lo es.
+   */
+  const hayNeto = resultado.costoNeto !== undefined;
+  const costoDe = (p: ResultadoCotizacion["partidas"][number]) => p.costoNeto;
+
   return (
     <section className="grid gap-4 lg:grid-cols-2">
       {/* ── Interno ─────────────────────────────────────────────────────────── */}
@@ -25,8 +35,16 @@ export function Totales({ armado, resultado }: { armado: Armado; resultado: Resu
           <span className="font-mono text-[9px] text-amber uppercase tracking-widest">solo interno</span>
         </div>
         <p className="font-body text-xs text-white/40 mt-1">
-          No sale en el documento. Es lo que cuesta hacer el trabajo, contra lo que se va a cobrar.
+          No sale en el documento. El costo es lo que cuesta hacer el trabajo —conceptos y gastos,{" "}
+          <strong className="text-white/60">sin la utilidad</strong>— contra lo que se va a cobrar.
         </p>
+
+        {!hayNeto && (
+          <p className="font-body text-xs text-amber bg-amber/15 rounded-lg px-3 py-2 mt-3">
+            Costo neto no disponible en esta versión: se congeló antes de que el panel lo separara de
+            la utilidad. No se calcula el margen, porque saldría medido contra otro número.
+          </p>
+        )}
 
         <table className="w-full mt-3 text-sm">
           <thead>
@@ -38,34 +56,61 @@ export function Totales({ armado, resultado }: { armado: Armado; resultado: Resu
             </tr>
           </thead>
           <tbody className="font-mono text-xs">
-            {resultado.partidas.map((p, i) => (
-              <tr key={p.id} className="border-t border-white/5">
-                <td className="py-1.5 font-body text-white/70">{p.titulo || `Partida ${i + 1}`}</td>
-                <td className="py-1.5 text-right text-white/50">{pesos(p.costoTotal)}</td>
-                <td className="py-1.5 text-right text-white">{pesos(p.importe)}</td>
-                <td
-                  className={`py-1.5 text-right ${
-                    margen(p.importe, p.costoTotal) < 0 ? "text-danger" : "text-white/70"
-                  }`}
-                >
-                  {margen(p.importe, p.costoTotal).toFixed(1)} %
-                </td>
-              </tr>
-            ))}
+            {resultado.partidas.map((p, i) => {
+              const costo = costoDe(p);
+              return (
+                <tr key={p.id} className="border-t border-white/5">
+                  <td className="py-1.5 font-body text-white/70">{p.titulo || `Partida ${i + 1}`}</td>
+                  <td className="py-1.5 text-right text-white/50">
+                    {costo === undefined ? "—" : pesos(costo)}
+                  </td>
+                  <td className="py-1.5 text-right text-white">{pesos(p.importe)}</td>
+                  <td
+                    className={`py-1.5 text-right ${
+                      costo !== undefined && margen(p.importe, costo) < 0 ? "text-danger" : "text-white/70"
+                    }`}
+                  >
+                    {costo === undefined ? "—" : `${margen(p.importe, costo).toFixed(1)} %`}
+                  </td>
+                </tr>
+              );
+            })}
             <tr className="border-t border-white/20 font-bold">
               <td className="py-2 font-body text-white">Total</td>
-              <td className="py-2 text-right text-white/60">{pesos(resultado.costoTotal)}</td>
+              <td className="py-2 text-right text-white/60">
+                {resultado.costoNeto === undefined ? "—" : pesos(resultado.costoNeto)}
+              </td>
               <td className="py-2 text-right text-white">{pesos(resultado.subtotal)}</td>
               <td
                 className={`py-2 text-right ${
-                  margen(resultado.subtotal, resultado.costoTotal) < 0 ? "text-danger" : "text-green"
+                  resultado.costoNeto !== undefined && margen(resultado.subtotal, resultado.costoNeto) < 0
+                    ? "text-danger"
+                    : "text-green"
                 }`}
               >
-                {margen(resultado.subtotal, resultado.costoTotal).toFixed(1)} %
+                {resultado.costoNeto === undefined
+                  ? "—"
+                  : `${margen(resultado.subtotal, resultado.costoNeto).toFixed(1)} %`}
               </td>
             </tr>
           </tbody>
         </table>
+
+        {/* La utilidad, en su propio renglón: es la diferencia entre el costo
+            de arriba y el "costo directo" con el que se construye el precio,
+            y sin verla nadie entiende por qué no son el mismo número. */}
+        {resultado.utilidadConceptos !== undefined && (
+          <dl className="mt-3 border-t border-white/10 pt-3 space-y-1 font-mono text-xs">
+            <div className="flex justify-between">
+              <dt className="font-body text-white/50">Utilidad en los conceptos</dt>
+              <dd className="text-white/70">{pesos(resultado.utilidadConceptos)}</dd>
+            </div>
+            <div className="flex justify-between">
+              <dt className="font-body text-white/40">Costo directo (costo + utilidad)</dt>
+              <dd className="text-white/50">{pesos(resultado.costoTotal)}</dd>
+            </div>
+          </dl>
+        )}
       </div>
 
       {/* ── Lo que ve el cliente ────────────────────────────────────────────── */}

@@ -209,3 +209,83 @@ describe("ESCENARIO · estudios por horas, con los parámetros del Excel", () =>
     expect(p.costoConceptos).toBe(80000);
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// GUARDA — `costoNeto` es aditivo: no puede mover lo que el cliente ya recibió
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * La guarda del PR de `costoNeto`.
+ *
+ * El panel interno pasó a medir el margen contra el costo **sin la utilidad de
+ * los conceptos**. Es un campo nuevo y nada más: si al agregarlo se moviera un
+ * centavo de lo que el cliente ve, el cambio habría dejado de ser aditivo y
+ * dos cotizaciones ya enviadas dejarían de cuadrar con su PDF.
+ *
+ * No es una repetición de las pruebas de arriba: aquellas anclan el motor al
+ * PDF, esta ancla **la frontera entre lo interno y lo del cliente**. Por eso
+ * fija también los importes partida por partida — un reparto que se moviera
+ * compensándose entre partidas dejaría el subtotal igual y rompería los
+ * renglones del documento.
+ *
+ * Las dos cotizaciones sirven para cosas distintas: la 068 **sí trae utilidad
+ * capturada** y es donde `costoNeto` y `costoTotal` difieren de verdad; la 070
+ * no trae ninguna y es donde tienen que seguir siendo el mismo número.
+ */
+describe("GUARDA · costoNeto no mueve la 068 ni la 070", () => {
+  describe("068 — con utilidad capturada", () => {
+    const r = calcularCotizacion(ENTRADA_068);
+
+    it("el subtotal, el IVA y el total siguen siendo los del PDF", () => {
+      expect([r.subtotal, r.iva, r.total]).toEqual([PDF_068.subtotal, PDF_068.iva, PDF_068.total]);
+    });
+
+    it("los once importes de partida no se movieron", () => {
+      expect(r.partidas.map((p) => p.importe)).toEqual([
+        84200, 273870, 76860, 60060, 141645, 64515, 93135, 52710, 94700, 18155, 86263,
+      ]);
+    });
+
+    /** Si esto diera cero, la guarda no estaría probando nada. */
+    it("tiene utilidad de verdad, así que el neto y el costo directo difieren", () => {
+      expect(r.utilidadConceptos).toBeGreaterThan(0);
+      expect(r.costoNeto).toBeLessThan(r.costoTotal);
+      expect(r.costoTotal - r.costoNeto!).toBeCloseTo(r.utilidadConceptos!, 2);
+    });
+
+    /** El costo interno no entra en el precio: la diferencia no llegó al cliente. */
+    it("la utilidad separada no aparece en el subtotal", () => {
+      const aMano = r.partidas.reduce((s, p) => s + p.precioUnitario * p.cantidad, 0);
+      expect(Math.round(aMano * 100) / 100).toBe(r.subtotal);
+    });
+  });
+
+  describe("070 — sin utilidad capturada", () => {
+    const r = calcularCotizacion({
+      moneda: "MXN",
+      asesoriaPct: 10,
+      partidas: [
+        {
+          id: "B1", orden: 1, titulo: "Partida 1", cantidad: 1,
+          conceptos: [{ codigo: "X1", cantidad: 1, costo: 75028 }],
+          ajuste: AJUSTE_070.monto,
+        },
+        { id: "B2", orden: 2, titulo: "Partida 2", cantidad: 1, conceptos: [{ codigo: "X2", cantidad: 1, costo: 48430 }] },
+        { id: "B3", orden: 3, titulo: "Partida 3", cantidad: 1, conceptos: [{ codigo: "X3", cantidad: 1, costo: 21250 }] },
+      ],
+    });
+
+    it("el subtotal, el IVA y el total no se movieron", () => {
+      expect([r.subtotal, r.iva, r.total]).toEqual([159179.0, 25468.64, 184647.64]);
+    });
+
+    it("los tres importes de partida no se movieron", () => {
+      expect(r.partidas.map((p) => p.importe)).toEqual([82531, 53273, 23375]);
+    });
+
+    it("sin utilidad, el neto y el costo directo son el mismo número", () => {
+      expect(r.utilidadConceptos).toBe(0);
+      expect(r.costoNeto).toBe(r.costoTotal);
+    });
+  });
+});
