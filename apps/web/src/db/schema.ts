@@ -303,6 +303,16 @@ export const contactos = pgTable(
     puesto: text("puesto"),
     telefono: text("telefono"),
     correo: text("correo"),
+    /**
+     * El domicilio de ESTA persona, que no siempre es el de su empresa.
+     *
+     * Una empresa puede tener varios sitios —hay clientes que atienden desde
+     * dos domicilios distintos— y la carta de la cotización va dirigida
+     * a una persona en uno de ellos. Es la regla del legacy: `datosDelCliente_`
+     * toma la dirección del renglón del contacto y solo cae a la de la empresa
+     * cuando no encuentra a la persona. `clientes.direccion` es ese respaldo.
+     */
+    direccion: text("direccion"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

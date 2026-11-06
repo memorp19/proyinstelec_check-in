@@ -1,0 +1,761 @@
+/**
+ * Carga del catálogo de clientes desde la hoja `Clientes` del control.
+ *
+ * Es la pieza que falta para que la carta de una cotización salga completa: el
+ * importador de 2026 escribe la razón social y nada más, así que `direccion`
+ * está vacía y no hay un solo contacto. De aquí salen las dos cosas.
+ *
+ * La regla que gobierna todo el módulo: **solo llena lo que está vacío**. Un
+ * dato que ya existe y no coincide no se toca — se reporta. Lo que hay en el
+ * ERP pudo corregirlo una persona después de la última carga, y una carga
+ * masiva no tiene por qué saber más que ella. Para pisarlo está `sobrescribir`,
+ * que es una decisión y no un efecto secundario.
+ *
+ * Sin base y sin red: todo entra como dato para poder probarlo entero.
+ */
+import { normalizarNombreContacto, normalizarRazonSocial } from "./clientes";
+import { texto, type Fila } from "./excel";
+
+// ── Lo que trae la hoja ───────────────────────────────────────────────────────
+
+/** Un renglón de la hoja `Clientes`: una persona de contacto, con su empresa. */
+export interface FilaClienteExcel {
+  /** Renglón en la hoja (base 1), para poder señalarlo en el reporte. */
+  fila: number;
+  /** `A` y `B`: ids del ERP legacy. Agrupan renglones dentro de la corrida. */
+  idEmp: string;
+  idCliente: string;
+  razonSocial: string;
+  contacto: string;
+  puesto: string;
+  telefono: string;
+  correo: string;
+  /** Ya sin las comillas sueltas; `direccionCruda` guarda lo que venía. */
+  direccion: string;
+  direccionCruda: string;
+}
+
+/**
+ * Quita las comillas sueltas del principio y del final de una dirección.
+ *
+ * En la hoja hay direcciones que terminan en `”` y ninguna que empiece así:
+ * son restos de copiar y pegar, no comillas que signifiquen algo. Si entran
+ * tal cual acaban impresas en la carta del cliente.
+ *
+ * Solo los extremos: una comilla en medio puede ser parte del domicilio
+ * —`Calle "B" No. 12`— y esa no se toca.
+ */
+export function limpiarDireccion(valor: string): string {
+  return valor.replace(/^[\s"\u201c\u201d]+/, "").replace(/[\s"\u201c\u201d]+$/, "");
+}
+
+const celda = (valores: string[], i: number) => (valores[i] ?? "").trim();
+
+/** Las ocho columnas que se leen, en orden. `I` (ASESORIA) no se usa. */
+const COLUMNAS = ["A", "B", "C", "D", "E", "F", "G", "H"] as const;
+
+/**
+ * Un renglón de `.xlsx` con la forma que devuelve Google Sheets.
+ *
+ * Las dos fuentes convergen aquí y de aquí en adelante hay **un solo lector**.
+ * Sheets entrega `string[]` ya; el libro entrega celdas indexadas por letra,
+ * y es esto lo que las aplana. Una celda vacía en medio no corre a las demás
+ * de lugar, que es lo que pasaría al recorrer solo las que traen valor.
+ */
+export function filaDesdeCeldas(celdas: Fila): string[] {
+  return COLUMNAS.map((c) => texto(celdas[c]));
+}
+
+/**
+ * Lee todos los renglones de datos y dice cuáles descartó.
+ *
+ * Los descartados no son ruido: un renglón con contacto y teléfono pero sin
+ * razón social es un dato que alguien capturó y que esta carga no puede
+ * colocar. Antes se contaban; ahora se nombran, para que se puedan arreglar.
+ */
+export function leerFilas(
+  valores: string[][],
+  primeraFila = 2,
+): { filas: FilaClienteExcel[]; ignoradas: number[] } {
+  const filas: FilaClienteExcel[] = [];
+  const ignoradas: number[] = [];
+  valores.forEach((v, i) => {
+    const n = i + primeraFila;
+    const fila = leerFilaCliente(n, v);
+    // Un renglón enteramente vacío no es un descarte que valga la pena
+    // reportar: las hojas traen cientos al final.
+    if (fila) filas.push(fila);
+    else if (v.some((c) => (c ?? "").trim())) ignoradas.push(n);
+  });
+  return { filas, ignoradas };
+}
+
+/**
+ * Lee un renglón del rango `Clientes!A2:H`.
+ *
+ * `A=ID Emp · B=ID Cliente · C=Razón social · D=Contacto · E=Puesto ·
+ *  F=Teléfono · G=Correo · H=Dirección`
+ *
+ * Un renglón **sin contacto pero con razón social sí se lee**, al revés que el
+ * importador de Fase 1, que lo descarta. Ahí no importaba porque solo buscaba
+ * personas; aquí ese renglón puede ser el único que traiga la dirección, que
+ * es justo lo que este script viene a llenar.
+ */
+export function leerFilaCliente(fila: number, valores: string[]): FilaClienteExcel | null {
+  const razonSocial = celda(valores, 2);
+  if (!razonSocial) return null;
+  return {
+    fila,
+    idEmp: celda(valores, 0),
+    idCliente: celda(valores, 1),
+    razonSocial,
+    contacto: celda(valores, 3),
+    puesto: celda(valores, 4),
+    telefono: celda(valores, 5),
+    correo: celda(valores, 6),
+    direccion: limpiarDireccion(celda(valores, 7)),
+    direccionCruda: celda(valores, 7),
+  };
+}
+
+// ── Lo que ya hay en el ERP ───────────────────────────────────────────────────
+
+export interface ContactoEnErp {
+  id: string;
+  nombre: string;
+  nombreNormalizado: string;
+  puesto: string | null;
+  telefono: string | null;
+  correo: string | null;
+  direccion: string | null;
+}
+
+export interface ClienteEnErp {
+  id: string;
+  razonSocial: string;
+  razonNormalizada: string;
+  direccion: string | null;
+  contactos: ContactoEnErp[];
+}
+
+// ── El plan ───────────────────────────────────────────────────────────────────
+
+/** Un campo que estaba vacío en el ERP y se llena con lo que trae la hoja. */
+export interface Lleno {
+  quien: string;
+  campo: string;
+  valor: string;
+  fila: number;
+}
+
+/** Un campo que ya tenía dato y no coincide. Se reporta; se escribe solo con `sobrescribir`. */
+export interface Diferencia {
+  quien: string;
+  campo: string;
+  enErp: string;
+  enExcel: string;
+  fila: number;
+  /** True si esta corrida sí la va a escribir (`--sobrescribir`). */
+  seEscribe: boolean;
+}
+
+export interface ContactoNuevo {
+  id: string;
+  clienteId: string;
+  nombre: string;
+  nombreNormalizado: string;
+  puesto: string | null;
+  telefono: string | null;
+  correo: string | null;
+  direccion: string | null;
+  /** Para el reporte. */
+  cliente: string;
+  fila: number;
+}
+
+export interface CambioDeContacto {
+  id: string;
+  cliente: string;
+  /** El nombre que tiene hoy en el ERP, para el reporte. */
+  nombre: string;
+  puesto?: string;
+  telefono?: string;
+  correo?: string;
+  direccion?: string;
+  /**
+   * Solo cuando el empate fue parcial: el nombre completo de la hoja.
+   *
+   * No es «pisar un dato»: el guardado está a medias —`Mariana Bravo`
+   * contra `Mariana Bravo Nieto`— y completarlo es lo que lo vuelve
+   * encontrable la próxima vez.
+   */
+  nombreCompleto?: { nombre: string; normalizado: string };
+}
+
+export interface SinCliente {
+  razonSocial: string;
+  normalizada: string;
+  filas: number[];
+}
+
+export interface Plan {
+  /**
+   * La dirección de respaldo del cliente: la más repetida entre sus contactos.
+   *
+   * El dato bueno vive en cada contacto. Esta es la que usa el documento
+   * cuando no se encuentra a la persona, igual que `datosDelCliente_` en el
+   * legacy, y por eso se elige por mayoría y no por orden de aparición.
+   */
+  direcciones: Array<{ id: string; cliente: string; direccion: string; deCuantos: number }>;
+  contactosNuevos: ContactoNuevo[];
+  contactosActualizados: CambioDeContacto[];
+  /** Todo lo que se llena, para contarlo y enseñarlo campo por campo. */
+  llenos: Lleno[];
+  diferencias: Diferencia[];
+  /** Razones sociales de la hoja que no existen en el ERP. No se crean. */
+  sinCliente: SinCliente[];
+  /** Dos renglones para la misma persona de la misma empresa: gana el primero. */
+  duplicados: Array<{ quien: string; fila: number; primeraFila: number }>;
+  /**
+   * Un mismo `ID Emp` con razones sociales distintas.
+   *
+   * O el id se reusó, o una de las dos está mal escrita. En cualquiera de los
+   * dos casos el emparejado por razón social va a mandar los contactos a
+   * clientes distintos, que es exactamente lo que nadie nota.
+   */
+  idsAmbiguos: Array<{ idEmp: string; razones: string[]; filas: number[] }>;
+  /**
+   * Contactos con correo del dominio de la empresa.
+   *
+   * Un contacto del cliente no tiene correo nuestro: o se capturó el del
+   * asesor en la columna equivocada, o es un registro interno que no debería
+   * estar en el catálogo de clientes. Se carga igual —el dato es el dato— pero
+   * se señala.
+   */
+  correosInternos: Array<{ quien: string; correo: string; fila: number }>;
+  /**
+   * Un nombre de la hoja que podría ser dos contactos distintos del ERP.
+   *
+   * Aquí no se decide ni se agrega: elegir mal fusiona a dos personas, y
+   * agregarlo como nuevo crea el duplicado que esta regla viene a evitar. El
+   * renglón se deja pasar y alguien que conozca al cliente lo resuelve.
+   */
+  ambiguos: Array<{ quien: string; fila: number; candidatos: string[] }>;
+  /** Lo que se corrigió al leer: comillas sueltas al principio o al final. */
+  limpiezas: Array<{ fila: number; campo: string; antes: string; despues: string }>;
+  /**
+   * Dos contactos del mismo cliente donde un nombre contiene todas las
+   * palabras del otro: "David Ramirez" y "Jose David Ramirez".
+   *
+   * Puede ser la misma persona capturada dos veces, o dos personas que
+   * comparten nombre. No se fusionan: decidirlo necesita a alguien que
+   * conozca al cliente.
+   */
+  posiblesDuplicados: Array<{ cliente: string; nombres: [string, string]; filas: number[] }>;
+  /** Renglones sin razón social, que no son nada. */
+  ignoradas: number;
+}
+
+/**
+ * La parte del teléfono con la que se marca: los últimos diez dígitos.
+ *
+ * `+ (52) 555 110 4791` y `5551104791` son el mismo número escrito de dos
+ * maneras —la lada del país la pone `presentacion.ts` al imprimir—, y marcar
+ * eso como diferencia llenaría el reporte de ruido que nadie puede accionar.
+ * Lo que importa es que cambie un dígito, 555 contra 556, y eso esto sí lo ve
+ * porque cae dentro de los diez. Los valores se reportan tal como vienen.
+ *
+ * Diez porque en México el número nacional tiene diez dígitos. Si trae menos
+ * —una extensión, un teléfono a medio capturar— se comparan todos los que haya.
+ */
+const paraMarcar = (valor: string) => {
+  const digitos = valor.replace(/\D/g, "");
+  return digitos.length > 10 ? digitos.slice(-10) : digitos;
+};
+
+/** El correo se guarda en minúsculas (igual que `createContacto`), así se compara. */
+const normalizarCorreo = (valor: string) => valor.trim().toLowerCase();
+
+/** Dirección y puesto: lo que cambia de verdad, no los espacios de más. */
+const aplanar = (valor: string) => valor.replace(/\s+/g, " ").trim();
+
+function mismoValor(campo: string, a: string, b: string): boolean {
+  if (campo === "teléfono") return paraMarcar(a) === paraMarcar(b);
+  if (campo === "correo") return normalizarCorreo(a) === normalizarCorreo(b);
+  return aplanar(a).toLowerCase() === aplanar(b).toLowerCase();
+}
+
+/** El valor tal como se va a guardar. */
+function paraGuardar(campo: string, valor: string): string {
+  return campo === "correo" ? normalizarCorreo(valor) : valor.trim();
+}
+
+/**
+ * La dirección que más veces aparece entre los contactos de una empresa.
+ *
+ * Empata por orden de aparición, que para este caso es el orden de la hoja.
+ * Se agrupa por el texto aplanado para que "Calle 1,  Ciudad" y "Calle 1,
+ * Ciudad" cuenten como la misma; se devuelve la primera escritura de las dos.
+ */
+export function masRepetida(
+  vistas: Array<{ direccion: string; fila: number }>,
+): { direccion: string; fila: number; veces: number } {
+  const grupos = new Map<string, { direccion: string; fila: number; veces: number }>();
+  for (const v of vistas) {
+    const llave = aplanar(v.direccion).toLowerCase();
+    const ya = grupos.get(llave);
+    if (ya) ya.veces++;
+    else grupos.set(llave, { direccion: v.direccion, fila: v.fila, veces: 1 });
+  }
+  return [...grupos.values()].reduce((a, b) => (b.veces > a.veces ? b : a));
+}
+
+/** Las palabras de un nombre ya normalizado, sin vacíos. */
+const palabrasDe = (nombreNormalizado: string) => nombreNormalizado.split(" ").filter(Boolean);
+
+/**
+ * ¿Todas las palabras de `corto` están en `largo`, siendo nombres distintos?
+ *
+ * Es la regla de `palabrasDeNombre_` del legacy: "David Ramirez" está
+ * contenido en "Jose David Ramirez". No mira el orden, porque el apellido
+ * materno a veces se captura primero.
+ */
+export function contieneTodas(corto: string, largo: string): boolean {
+  const a = palabrasDe(corto);
+  const b = palabrasDe(largo);
+  if (a.length === 0 || a.length >= b.length) return false;
+  return a.every((p) => b.includes(p));
+}
+
+interface Decision {
+  /** El valor a escribir, o null si no se escribe nada. */
+  escribir: string | null;
+}
+
+/**
+ * La regla, en un solo lugar: vacío se llena, distinto se reporta, y solo se
+ * pisa si alguien lo pidió.
+ */
+function decidir(
+  campo: string,
+  enErp: string | null,
+  enExcel: string,
+  contexto: { quien: string; fila: number; sobrescribir: boolean },
+  plan: { llenos: Lleno[]; diferencias: Diferencia[] },
+): Decision {
+  const valor = enExcel.trim();
+  if (!valor) return { escribir: null };
+
+  const actual = (enErp ?? "").trim();
+  if (!actual) {
+    plan.llenos.push({ quien: contexto.quien, campo, valor, fila: contexto.fila });
+    return { escribir: paraGuardar(campo, valor) };
+  }
+
+  if (mismoValor(campo, actual, valor)) return { escribir: null };
+
+  plan.diferencias.push({
+    quien: contexto.quien,
+    campo,
+    enErp: actual,
+    enExcel: valor,
+    fila: contexto.fila,
+    seEscribe: contexto.sobrescribir,
+  });
+  return { escribir: contexto.sobrescribir ? paraGuardar(campo, valor) : null };
+}
+
+/**
+ * Qué habría que escribir, sin escribir nada.
+ *
+ * Los clientes **no se crean**: una razón social que no está en el ERP se
+ * reporta y se deja pasar. Dar de alta un cliente es una decisión con
+ * consecuencias —es a quien se le factura— y la hoja de control no es
+ * autoridad suficiente; además, una diferencia de escritura crearía un
+ * duplicado del que ya existe.
+ */
+export function planearCarga(params: {
+  filas: FilaClienteExcel[];
+  clientes: ClienteEnErp[];
+  sobrescribir?: boolean;
+  /** El dominio de la empresa: un contacto de cliente no debería usarlo. */
+  dominioInterno?: string;
+  /** Inyectable para que las pruebas no dependan de uuid al azar. */
+  nuevoId?: () => string;
+}): Plan {
+  const sobrescribir = params.sobrescribir ?? false;
+  const dominio = (params.dominioInterno ?? "proyinstelec.mx").toLowerCase();
+  const nuevoId = params.nuevoId ?? (() => crypto.randomUUID());
+
+  const plan: Plan = {
+    direcciones: [],
+    contactosNuevos: [],
+    contactosActualizados: [],
+    llenos: [],
+    diferencias: [],
+    sinCliente: [],
+    duplicados: [],
+    idsAmbiguos: [],
+    correosInternos: [],
+    ambiguos: [],
+    limpiezas: [],
+    posiblesDuplicados: [],
+    ignoradas: 0,
+  };
+
+  /**
+   * El emparejado **vuelve a normalizar** lo que trae la base, igual que hace
+   * `resolverCliente` en el importador de 2026.
+   *
+   * `clientes.razon_normalizada` no está limpia: muchas filas guardan la razón
+   * social en mayúsculas, con su puntuación y su "S.A. de C.V." intactos —las
+   * escribió una carga anterior—. Comparar la columna tal cual no encuentra a
+   * nadie. Se indexa además por la razón social normalizada, que es el dato de
+   * verdad, para que una fila con la columna sucia también se encuentre.
+   */
+  const porNorm = new Map<string, ClienteEnErp>();
+  for (const c of params.clientes) {
+    for (const llave of [normalizarRazonSocial(c.razonNormalizada), normalizarRazonSocial(c.razonSocial)]) {
+      if (llave && !porNorm.has(llave)) porNorm.set(llave, c);
+    }
+  }
+  const sinCliente = new Map<string, SinCliente>();
+  // ID Emp -> las razones sociales distintas que se le vieron, con sus filas.
+  const razonesPorId = new Map<string, Map<string, number[]>>();
+
+  // El estado que se va acumulando a lo largo de la corrida: la hoja trae un
+  // renglón por contacto, así que una misma empresa aparece varias veces y la
+  // segunda tiene que ver lo que decidió la primera.
+  /** Las direcciones que trajo cada renglón, para elegir la del cliente al final. */
+  const direccionesVistas = new Map<string, Array<{ direccion: string; fila: number }>>();
+  const contactosDe = new Map<string, Map<string, { id: string; nombre: string; fila: number }>>();
+  const cambiosDe = new Map<string, CambioDeContacto>();
+
+  /**
+   * Igual que con la razón social, el nombre guardado **se vuelve a
+   * normalizar**: `contactos.nombre_normalizado` tiene el mismo problema que
+   * `clientes.razon_normalizada` —filas con el nombre en mayúsculas y con
+   * acentos, nunca pasadas por el normalizador—. Comparar la columna tal cual
+   * no encontraba a 55 de los 57 contactos, y como el índice único compara
+   * cadenas, el alta de los 55 habría pasado sin un solo error.
+   */
+  for (const cliente of params.clientes) {
+    const porNombre = new Map<string, { id: string; nombre: string; fila: number }>();
+    for (const c of cliente.contactos) {
+      const entrada = { id: c.id, nombre: c.nombre, fila: 0 };
+      for (const llave of [
+        normalizarNombreContacto(c.nombreNormalizado),
+        normalizarNombreContacto(c.nombre),
+      ]) {
+        if (llave && !porNombre.has(llave)) porNombre.set(llave, entrada);
+      }
+    }
+    contactosDe.set(cliente.id, porNombre);
+  }
+
+  for (const f of params.filas) {
+    const norm = normalizarRazonSocial(f.razonSocial);
+
+    // Los dos avisos se recogen antes de nada: valen igual para un renglón que
+    // al final no se va a cargar, porque lo que señalan es la captura.
+    if (f.idEmp && norm) {
+      const porRazon = razonesPorId.get(f.idEmp) ?? new Map<string, number[]>();
+      porRazon.set(norm, [...(porRazon.get(norm) ?? []), f.fila]);
+      razonesPorId.set(f.idEmp, porRazon);
+    }
+    if (f.direccionCruda !== f.direccion) {
+      plan.limpiezas.push({
+        fila: f.fila,
+        campo: "dirección",
+        antes: f.direccionCruda,
+        despues: f.direccion,
+      });
+    }
+    if (f.correo.trim().toLowerCase().endsWith(`@${dominio}`)) {
+      plan.correosInternos.push({
+        quien: `${f.razonSocial}${f.contacto ? ` · ${f.contacto}` : ""}`,
+        correo: f.correo.trim(),
+        fila: f.fila,
+      });
+    }
+
+    if (!norm) {
+      plan.ignoradas++;
+      continue;
+    }
+
+    const cliente = porNorm.get(norm);
+    if (!cliente) {
+      const ya = sinCliente.get(norm);
+      if (ya) ya.filas.push(f.fila);
+      else sinCliente.set(norm, { razonSocial: f.razonSocial, normalizada: norm, filas: [f.fila] });
+      continue;
+    }
+
+    // La dirección del renglón es de la PERSONA, no de la empresa: una misma
+    // empresa puede atender desde varios sitios. Un renglón sin contacto solo
+    // aporta su dirección al respaldo del cliente, abajo.
+    if (f.direccion) {
+      const vistas = direccionesVistas.get(cliente.id) ?? [];
+      vistas.push({ direccion: f.direccion.trim(), fila: f.fila });
+      direccionesVistas.set(cliente.id, vistas);
+    }
+
+    if (!f.contacto) continue;
+
+    // ── La persona ───────────────────────────────────────────────────────────
+    const nombreNorm = normalizarNombreContacto(f.contacto);
+    if (!nombreNorm) continue;
+
+    const quien = `${cliente.razonSocial} · ${f.contacto}`;
+    const existentes = contactosDe.get(cliente.id)!;
+
+    /**
+     * Exacto primero y, si no, la regla de `datosDelCliente_`: el nombre
+     * guardado está contenido en el de la hoja. `Mariana Bravo` es la
+     * misma persona que `Mariana Bravo Nieto`, capturada sin el materno.
+     */
+    let existente = existentes.get(nombreNorm);
+    let parcial = false;
+    if (!existente) {
+      const candidatos = [...new Set(existentes.values())].filter(
+        // Solo contra lo que YA estaba en el ERP (`fila === 0`). Dos renglones
+        // distintos de la hoja son dos contactos: quien la capturó los escribió
+        // por separado, y fusionarlos es una decisión suya, no de esta carga.
+        // Para ese caso está el aviso de posibles duplicados.
+        (c) => c.fila === 0 && contieneTodas(normalizarNombreContacto(c.nombre), nombreNorm),
+      );
+      if (candidatos.length === 1) {
+        existente = candidatos[0];
+        parcial = true;
+      } else if (candidatos.length > 1) {
+        plan.ambiguos.push({ quien, fila: f.fila, candidatos: candidatos.map((c) => c.nombre) });
+        continue;
+      }
+    }
+
+    if (!existente) {
+      const id = nuevoId();
+      plan.contactosNuevos.push({
+        id,
+        clienteId: cliente.id,
+        nombre: f.contacto,
+        nombreNormalizado: nombreNorm,
+        puesto: f.puesto.trim() || null,
+        telefono: f.telefono.trim() || null,
+        correo: normalizarCorreo(f.correo) || null,
+        direccion: f.direccion.trim() || null,
+        cliente: cliente.razonSocial,
+        fila: f.fila,
+      });
+      // Queda registrado para que un segundo renglón de la misma persona no
+      // la agregue dos veces.
+      existentes.set(nombreNorm, { id, nombre: f.contacto, fila: f.fila });
+      continue;
+    }
+
+    // Ya lo dio de alta esta misma corrida: es un renglón repetido en la hoja.
+    if (existente.fila > 0) {
+      plan.duplicados.push({ quien, fila: f.fila, primeraFila: existente.fila });
+      continue;
+    }
+
+    const enErp = cliente.contactos.find((c) => c.id === existente!.id)!;
+    const cambio: CambioDeContacto =
+      cambiosDe.get(existente.id) ??
+      ({ id: existente.id, cliente: cliente.razonSocial, nombre: enErp.nombre } as CambioDeContacto);
+
+    // El empate parcial completa el nombre guardado. Se reporta como
+    // diferencia porque es un dato que cambia, no un hueco que se llena.
+    if (parcial && !cambio.nombreCompleto) {
+      cambio.nombreCompleto = { nombre: f.contacto, normalizado: nombreNorm };
+      plan.diferencias.push({
+        quien,
+        campo: "nombre (empate parcial)",
+        enErp: enErp.nombre,
+        enExcel: f.contacto,
+        fila: f.fila,
+        seEscribe: true,
+      });
+    }
+
+    const campos: Array<[string, string | null, string, keyof CambioDeContacto]> = [
+      ["puesto", enErp.puesto, f.puesto, "puesto"],
+      ["teléfono", enErp.telefono, f.telefono, "telefono"],
+      ["correo", enErp.correo, f.correo, "correo"],
+      // La diferencia de dirección se le atribuye a la persona, que es de
+      // quien es: antes salían varios renglones de la misma empresa que en
+      // realidad eran dos domicilios distintos de dos grupos de contactos.
+      ["dirección", enErp.direccion, f.direccion, "direccion"],
+    ];
+
+    let tocado = parcial;
+    for (const [campo, actual, entrante, llave] of campos) {
+      const d = decidir(campo, actual, entrante, { quien, fila: f.fila, sobrescribir }, plan);
+      if (d.escribir !== null) {
+        (cambio[llave] as string) = d.escribir;
+        tocado = true;
+      }
+    }
+
+    if (tocado && !cambiosDe.has(existente.id)) {
+      cambiosDe.set(existente.id, cambio);
+      plan.contactosActualizados.push(cambio);
+    }
+  }
+
+  // ── El respaldo del cliente: la dirección más repetida entre sus contactos ─
+  for (const [clienteId, vistas] of direccionesVistas) {
+    const cliente = params.clientes.find((c) => c.id === clienteId)!;
+    const ganadora = masRepetida(vistas);
+    const d = decidir(
+      "dirección",
+      cliente.direccion,
+      ganadora.direccion,
+      { quien: `${cliente.razonSocial} (respaldo)`, fila: ganadora.fila, sobrescribir },
+      plan,
+    );
+    if (d.escribir !== null) {
+      plan.direcciones.push({
+        id: cliente.id,
+        cliente: cliente.razonSocial,
+        direccion: d.escribir,
+        deCuantos: ganadora.veces,
+      });
+    }
+  }
+
+  // ── Nombres que se contienen, dentro del mismo cliente ────────────────────
+  // Se miran los de la hoja y los que ya están en el ERP: el par puede estar
+  // repartido entre las dos fuentes, que es como se crea el duplicado.
+  for (const cliente of params.clientes) {
+    const vistos = new Map<string, { nombre: string; fila: number }>();
+    for (const c of cliente.contactos) {
+      vistos.set(normalizarNombreContacto(c.nombre), { nombre: c.nombre, fila: 0 });
+    }
+    for (const f of params.filas) {
+      if (porNorm.get(normalizarRazonSocial(f.razonSocial))?.id !== cliente.id) continue;
+      const n = normalizarNombreContacto(f.contacto);
+      if (n && !vistos.has(n)) vistos.set(n, { nombre: f.contacto, fila: f.fila });
+    }
+
+    const lista = [...vistos.entries()];
+    for (let i = 0; i < lista.length; i++) {
+      for (let j = i + 1; j < lista.length; j++) {
+        const [na, a] = lista[i];
+        const [nb, b] = lista[j];
+        if (!contieneTodas(na, nb) && !contieneTodas(nb, na)) continue;
+        plan.posiblesDuplicados.push({
+          cliente: cliente.razonSocial,
+          nombres: [a.nombre, b.nombre],
+          filas: [a.fila, b.fila].filter((n) => n > 0),
+        });
+      }
+    }
+  }
+
+  plan.sinCliente = [...sinCliente.values()];
+
+  for (const [idEmp, porRazon] of razonesPorId) {
+    if (porRazon.size < 2) continue;
+    plan.idsAmbiguos.push({
+      idEmp,
+      // La razón tal como se escribió la primera vez, no la normalizada: la
+      // normalizada esconde justo la diferencia que hay que mirar.
+      razones: [...porRazon.keys()].map(
+        (n) => params.filas.find((f) => normalizarRazonSocial(f.razonSocial) === n)!.razonSocial,
+      ),
+      filas: [...porRazon.values()].flat().sort((a, b) => a - b),
+    });
+  }
+
+  return plan;
+}
+
+// ── Las escrituras ────────────────────────────────────────────────────────────
+
+/**
+ * La forma de `sql` del driver HTTP de Neon: una etiqueta de plantilla.
+ * Igual que en `importacion-2026.ts`, cada función devuelve la consulta sin
+ * ejecutarla, para que el guion arme el lote y lo mande en una transacción.
+ */
+type ConsultaSql<T> = (plantilla: TemplateStringsArray, ...valores: unknown[]) => T;
+
+export function actualizarDireccion<T>(
+  sql: ConsultaSql<T>,
+  c: { id: string; direccion: string },
+): T {
+  return sql`UPDATE clientes SET direccion = ${c.direccion}, updated_at = now() WHERE id = ${c.id}`;
+}
+
+/**
+ * El alta de un contacto, con `ON CONFLICT` sobre el índice único
+ * `(cliente_id, nombre_normalizado)`: si alguien lo agregó entre la lectura y
+ * la escritura, la carga no se cae — y tampoco pisa lo que ese alguien puso,
+ * que es la misma regla de todo el módulo.
+ */
+export function insertarContacto<T>(
+  sql: ConsultaSql<T>,
+  c: {
+    id: string;
+    clienteId: string;
+    nombre: string;
+    nombreNormalizado: string;
+    puesto: string | null;
+    telefono: string | null;
+    correo: string | null;
+    direccion: string | null;
+  },
+): T {
+  return sql`INSERT INTO contactos (id, cliente_id, nombre, nombre_normalizado, puesto, telefono, correo, direccion)
+     VALUES (${c.id}, ${c.clienteId}, ${c.nombre}, ${c.nombreNormalizado}, ${c.puesto}, ${c.telefono}, ${c.correo}, ${c.direccion})
+     ON CONFLICT (cliente_id, nombre_normalizado) DO NOTHING`;
+}
+
+/**
+ * Actualiza solo los campos que vienen. `COALESCE` no sirve aquí: el valor
+ * entrante nunca es null —solo se planean los campos que sí se escriben— y
+ * `COALESCE(${null}, puesto)` dejaría el tipo sin inferir.
+ */
+export function actualizarContacto<T>(
+  sql: ConsultaSql<T>,
+  c: {
+    id: string;
+    puesto?: string;
+    telefono?: string;
+    correo?: string;
+    direccion?: string;
+    nombreCompleto?: { nombre: string; normalizado: string };
+  },
+): T[] {
+  const consultas: T[] = [];
+  // Las dos columnas en la misma sentencia: dejar el normalizado viejo con el
+  // nombre nuevo es exactamente la incoherencia que causó todo esto.
+  if (c.nombreCompleto) {
+    consultas.push(
+      sql`UPDATE contactos SET nombre = ${c.nombreCompleto.nombre}, nombre_normalizado = ${c.nombreCompleto.normalizado}, updated_at = now() WHERE id = ${c.id}`,
+    );
+  }
+  if (c.puesto !== undefined) {
+    consultas.push(sql`UPDATE contactos SET puesto = ${c.puesto}, updated_at = now() WHERE id = ${c.id}`);
+  }
+  if (c.telefono !== undefined) {
+    consultas.push(sql`UPDATE contactos SET telefono = ${c.telefono}, updated_at = now() WHERE id = ${c.id}`);
+  }
+  if (c.correo !== undefined) {
+    consultas.push(sql`UPDATE contactos SET correo = ${c.correo}, updated_at = now() WHERE id = ${c.id}`);
+  }
+  if (c.direccion !== undefined) {
+    consultas.push(sql`UPDATE contactos SET direccion = ${c.direccion}, updated_at = now() WHERE id = ${c.id}`);
+  }
+  return consultas;
+}
+
+/** Todas las sentencias del plan, en el orden en que tienen que ir. */
+export function sentenciasDelPlan<T>(sql: ConsultaSql<T>, plan: Plan): T[] {
+  return [
+    ...plan.direcciones.map((d) => actualizarDireccion(sql, d)),
+    ...plan.contactosNuevos.map((c) => insertarContacto(sql, c)),
+    ...plan.contactosActualizados.flatMap((c) => actualizarContacto(sql, c)),
+  ];
+}
