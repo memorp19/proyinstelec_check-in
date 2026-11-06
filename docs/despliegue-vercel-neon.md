@@ -60,6 +60,9 @@ el mismo repositorio.
    - `AUTH_SECRET`: `openssl rand -base64 32`.
    - **No** definir `NEXTAUTH_URL` ni `AUTH_URL` en Vercel (se detectan solos).
    - `DRIVE_SERVICE_ACCOUNT_KEY`: el JSON completo en una sola línea.
+   - `BANXICO_TOKEN`: va **también en Vercel**, no solo en local. Es lo que llena
+     el tipo de cambio de una cotización en dólares con el FIX del día; sin él
+     el TC se captura a mano en cada cotización.
    - Sin `DATABASE_URL` y `AUTH_SECRET` el build sí pasa, pero la app responde 500
      en cuanto toca la base o la sesión.
 5. *Settings → Git → Production Branch* debe seguir siendo `main`: así cada push a

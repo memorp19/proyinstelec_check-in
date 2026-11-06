@@ -921,7 +921,33 @@ cambian con el negocio y no deberían necesitar un despliegue. El catálogo pued
 además traer su propio `base_nodos` por código: el de la configuración es el
 punto de partida, no un techo.
 
-### 6.9 🟡 Qué se hace con `Cat_Servicios_Cambios`
+### 6.9 🟡 Eliminar es más estrecho que en el legacy
+
+**Decidido, pendiente de confirmar con el equipo antes del corte.**
+
+El chequeo previo de Apps Script lo dice así:
+
+> Eliminar: directo, la elimina quien ve el módulo (solo antes de enviarla).
+> **No necesita permiso.**
+
+En el ERP hay tres candados en vez de uno: la elimina **quien la dio de alta**
+—o el gerente de operaciones con `cotizaciones.armar.todas`—, solo si está en
+`PROCESO` sin envío, sin OT y sin OC, y hay que **teclear el folio**.
+
+La razón de cada uno: una cotización que el cliente ya tiene es parte del
+historial aunque haya sido un error —para esas está `CANCELADA`, que deja
+constancia— y un «¿estás seguro?» se contesta que sí sin leerlo, mientras que
+copiar el folio obliga a mirar cuál se está borrando.
+
+**Lo que hay que confirmar no es la regla, es el hábito.** Si hoy el equipo se
+borra cotizaciones ajenas sin fricción y eso resuelve algo que no estamos
+viendo, el candado de «quién» va a aparecer el primer día como un estorbo. Si
+nadie lo hace, no se va a notar. Es una pregunta de media hora con quien cotiza,
+y conviene hacerla **antes** del corte y no después.
+
+El número no se reutiliza en ninguno de los dos casos: el hueco se queda.
+
+### 6.10 🟡 Qué se hace con `Cat_Servicios_Cambios`
 
 La tabla destino ya existe (`cat_servicios_cambios`, §1.2). Queda por decidir si
 se migra el historial viejo o se empieza en limpio. La carga del catálogo 2026
