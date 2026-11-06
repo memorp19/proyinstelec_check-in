@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   cantidadConUnidad,
   cantidadParaDocumento,
+  direccionParaLaCarta,
   lineasDeDireccion,
   telefonoParaDocumento,
   unidadParaDocumento,
@@ -139,5 +140,31 @@ describe("lineasDeDireccion", () => {
 
   it("sin dirección, dos renglones vacíos", () => {
     expect(lineasDeDireccion(null)).toEqual(["", ""]);
+  });
+});
+
+describe("direccionParaLaCarta", () => {
+  /**
+   * Hay empresas con planta y oficinas en ciudades distintas. Mandar la carta
+   * al domicilio fiscal cuando la persona trabaja en la planta es de los
+   * errores que el cliente sí nota.
+   */
+  it("la del contacto manda sobre la del cliente", () => {
+    expect(direccionParaLaCarta("Carretera federal km 14", "Av. Central 100")).toBe(
+      "Carretera federal km 14",
+    );
+  });
+
+  it("sin dirección del contacto, la del cliente", () => {
+    expect(direccionParaLaCarta(null, "Av. Central 100")).toBe("Av. Central 100");
+  });
+
+  /** Una celda vacía del Excel llega como espacios, no como null. */
+  it("una dirección de contacto en blanco cuenta como no tenerla", () => {
+    expect(direccionParaLaCarta("   ", "Av. Central 100")).toBe("Av. Central 100");
+  });
+
+  it("sin ninguna de las dos, cadena vacía", () => {
+    expect(direccionParaLaCarta(null, undefined)).toBe("");
   });
 });

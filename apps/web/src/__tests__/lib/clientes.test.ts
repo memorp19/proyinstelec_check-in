@@ -10,6 +10,7 @@ import {
   compararRazones,
   createContacto,
   contactosParaEnvio,
+  listContactos,
 } from "@/src/lib/clientes";
 
 function usarDb(resultados: unknown[] = []) {
@@ -75,6 +76,57 @@ describe("createContacto — anti-duplicado", () => {
     await expect(
       createContacto({ clienteId: "abc", nombre: "Juan Perez" }),
     ).rejects.toThrow('El contacto "Juan Perez" ya existe en esta empresa');
+  });
+});
+
+describe("listContactos — la dirección del contacto", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  /**
+   * La columna existe desde el #25 y el importador la llena, pero el lector no
+   * la exponía: la carta se iba al domicilio de la empresa aunque la persona
+   * trabajara en otro sitio.
+   */
+  it("expone contactos.direccion, que es lo que lee la carta", async () => {
+    usarDb([
+      [
+        {
+          id: "c1",
+          clienteId: "abc",
+          nombre: "Juan Pérez",
+          nombreNormalizado: "juan perez",
+          puesto: null,
+          telefono: null,
+          correo: null,
+          direccion: "Carretera federal km 14, Tepeji",
+          ...fechas,
+        },
+      ],
+    ]);
+
+    const [contacto] = await listContactos("abc");
+    expect(contacto.direccion).toBe("Carretera federal km 14, Tepeji");
+  });
+
+  it("sin dirección capturada queda indefinida, no en null", async () => {
+    usarDb([
+      [
+        {
+          id: "c1",
+          clienteId: "abc",
+          nombre: "Juan Pérez",
+          nombreNormalizado: "juan perez",
+          puesto: null,
+          telefono: null,
+          correo: null,
+          direccion: null,
+          ...fechas,
+        },
+      ],
+    ]);
+
+    const [contacto] = await listContactos("abc");
+    expect(contacto.direccion).toBeUndefined();
   });
 });
 

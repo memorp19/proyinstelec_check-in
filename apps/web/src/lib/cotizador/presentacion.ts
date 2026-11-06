@@ -20,6 +20,22 @@ export function cantidadParaDocumento(cantidad: number): string {
   return cantidad.toLocaleString("es-MX", { minimumFractionDigits: 1, maximumFractionDigits: 4 });
 }
 
+/**
+ * Un importe como va en el documento: `$ 1,046,113.00 MXN`.
+ *
+ * Con el espacio después del `$` y la moneda al final, que es como está en
+ * los PDF que el cliente ya tiene (`COT_05:209`). Siempre dos decimales:
+ * `$ 8,540.00 MXN`, nunca `$ 8,540 MXN`.
+ */
+export function importeParaDocumento(monto: number, moneda: string = "MXN"): string {
+  const v = Number.isFinite(monto) ? monto : 0;
+  const cifras = v.toLocaleString("es-MX", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  return `$ ${cifras} ${moneda || "MXN"}`;
+}
+
 /** Las que no siguen la regla general. Son pocas y conviene tenerlas a la vista. */
 const PLURALES: Record<string, string> = {
   mes: "meses",
