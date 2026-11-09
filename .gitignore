@@ -50,3 +50,8 @@ _to_delete_snapshots/
 # Importación — los Excel de control traen datos reales de clientes,
 # montos y folios. Se copian a mano y NUNCA se versionan.
 importacion/
+
+# El JSON de la plantilla del cotizador: trae el documento entero de la
+# empresa y los ids de Drive. Se exporta a mano cuando hace falta revisarlo
+# y se deja FUERA del repo; las pruebas lo leen por ERP_PLANTILLA_JSON.
+plantilla-cotizacion*.json

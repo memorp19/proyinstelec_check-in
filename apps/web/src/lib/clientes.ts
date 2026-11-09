@@ -26,6 +26,13 @@ export interface Contacto {
   puesto?: string;
   telefono?: string;
   correo?: string;
+  /**
+   * El domicilio de esta persona, cuando no es el de su empresa.
+   *
+   * Una empresa puede atender desde dos sitios y la carta va dirigida a una
+   * persona en uno de ellos. `clientes.direccion` es el respaldo.
+   */
+  direccion?: string;
   created_at: string;
   updated_at: string;
 }
@@ -53,6 +60,7 @@ function aContacto(f: FilaContacto): Contacto {
     puesto: f.puesto ?? undefined,
     telefono: f.telefono ?? undefined,
     correo: f.correo ?? undefined,
+    direccion: f.direccion ?? undefined,
     created_at: f.createdAt.toISOString(),
     updated_at: f.updatedAt.toISOString(),
   };

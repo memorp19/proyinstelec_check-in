@@ -761,11 +761,103 @@ Se localiza **por contenido**: la primera tabla cuya celda (0,0) diga `PARTIDA`
 (`COT_05:492-499`). No por posición, que cambiaría al editar la plantilla.
 
 Un renglón por partida: número, título con su formato (`NORMAL`, `NEGRITAS`,
-`OCULTO`), descripción con sus viñetas, cantidad, unidad, precio unitario e
-importe. Un bloque de totales por moneda al final.
+`OCULTO`), descripción con sus bloques, cantidad, unidad, precio unitario e
+importe.
 
-La viñeta se clona de una existente del documento (`prototipoDeVineta_`), para
-que el estilo salga idéntico.
+**Dentro de la tabla no hay ni un marcador.** Todo va por posición de celda:
+la plantilla trae el cuadro con importes de ejemplo escritos a mano, y lo que
+se hace es reemplazarlos. Lo mismo los totales, que **viven en la misma
+tabla** —no en una aparte— en sus tres últimos renglones.
+
+Se conserva el **renglón 1 como molde**: trae los bordes, los anchos y la
+letra del cuadro hecho a mano. Los demás se borran y se vuelven a crear como
+copias suyas (`COT_05:962-966`). Las 22 filas en blanco de la plantilla son
+andamio: no limitan cuántas partidas caben.
+
+**La cantidad en letra** va en la tercera columna del renglón del Total, no en
+la primera: al unir, Docs concatena el contenido de las celdas en orden, y ahí
+es donde queda abajo, a la altura de "Total" (`COT_05:1231-1233`).
+
+**El "Subtotal" impreso ya incluye la asesoría.** En nuestro motor la asesoría
+va dentro del precio de cada partida (§2.6), así que `subtotal` es la base
+gravable y es justo lo que el documento llama Subtotal. El ERP viejo la lleva
+aparte y la suma al imprimir (`redondearDoc_(b.subtotal + b.asesoria)`);
+sumarla también aquí la contaría dos veces.
+
+#### Las viñetas: guion en los dos niveles, decidido
+
+El ERP viejo clona un `ListItem` existente (`prototipoDeVineta_`) y Apps
+Script arrastra el `listId` en la copia. **La API REST no puede hacer eso**: no
+hay ninguna solicitud que asigne un `listId` existente a un párrafo nuevo, y
+`createParagraphBullets` solo acepta un preset de una lista cerrada —disco,
+diamante, flecha, estrella, casilla, numeradas— y **ninguno es un guion**.
+
+Los PDF de marzo de 2026 muestran `●` en el segundo nivel, y durante un rato
+pareció que había que reproducirlo. **No hay que hacerlo.** Contando los
+glifos de viñeta en los tres documentos más recientes que generó el ERP viejo:
+
+| Documento | `-` | `●` |
+|---|---|---|
+| 3 nov 2026 | 23 | 0 |
+| 3 nov 2026 | 82 | 0 |
+| 27 oct 2026 | 74 | 0 |
+
+Cero. Y en el de 82 viñetas hay **dos niveles** claramente distintos —42
+renglones a una sangría y 36 a otra— **los dos con guion**. El `●` venía de
+una versión de la plantilla que ya no existe: la lista actual define `-` en el
+nivel 0 y `o` en el 1, y Docs no deja cambiar el glifo de un solo nivel desde
+la interfaz sin aplicarlo a la lista entera.
+
+Así que se usa el **respaldo que el propio ERP viejo trae escrito**
+(`COT_05:1096-1101`): el guion como texto y la sangría colgante hace el resto
+—36/22 pt en el primer nivel, 54/40 en el segundo—. Sale igual que hoy, es
+determinista y no depende de ningún comportamiento de la API que no podamos
+probar. Si alguien extraña el `●`, lo que hay que arreglar es la plantilla.
+
+#### La viñeta molde, y por qué hay que quitarla
+
+La copia de la plantilla para el ERP (§4.6) lleva una **viñeta molde** en la
+celda Concepto del renglón 1, para el día que se implemente el clonado. Tiene
+un efecto que no es obvio: en Docs **un párrafo nuevo hereda la viñeta de
+aquel en el que se inserta**, así que el título de la primera partida saldría
+con viñeta y sus viñetas con dos guiones.
+
+Por eso se emite un `deleteParagraphBullets` sobre todo el cuerpo de la tabla.
+Toca la copia de cada documento, no la plantilla.
+
+#### El orden del lote
+
+`batchUpdate` aplica en orden y cada inserción o borrado corre los índices
+posteriores, pero el lote se arma **a ciegas**: no hay forma de releer el
+documento a media lista. De ahí el orden, que es parte del algoritmo:
+
+1. La **tabla**, que está al final del documento (índice ~3000).
+2. Las **normas** que no se eligieron (~1000).
+3. Los **renglones del destinatario** que no salen (~300).
+4. Las **sustituciones**: `replaceAllText` no usa índices, pero cambia
+   longitudes en todo el documento, así que va al final.
+
+Dentro de la tabla, lo mismo: primero las filas —de abajo hacia arriba—,
+después los textos de la última celda a la primera, después los estilos —que
+no cambian longitudes— y al final unir celdas y bordes, que hablan de filas y
+columnas y no de caracteres.
+
+### 4.2b Las normas: se quitan, no se insertan
+
+Las 23 normas de "Documentos Aplicables" **ya vienen impresas** en la
+plantilla, como viñetas. Generar el documento es **quitar las que no
+apliquen**.
+
+Para saber qué párrafo es cuál hay una tabla explícita `id → prefijo del texto
+en la plantilla`. Ni por posición —agregar una norma correría todas las de
+abajo y el documento saldría con las equivocadas sin que nada fallara— ni por
+`id`, porque ocho de las veintitrés no empiezan con el suyo (`IEEE-242` se
+imprime como "IEEE – Recommended Practice…"), ni por `Norma.texto`, porque el
+catálogo corrigió el dedazo `IEEC` que la plantilla sigue teniendo.
+
+Una norma que no se encuentra, o que aparece dos veces, es un **aviso** y no un
+error: la cotización se tiene que poder generar aunque alguien haya editado la
+plantilla.
 
 ### 4.3 Saltos de página
 
@@ -799,22 +891,80 @@ nunca pasaron por aquí.
 Esto arregla de paso el problema de las v0 históricas: en cuanto una cotización
 genere su PDF desde el ERP, deja de depender del nombre.
 
-### 4.5 Rehacer el PDF
+### 4.5 Un solo botón: «Ver cotización»
 
-Dos botones, como hoy:
+*(Reescrito: el plan describía dos botones y una edición a mano que el sistema
+viejo ya no tiene.)*
 
-- **Generar documento** — copia la plantilla, la llena, exporta el PDF. Se
-  niega si el revisor o el cliente ya tienen ese PDF, salvo que se fuerce
-  (`COT_05:320-344`).
-- **Actualizar PDF** — rehace solo el PDF desde el Doc como esté ahora, para
-  recoger ediciones hechas a mano en el documento (`COT_05:597`). Antes de
-  mandar a revisión, solo si el Doc cambió después del PDF — con dos minutos de
-  tolerancia (`COT_05:626-630`).
+El Apps Script quitó el botón «Regenerar» el 19 de octubre de 2026: **«Ver
+cotización» rehace el documento desde la plantilla cada vez**. No hay borrador,
+no hay un paso intermedio, y lo que el botón enseña es el documento de verdad
+con su PDF, ya en la carpeta del folio.
 
-Lo anterior se aparta **después** de tener lo nuevo: si algo falla a medio
-camino, el documento anterior sigue ahí (`COT_05:399-401`).
+El ERP hace lo mismo, y **no replica la edición a mano**. El viejo todavía trae
+`docEditadoAMano_` y un «Actualizar PDF» que rehace el PDF conservando lo que
+alguien escribió dentro del Doc; eso se queda fuera a propósito. Un documento
+que se edita por fuera del cotizador deja de cuadrar con lo que la base dice
+que vale la cotización, y el congelado existe justo para que eso no pase.
 
----
+#### El orden, que es lo único delicado
+
+1. Guardar lo que haya en la pantalla.
+2. Copiar la plantilla a la carpeta del folio, con el nombre bueno.
+3. Leerla, armar **todas** las solicitudes y aplicarlas en un solo
+   `batchUpdate`.
+4. Exportar el PDF.
+5. Guardar `doc_drive_id` y `pdf_drive_id`.
+6. **Al final**, apartar los anteriores.
+
+Lo anterior se aparta después de tener lo nuevo (`COT_05:399-401`): si algo
+falla a medio camino, el documento que el equipo ya conocía sigue ahí. Y si
+falla antes de exportar, la copia a medio llenar se va a la papelera — si se
+quedara con el nombre bueno, la siguiente corrida crearía una segunda y nadie
+sabría cuál es la buena.
+
+En un solo lote y no en varios porque la API los aplica como una unidad: media
+lista de solicitudes deja un documento que parece bueno y no lo es.
+
+#### La fecha no se mueve
+
+Se guarda en la primera generación y **no cambia al regenerar**. Una cotización
+que se rehace una semana después —porque se corrigió un precio— tiene que
+seguir diciendo la fecha con la que el cliente la recibió. Si se moviera, dos
+PDF del mismo folio dirían fechas distintas y ninguna sería la buena.
+
+#### Lo que sí se queda para después
+
+Generar al mandar a revisión, el bloqueo desde la aprobación y que
+`enviarAlCliente` use `pdf_drive_id` en vez de buscar por nombre. Son del flujo,
+no del documento, y entran cuando el documento ya salga bien.
+
+### 4.6 La plantilla del ERP es una copia, no la original
+
+`ERP_PLANTILLA_DOC_COTIZACION_ID` apunta a una **copia** del Doc
+`PFAD-024-2026_Formato para Cotizaciones`, no a la plantilla de producción.
+
+El motivo es concreto: Apps Script sigue usando la original y **clona su
+renglón 1** para armar la tabla. La viñeta molde que el ERP necesita en esa
+celda (§4.2) aparecería en las cotizaciones que el equipo genera con el
+sistema viejo. Dos sistemas escribiendo sobre la misma plantilla es una
+dependencia que no hace falta tener mientras conviven.
+
+La copia se mantiene a mano, y cada cambio de forma de la plantilla hay que
+pasarlo a las dos hasta que el ERP viejo se apague. Es el precio de poder
+tocar una sin romper la otra.
+
+Es el id del **documento de Google**, no el del `.docx` que vive en Drive: la
+API de Docs no abre archivos de Word.
+
+Para revisar la plantilla hay que exportar su JSON. **No se versiona** —trae
+el documento entero de la empresa y los ids de Drive— y está en `.gitignore`.
+Las pruebas que la comprueban de verdad lo leen por `ERP_PLANTILLA_JSON`, y se
+saltan solas si la variable no está:
+
+```bash
+ERP_PLANTILLA_JSON="…/plantilla-cotizacion-erp.json" pnpm test:ci
+```
 
 ## 5. Copiar a una versión nueva
 
@@ -1049,9 +1199,29 @@ asesoría → 38,024.80 con IVA, con su importe en letra; y el congelado guardó
 
 ### PR 6 · El documento y el PDF
 
-Marcadores, tabla de partidas, saltos con la API de Docs, nombre
-`<folio> <titulo>`, `pdf_drive_id` y `doc_drive_id`, y `buscarPdfCotizacion`
-prefiriendo el id.
+Partido en dos, porque la lógica se puede probar entera sin red y la conexión
+con Google no:
+
+**6a · La lógica, contra la interfaz** ✅ **hecho**
+
+Marcadores, renglones que se ocultan, normas por prefijo, tabla de partidas
+con sus totales y la cantidad en letra, nombre `<folio> <titulo>`, la fecha
+que no se mueve y el orden del lote. Todo contra la interfaz `Documentos`, con
+una implementación falsa que registra las solicitudes.
+
+La aritmética de índices se verifica **aplicando** las solicitudes con las
+reglas de la API (`TablaSimulada`), no afirmando sobre la lista: una lista
+puede verse bien y escribir en el lugar equivocado. El modelo está validado
+contra el JSON de la plantilla real —26 renglones y 130 celdas al índice.
+
+**6b · La conexión con Google**
+
+La implementación real de `Documentos` sobre `googleapis`, los saltos de
+página con `pageBreakBefore`, `pdf_drive_id` y `doc_drive_id`, y
+`buscarPdfCotizacion` prefiriendo el id. Ahí se prueban contra un documento de
+verdad las dos cosas que no se pueden decidir en papel: si `insertTableRow`
+arrastra la viñeta de la fila que copia, y si clonar el molde produce el
+mismo guion que la plantilla.
 
 **Probable por sí mismo:** se genera un PDF y se compara con el que produce Apps
 Script para la misma cotización. Es la prueba de aceptación de toda la fase.

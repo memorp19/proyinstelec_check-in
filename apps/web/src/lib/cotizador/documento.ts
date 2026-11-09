@@ -308,6 +308,27 @@ export function lineasDeDireccion(direccion: string | null | undefined): [string
   return [limpio(texto.slice(0, coma)), limpio(texto.slice(coma + 1))];
 }
 
+/**
+ * Qué domicilio lleva la carta: **el del contacto, y el del cliente de
+ * respaldo**.
+ *
+ * Una empresa puede atender desde dos sitios —los hay con planta y oficinas en
+ * ciudades distintas— y la cotización va dirigida a una persona en uno de
+ * ellos. Mandarla al domicilio fiscal cuando la persona trabaja en la planta
+ * es de los errores que el cliente sí nota.
+ *
+ * Es la regla del legacy (`datosDelCliente_`): toma la dirección del renglón
+ * del contacto y solo cae a la de la empresa cuando no encuentra a la persona.
+ * Una dirección de contacto en blanco —o con puros espacios, que es como queda
+ * una celda vacía del Excel— cuenta como no tenerla.
+ */
+export function direccionParaLaCarta(
+  delContacto: string | null | undefined,
+  delCliente: string | null | undefined,
+): string {
+  return String(delContacto ?? "").trim() || String(delCliente ?? "").trim();
+}
+
 /** Lo que se propone, venga del catálogo de clientes o del título. */
 export interface SugerenciasDocumento {
   contacto?: Partial<ContactoDocumento>;
