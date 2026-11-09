@@ -162,6 +162,9 @@ function calcularConcepto(
 
   if (esf) {
     const costoEstudio = redondear(esf.costo * utilidad * factorMoneda);
+    // El mismo cálculo sin el factor de utilidad: es el costo limpio, y la
+    // diferencia contra el de arriba es la utilidad del concepto.
+    const netoEstudio = redondear(esf.costo * factorMoneda);
     const nodos = Number(c.esfuerzo?.nodos) || 0;
     if (nodos) {
       const base = Number(c.esfuerzo?.baseNodos) || baseNodosPorOmision;
@@ -172,6 +175,7 @@ function calcularConcepto(
         unidad: c.unidad,
         costoUnitario: costoEstudio,
         importe: redondear((costoEstudio / base) * nodos),
+        importeNeto: redondear((netoEstudio / base) * nodos),
         forma: "NODOS",
         horas: esf.horas,
       };
@@ -183,6 +187,7 @@ function calcularConcepto(
       unidad: c.unidad,
       costoUnitario: costoEstudio,
       importe: redondear(costoEstudio * (cantidad || 1)),
+      importeNeto: redondear(netoEstudio * (cantidad || 1)),
       forma: "ESFUERZO",
       horas: esf.horas,
     };
@@ -200,6 +205,7 @@ function calcularConcepto(
     avisos.push(`El concepto "${etiqueta}" tiene costo 0.`);
   }
   const unitario = redondear(costo * utilidad * factorMoneda);
+  const unitarioNeto = redondear(costo * factorMoneda);
   return {
     codigo: c.codigo,
     descripcion: c.descripcion,
@@ -207,6 +213,7 @@ function calcularConcepto(
     unidad: c.unidad,
     costoUnitario: unitario,
     importe: redondear(unitario * cantidad),
+    importeNeto: redondear(unitarioNeto * cantidad),
     forma: "FIJO",
   };
 }
@@ -321,6 +328,9 @@ export function calcularCotizacion(entrada: EntradaCotizacion): ResultadoCotizac
       calcularConcepto(c, moneda, tipoCambio, baseNodos, avisos),
     );
     const costoConceptos = redondear(conceptos.reduce((s, c) => s + c.importe, 0));
+    const netoConceptos = redondear(
+      conceptos.reduce((s, c) => s + (c.importeNeto ?? c.importe), 0),
+    );
     if (conceptos.length === 0) {
       avisos.push(`La partida ${p.orden ?? i + 1} no tiene conceptos.`);
     }
@@ -335,8 +345,10 @@ export function calcularCotizacion(entrada: EntradaCotizacion): ResultadoCotizac
       unidad: p.unidad,
       conceptos,
       costoConceptos,
+      utilidadConceptos: redondear(costoConceptos - netoConceptos),
       gastoAsignado: 0,
       costoTotal: 0,
+      costoNeto: 0,
       asesoria: 0,
       ajuste: redondear(Number(p.ajuste) || 0),
       ajusteDerivado: false,
@@ -421,6 +433,11 @@ export function calcularCotizacion(entrada: EntradaCotizacion): ResultadoCotizac
     const directo = asignadoDirecto.get(p.id) ?? 0;
     p.gastoAsignado = redondear(convertir(general) + convertir(directo));
     p.costoTotal = redondear(p.costoConceptos + p.gastoAsignado);
+    // El costo limpio: los conceptos sin su utilidad, más los mismos gastos.
+    // Los gastos ya traen la suya aplicada en `calcularGasto` y aquí no se
+    // separa: el panel mide la utilidad de los conceptos, que es la que el
+    // cotizador captura partida por partida.
+    p.costoNeto = redondear(p.costoTotal - (p.utilidadConceptos ?? 0));
   }
 
   // ── 5. La asesoría: UN porcentaje, repartido en proporción al costo ────────
@@ -506,6 +523,8 @@ export function calcularCotizacion(entrada: EntradaCotizacion): ResultadoCotizac
     partidas,
     gastos,
     costoTotal: redondear(partidas.reduce((s, p) => s + p.costoTotal, 0)),
+    costoNeto: redondear(partidas.reduce((s, p) => s + (p.costoNeto ?? p.costoTotal), 0)),
+    utilidadConceptos: redondear(partidas.reduce((s, p) => s + (p.utilidadConceptos ?? 0), 0)),
     totalGastos,
     asesoriaPct,
     asesoria: redondear(partidas.reduce((s, p) => s + p.asesoria, 0)),

@@ -13,6 +13,7 @@ import {
   ESCALA_MONTO,
   importeEnLetra,
   montoDeCongelado,
+  type ResultadoCotizacion,
   type ServicioCatalogo,
   type FilaArmado,
   type FilaConcepto,
@@ -326,6 +327,62 @@ describe("copiarAVersion", () => {
     const r = copiarAVersion(filas, [catalogo[1]], () => `y-${++n}`);
     expect(r.avisos[0]).toContain("SP001");
     expect(r.avisos[0]).toContain("ya no está");
+  });
+});
+
+/**
+ * El modo de fallo real de un campo nuevo dentro de un jsonb guardado.
+ *
+ * `costoNeto` y `utilidadConceptos` se agregaron al `resultado` después de que
+ * ya había versiones congeladas. Las de antes **no los traen**, y eso no puede
+ * impedir leerlas: el PDF que el cliente recibió se reimprime desde ahí.
+ *
+ * Son opcionales en el tipo justamente para que esto se note al compilar en
+ * vez de salir como un `NaN` en una pantalla.
+ */
+describe("congelado viejo, sin costoNeto", () => {
+  /** Un resultado como los que quedaron guardados antes del cambio. */
+  const comoAntes = () => {
+    const r = calcularCotizacion(ENTRADA_068);
+    const { costoNeto: _n, utilidadConceptos: _u, ...resto } = r;
+    return {
+      ...resto,
+      partidas: r.partidas.map(({ costoNeto: _pn, utilidadConceptos: _pu, ...p }) => ({
+        ...p,
+        conceptos: p.conceptos.map(({ importeNeto: _cn, ...c }) => c),
+      })),
+    } as ResultadoCotizacion;
+  };
+
+  it("se sigue leyendo: los totales y las partidas están completos", () => {
+    const vuelta = JSON.parse(JSON.stringify(comoAntes())) as ResultadoCotizacion;
+    expect(vuelta.subtotal).toBe(PDF_068.subtotal);
+    expect(vuelta.total).toBe(PDF_068.total);
+    expect(vuelta.partidas).toHaveLength(11);
+    expect(vuelta.costoTotal).toBeGreaterThan(0);
+  });
+
+  /** Lo que el panel consulta para decidir si pinta margen o el aviso. */
+  it("costoNeto llega indefinido, no cero ni NaN", () => {
+    const vuelta = JSON.parse(JSON.stringify(comoAntes())) as ResultadoCotizacion;
+    expect(vuelta.costoNeto).toBeUndefined();
+    expect(vuelta.utilidadConceptos).toBeUndefined();
+    expect(vuelta.partidas[0].costoNeto).toBeUndefined();
+  });
+
+  it("se puede congelar y volver a leer sin perder un centavo", () => {
+    const resultado = comoAntes();
+    const c = congelar(
+      { numero: 9068, anio: 2099, version: 0 },
+      ENTRADA_068,
+      resultado,
+      importeEnLetra(resultado.total),
+      "quien sea",
+    );
+    const vuelta = JSON.parse(JSON.stringify(c)) as typeof c;
+    expect(vuelta.subtotal).toBe(PDF_068.subtotal);
+    expect(vuelta.resultado.costoNeto).toBeUndefined();
+    expect(montoDeCongelado(vuelta).montoMxn).toBe(PDF_068.total);
   });
 });
 

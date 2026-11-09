@@ -434,8 +434,9 @@ describe("ajuste por partida", () => {
 });
 
 describe("costo total y subtotal son cosas distintas", () => {
-  // `costoTotal` es el panel interno: lo que cuesta hacerla, sin asesoría.
-  // `subtotal` es lo que ve el cliente.
+  // `costoTotal` son los conceptos **con su utilidad** más los gastos, sin
+  // asesoría: el `costoDirecto` del ERP viejo. Lo que cuesta hacer la partida
+  // es `costoNeto`, que es otro número. `subtotal` es lo que ve el cliente.
   it("el costo total no lleva asesoría y el subtotal sí", () => {
     const r = calcularCotizacion(
       base({
@@ -631,5 +632,140 @@ describe("IVA fuera de rango", () => {
 
   it("100 % también, por raro que suene", () => {
     expect(con(100).avisos).toEqual([]);
+  });
+});
+
+/**
+ * El costo neto: lo que de verdad cuesta hacer la partida.
+ *
+ * `costoTotal` suma los conceptos **con su utilidad** —es el `costoDirecto`
+ * del ERP viejo— y por eso no sirve para medir margen. Esta es la prueba que
+ * faltaba: sin un caso con utilidad, nada distinguía los dos números y el
+ * error del panel vivió sin que ninguna prueba se quejara.
+ */
+describe("costoNeto — los conceptos sin su utilidad", () => {
+  const conUtilidad = (utilidadPct: number) =>
+    calcularCotizacion(
+      base({
+        partidas: [
+          partida({ id: "P", conceptos: [{ codigo: "x", cantidad: 2, costo: 2800, utilidadPct }] }),
+        ],
+      }),
+    );
+
+  it("con utilidad, el neto la excluye y el costo total la incluye", () => {
+    const r = conUtilidad(15);
+    // 2,800 × 2 = 5,600 de costo; × 1.15 = 6,440 con utilidad.
+    expect(r.partidas[0].costoNeto).toBe(5600);
+    expect(r.partidas[0].costoTotal).toBe(6440);
+    expect(r.partidas[0].utilidadConceptos).toBe(840);
+  });
+
+  it("sin utilidad, los dos son el mismo número", () => {
+    const r = conUtilidad(0);
+    expect(r.partidas[0].costoNeto).toBe(5600);
+    expect(r.partidas[0].costoTotal).toBe(5600);
+    expect(r.partidas[0].utilidadConceptos).toBe(0);
+  });
+
+  it("el concepto expone su importe sin utilidad", () => {
+    const r = conUtilidad(15);
+    expect(r.partidas[0].conceptos[0]).toMatchObject({ importe: 6440, importeNeto: 5600 });
+  });
+
+  /** Los gastos entran enteros en los dos: su utilidad no es la del concepto. */
+  it("los gastos suman igual al neto que al costo total", () => {
+    const r = calcularCotizacion(
+      base({
+        partidas: [partida({ id: "P", conceptos: [{ codigo: "x", cantidad: 1, costo: 1000, utilidadPct: 10 }] })],
+        gastos: [{ codigo: "G", cantidad: 1, costo: 500 }],
+      }),
+    );
+    expect(r.partidas[0].costoNeto).toBe(1500);
+    expect(r.partidas[0].costoTotal).toBe(1600);
+  });
+
+  it("un estudio por esfuerzo también separa su utilidad", () => {
+    const r = calcularCotizacion(
+      base({
+        partidas: [
+          partida({
+            id: "P",
+            conceptos: [
+              {
+                codigo: "AR001",
+                cantidad: 1,
+                costo: 0,
+                utilidadPct: 20,
+                esfuerzo: { horasPorDia: 8, diasPorSemana: 5, ingenieros: 1, semanas: 1, tarifaHora: 100 },
+              },
+            ],
+          }),
+        ],
+      }),
+    );
+    // 8 × 5 × 1 × 1 = 40 h × 100 = 4,000 de costo; × 1.20 = 4,800.
+    expect(r.partidas[0].costoNeto).toBe(4000);
+    expect(r.partidas[0].costoTotal).toBe(4800);
+  });
+});
+
+/**
+ * El caso de la prueba a mano que destapó el error, anclado al centavo.
+ *
+ * Dos partidas con la misma asesoría plana y distinta utilidad. Con
+ * `costoTotal` las dos daban 9.1 % —`10/110`, el margen de la asesoría— y un
+ * panel que da el mismo número lleve lo que lleve no está midiendo nada.
+ */
+describe("costoNeto — el caso de la prueba a mano", () => {
+  const margen = (precio: number, costo: number) => ((precio - costo) / precio) * 100;
+
+  const caso = () =>
+    calcularCotizacion(
+      base({
+        asesoriaPct: 10,
+        ivaPct: 16,
+        partidas: [
+          partida({ id: "p1", orden: 1, cantidad: 2, conceptos: [{ codigo: "PR002", cantidad: 2, costo: 2800, utilidadPct: 15 }] }),
+          partida({ id: "p2", orden: 2, cantidad: 1, conceptos: [{ codigo: "PR003", cantidad: 1, costo: 2500, utilidadPct: 0 }] }),
+        ],
+        gastos: [{ codigo: "G1", cantidad: 1, costo: 24500, destino: "GENERAL" }],
+      }),
+    );
+
+  it("la partida con utilidad: neto 17,850 contra costo de venta 18,690", () => {
+    const p = caso().partidas[0];
+    expect(p.costoNeto).toBe(17850);
+    expect(p.costoTotal).toBe(18690);
+    expect(p.importe).toBe(20559);
+  });
+
+  it("su margen real es 13.2 %, no el 9.1 % que se pintaba", () => {
+    const p = caso().partidas[0];
+    expect(margen(p.importe, p.costoNeto!)).toBeCloseTo(13.2, 1);
+    expect(margen(p.importe, p.costoTotal)).toBeCloseTo(9.1, 1);
+  });
+
+  it("la partida sin utilidad no se mueve: los dos márgenes coinciden", () => {
+    const p = caso().partidas[1];
+    expect(p.costoNeto).toBe(14750);
+    expect(p.costoTotal).toBe(14750);
+    expect(margen(p.importe, p.costoNeto!)).toBeCloseTo(9.1, 1);
+  });
+
+  it("el total: 32,600 de neto y 11.4 % de margen", () => {
+    const r = caso();
+    expect(r.costoNeto).toBe(32600);
+    expect(r.costoTotal).toBe(33440);
+    expect(r.utilidadConceptos).toBe(840);
+    expect(margen(r.subtotal, r.costoNeto!)).toBeCloseTo(11.4, 1);
+  });
+
+  /** Lo que ve el cliente no se mueve: el cambio es del panel, no del precio. */
+  it("subtotal, IVA y total quedan exactamente igual", () => {
+    const r = caso();
+    expect(r.subtotal).toBe(36784);
+    expect(r.iva).toBe(5885.44);
+    expect(r.total).toBe(42669.44);
   });
 });

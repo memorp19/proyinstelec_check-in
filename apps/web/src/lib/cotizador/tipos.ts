@@ -154,6 +154,17 @@ export interface ConceptoCalculado {
   /** Costo unitario ya con utilidad y ya convertido a la moneda de la cotización. */
   costoUnitario: number;
   importe: number;
+  /**
+   * El importe **sin la utilidad**: lo que el concepto cuesta de verdad.
+   *
+   * `importe` sale de `costo × (1 + utilidadPct/100)`, así que la utilidad
+   * entra ahí y no vuelve a salir. Para el panel interno hace falta el costo
+   * limpio, y para pintar la utilidad como renglón propio hace falta la
+   * diferencia: `importe − importeNeto`.
+   *
+   * Opcional porque un `resultado` congelado antes de este campo no lo trae.
+   */
+  importeNeto?: number;
   /** `FIJO`, `ESFUERZO` o `NODOS`. */
   forma: "FIJO" | "ESFUERZO" | "NODOS";
   /** Horas totales, solo en los estudios. */
@@ -176,15 +187,31 @@ export interface PartidaCalculada {
   cantidad: number;
   unidad?: string;
   conceptos: ConceptoCalculado[];
-  /** Suma de los conceptos. */
+  /** Suma de los conceptos, **con** la utilidad de cada uno. */
   costoConceptos: number;
   /** Lo que le tocó de gastos, ya convertido. */
   gastoAsignado: number;
   /**
-   * Conceptos + gastos, sin asesoría. Es el número del panel interno: lo que
-   * cuesta hacer la partida.
+   * Conceptos **con su utilidad** + gastos, sin asesoría.
+   *
+   * Es el equivalente del `costoDirecto` del ERP viejo
+   * (`COT_03_CatalogoServicios.gs:401`), que también se arma sobre el costo
+   * con margen. **No es lo que cuesta hacer la partida** — para eso está
+   * `costoNeto`—, y no se toca: va dentro del `resultado` que se congela en
+   * `cot_importes`, y cambiarle el significado haría incomparables las
+   * cotizaciones ya congeladas con las nuevas.
    */
   costoTotal: number;
+  /**
+   * Lo que **de verdad** cuesta hacer la partida: conceptos sin utilidad más
+   * gastos. Es el número contra el que se mide el margen en el panel interno.
+   *
+   * Opcional por lo mismo que el de `ResultadoCotizacion`: una versión
+   * congelada antes de este campo no lo trae.
+   */
+  costoNeto?: number;
+  /** La utilidad de los conceptos de la partida. Opcional, igual que `costoNeto`. */
+  utilidadConceptos?: number;
   asesoria: number;
   /** Derivado cuando la partida trae precio final; capturado en los demás casos. */
   ajuste: number;
@@ -204,8 +231,23 @@ export interface ResultadoCotizacion {
   ivaPct: number;
   partidas: PartidaCalculada[];
   gastos: GastoCalculado[];
-  /** Conceptos + gastos de todas las partidas, sin asesoría. Panel interno. */
+  /**
+   * Conceptos **con su utilidad** + gastos, sin asesoría. El `costoDirecto`
+   * del ERP viejo. Ver `PartidaCalculada.costoTotal`.
+   */
   costoTotal: number;
+  /**
+   * Lo que de verdad cuesta hacer el trabajo: conceptos sin utilidad más
+   * gastos. Es el número del panel interno.
+   *
+   * **Opcional a propósito.** Un `resultado` congelado antes de que existiera
+   * este campo no lo trae, y el panel tiene que notarlo en vez de pintar un
+   * margen calculado sobre un costo que no es. Ver `ResultadoCotizacion` en
+   * `cot_importes`.
+   */
+  costoNeto?: number;
+  /** La utilidad de los conceptos de todas las partidas. Opcional, igual que `costoNeto`. */
+  utilidadConceptos?: number;
   /** Total de los gastos, en la moneda de los gastos. */
   totalGastos: number;
   asesoriaPct: number;
