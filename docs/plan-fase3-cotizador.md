@@ -1065,8 +1065,46 @@ versión queda en solo lectura y la pantalla enseña lo guardado.
 Queda una pieza para cuando exista el PDF: que la **reimpresión** prefiera lo
 congelado sobre lo calculado. Hoy no hay quien reimprima.
 
+#### Requisito: avisar cuando el recálculo no cuadre con lo congelado
+
+Hoy el panel interno de una versión congelada **recalcula en vivo** con lo
+capturado: `getArmado` siempre llama a `calcularCotizacion`, y de
+`cot_importes` solo saca `total`, `letra` y `congeladoAt`. En la práctica suele
+coincidir, y por eso no se nota. Pero **no está garantizado**, y hay dos
+caminos por los que puede diferir:
+
+- **La base de nodos sale de `config_erp`, no del congelado.** `base_nodos` es
+  nullable en `cat_servicios` y en `cot_conceptos`, y cuando viene vacío se usa
+  `BASE_NODOS_ESTUDIO`, que se lee **en cada render**. Cambiarlo de 10 a 12
+  mueve los números de una cotización ya congelada que tenga un estudio por
+  nodos sin base propia.
+- **Cambia el motor.** Una corrección de redondeo, o un campo nuevo, hacen que
+  el recálculo de hoy no sea el de entonces. Ya pasó con `costoNeto`: ahí fue
+  inofensivo porque el cambio era aditivo; con una regla de cálculo no lo
+  sería.
+
+En los dos casos el panel enseñaría números distintos de los del PDF que el
+cliente tiene, **sin decir nada**.
+
+Cuando este PR haga que el panel lea lo congelado, tiene que:
+
+1. Pintar **lo congelado**, no el recálculo.
+2. **Comparar** los dos. `congelar()` ya guarda `parametros` —la entrada
+   completa, con el `baseNodosPorOmision` que se usó— así que la comparación se
+   puede hacer sin adivinar nada: se recalcula con `parametros` y con la
+   entrada de hoy, y se miran las dos.
+3. **Avisar si difieren**, diciendo en qué. Una diferencia no es un error: es
+   la señal de que algo cambió desde que se congeló, y quien revisa tiene que
+   enterarse.
+4. Cuando el `resultado` congelado no traiga `costoNeto` —las versiones
+   anteriores a ese campo— decirlo y **no pintar margen**. El panel ya maneja
+   el caso con `—`; lo que falta es el mensaje, que hoy no se pone porque sería
+   texto inalcanzable.
+
 **Probable por sí mismo:** se envía una versión, se cambia un costo del
-catálogo, y la versión enviada no se mueve mientras una nueva sí.
+catálogo, y la versión enviada no se mueve mientras una nueva sí. Y: se cambia
+`BASE_NODOS_ESTUDIO` con una versión congelada que use nodos, y el panel avisa
+de la diferencia en vez de enseñar otros números callado.
 
 Va al final porque necesita que todo lo anterior produzca números, y porque es
 la regla que más cuesta deshacer si se decide mal.

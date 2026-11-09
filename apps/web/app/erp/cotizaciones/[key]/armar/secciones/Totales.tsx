@@ -17,13 +17,18 @@ export function Totales({ armado, resultado }: { armado: Armado; resultado: Resu
   const margen = (precio: number, costo: number) => (precio > 0 ? ((precio - costo) / precio) * 100 : 0);
 
   /**
-   * El costo neto no existía cuando se congelaron las versiones viejas.
+   * El costo neto puede no venir: es opcional en el tipo porque un `resultado`
+   * congelado antes de que existiera el campo no lo trae.
    *
-   * Si no está, el panel lo dice y **no pinta margen**. Recalcularlo hoy sobre
-   * los parámetros de entonces daría un número que se ve igual de confiable
-   * que uno real y no lo es.
+   * Cuando falta se pinta `—` y **no se calcula margen**: recalcularlo hoy
+   * sobre los parámetros de entonces daría un número que se ve igual de
+   * confiable que uno real y no lo es.
+   *
+   * Hoy esto no se alcanza — el panel siempre recibe un resultado recién
+   * calculado, nunca el congelado— y por eso aquí no hay un mensaje que lo
+   * explique: sería texto que nadie puede ver ni probar. El mensaje entra con
+   * el PR que haga que el panel lea lo congelado (plan, PR 7).
    */
-  const hayNeto = resultado.costoNeto !== undefined;
   const costoDe = (p: ResultadoCotizacion["partidas"][number]) => p.costoNeto;
 
   return (
@@ -38,13 +43,6 @@ export function Totales({ armado, resultado }: { armado: Armado; resultado: Resu
           No sale en el documento. El costo es lo que cuesta hacer el trabajo —conceptos y gastos,{" "}
           <strong className="text-white/60">sin la utilidad</strong>— contra lo que se va a cobrar.
         </p>
-
-        {!hayNeto && (
-          <p className="font-body text-xs text-amber bg-amber/15 rounded-lg px-3 py-2 mt-3">
-            Costo neto no disponible en esta versión: se congeló antes de que el panel lo separara de
-            la utilidad. No se calcula el margen, porque saldría medido contra otro número.
-          </p>
-        )}
 
         <table className="w-full mt-3 text-sm">
           <thead>
