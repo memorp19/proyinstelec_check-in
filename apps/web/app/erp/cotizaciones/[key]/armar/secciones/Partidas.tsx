@@ -362,7 +362,11 @@ export function Partidas({
                       aria-label="Unidad"
                     />
 
-                    {/* Ancho propio para que "MXN" quepa con su flecha. */}
+                    {/* "MXN" se recortaba a "MXI" en w-20: con px-2 quedaban
+                        64 px, y entre los tres caracteres de Space Mono (~25 px)
+                        y la flecha propia del select no alcanzaban. Es el mismo
+                        descuido que tenía el selector de formato con
+                        "Negritas"; w-24 deja holgura para los tres. */}
                     <select
                       value={c.monedaCosto ?? ""}
                       disabled={soloLectura}
@@ -371,7 +375,7 @@ export function Partidas({
                           monedaCosto: e.target.value === "" ? null : (e.target.value as "MXN" | "USD"),
                         })
                       }
-                      className={`${campo} w-20 shrink-0 px-2`}
+                      className={`${campo} w-24 shrink-0 px-2`}
                       aria-label="Moneda del costo"
                     >
                       <option value="">{armado.moneda}</option>
@@ -692,9 +696,16 @@ function PieDeLaPartida({
         </div>
       </div>
 
-      {/* El costo y el precio calculado, en chico: son del panel interno */}
+      {/* El costo y el precio calculado, en chico: son del panel interno.
+
+          Dice "costo directo" y no "costo" a secas porque en el panel de
+          abajo "Costo" ya significa otra cosa —el neto, sin la utilidad de
+          los conceptos— y dos números distintos con el mismo nombre en la
+          misma pantalla es cómo alguien acaba comparando peras con manzanas.
+          Este es el que usa el aviso de venta con pérdida de aquí abajo, que
+          sale del motor. */}
       <p className="font-mono text-[10px] text-white/35">
-        Costo {pesos(calculada.costoTotal)} · calculado {pesos(calculado)}
+        Costo directo {pesos(calculada.costoTotal)} · calculado {pesos(calculado)}
       </p>
 
       {perdida && (
