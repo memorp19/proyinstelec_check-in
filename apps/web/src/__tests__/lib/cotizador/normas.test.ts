@@ -11,13 +11,72 @@ import {
   tituloParaDocumento,
 } from "@/src/lib/cotizador/normas";
 
+/**
+ * El título del documento lleva la razón social al final —"Estudio de Arco
+ * Eléctrico - Stellantis Motores - SC INGENIERIA, S.A. de C.V."— y hay dos
+ * caminos para llegar ahí según de dónde venga la cotización.
+ */
 describe("tituloParaDocumento", () => {
-  it("convierte el guion bajo en guion con espacios", () => {
-    expect(tituloParaDocumento("Mantenimiento_Prologis")).toBe("Mantenimiento - Prologis");
-  });
-
   it("colapsa los espacios de más", () => {
     expect(tituloParaDocumento("  Mantenimiento   anual  ")).toBe("Mantenimiento anual");
+  });
+
+  /**
+   * Las importadas: el título ya trae el cliente pegado con `_`, que es como
+   * lo guarda el sistema viejo. 331 de los 348 títulos de 2026 son así.
+   */
+  it("con guion bajo lo convierte en guion y no añade nada", () => {
+    expect(tituloParaDocumento("Mantenimiento Anual_Prologis S.A.", "Prologis S.A.")).toBe(
+      "Mantenimiento Anual - Prologis S.A.",
+    );
+  });
+
+  it("con guion bajo no añade el cliente aunque el título no lo traiga", () => {
+    expect(tituloParaDocumento("Mantenimiento_115 kV", "Prologis S.A.")).toBe(
+      "Mantenimiento - 115 kV",
+    );
+  });
+
+  /** Las que da de alta el ERP guardan el título a secas, sin el cliente. */
+  it("sin guion bajo le pega la razón social", () => {
+    expect(
+      tituloParaDocumento("Mantenimiento Preventivo de Subestaciones", "IGSA S.A.P.I de C.V."),
+    ).toBe("Mantenimiento Preventivo de Subestaciones - IGSA S.A.P.I de C.V.");
+  });
+
+  it("respeta los guiones que el título ya traiga", () => {
+    expect(tituloParaDocumento("Estudio de Arco - Stellantis Motores", "SC INGENIERIA")).toBe(
+      "Estudio de Arco - Stellantis Motores - SC INGENIERIA",
+    );
+  });
+
+  it("sin cliente, el título tal cual", () => {
+    expect(tituloParaDocumento("Mantenimiento Preventivo")).toBe("Mantenimiento Preventivo");
+    expect(tituloParaDocumento("Mantenimiento Preventivo", "  ")).toBe("Mantenimiento Preventivo");
+  });
+
+  describe("no duplica el cliente", () => {
+    it("cuando el título ya termina con la razón social", () => {
+      expect(tituloParaDocumento("Mantenimiento - IGSA S.A.P.I de C.V.", "IGSA S.A.P.I de C.V.")).toBe(
+        "Mantenimiento - IGSA S.A.P.I de C.V.",
+      );
+    });
+
+    /** Lo teclea cada quien a su manera, y no por eso es otro cliente. */
+    it("aunque esté escrita con otra puntuación o acentos", () => {
+      expect(tituloParaDocumento("Mantenimiento - IGSA SA de CV", "IGSA S.A. de C.V.")).toBe(
+        "Mantenimiento - IGSA SA de CV",
+      );
+      expect(tituloParaDocumento("Mantenimiento - Sasco Arrendamiento", "SASCO ARRENDAMIENTO")).toBe(
+        "Mantenimiento - Sasco Arrendamiento",
+      );
+    });
+
+    it("pero sí lo pega cuando el título termina en otra cosa", () => {
+      expect(tituloParaDocumento("Mantenimiento - 115 kV", "IGSA S.A.P.I de C.V.")).toBe(
+        "Mantenimiento - 115 kV - IGSA S.A.P.I de C.V.",
+      );
+    });
   });
 });
 
@@ -56,13 +115,20 @@ describe("sitioDelProyecto", () => {
 
 describe("textosSugeridos · el servicio sale del título", () => {
   /**
-   * El servicio es la primera parte y el sitio la última: del mismo título
-   * salen las dos, por los dos extremos.
+   * El servicio es la primera parte del título. El sitio es la última del
+   * título **ya impreso**, al que se le pegó la razón social: por eso aquí
+   * sale el cliente y no "Stellantis".
    */
-  it("toma lo que va antes del primer guion, y el sitio de lo que va después", () => {
+  it("toma lo que va antes del primer guion", () => {
     const { objeto } = textosSugeridos("Estudio de Arco Eléctrico - Stellantis", "Cliente S.A.");
     expect(objeto).toContain("del servicio de Estudio de Arco Eléctrico,");
-    expect(objeto).toContain("propiedad del Stellantis.");
+    expect(objeto).toContain("propiedad del Cliente S.A.");
+  });
+
+  /** Con `_` el título ya trae el cliente, y el sitio sale de ahí. */
+  it("con guion bajo, el sitio es lo que el título trae al final", () => {
+    const { objeto } = textosSugeridos("Estudio de Arco - Stellantis_Otra Razón S.A.", "Otra Razón S.A.");
+    expect(objeto).toContain("propiedad del Otra Razón S.A.");
   });
 
   it('quita el "Servicio de" del principio', () => {
