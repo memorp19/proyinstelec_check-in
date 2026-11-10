@@ -16,6 +16,7 @@
     "db:push": "pnpm --filter web db:push",
     "db:studio": "pnpm --filter web db:studio",
     "google:login": "tsx scripts/google-login.ts",
+    "cotizacion:documento": "tsx scripts/generar-cotizacion.ts",
     "db:seed": "tsx scripts/seed.ts",
     "import:erp": "tsx scripts/importar-erp.ts",
     "backfill:carpetas": "tsx scripts/backfill-carpetas-cotizaciones.ts",
