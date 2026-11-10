@@ -1,5 +1,6 @@
 import { google, type drive_v3 } from "googleapis";
 import { createHash } from "crypto";
+import { ALCANCES, autenticar, credencialesDeCuentaDeServicio, modoDeGoogle } from "./google-auth";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -35,19 +36,11 @@ async function getDriveConfig(): Promise<DriveConfig> {
     );
   }
 
-  let parsed: { client_email: string; private_key: string };
-  try {
-    parsed = JSON.parse(keyJson);
-  } catch {
-    throw new Error("DRIVE_SERVICE_ACCOUNT_KEY no es un JSON válido");
-  }
+  // El formato de la llave lo entiende `google-auth.ts`, que es el único sitio
+  // que la parsea: aquí solo se añade la raíz, que es lo propio de Drive.
+  const { email, privateKey } = credencialesDeCuentaDeServicio();
 
-  _cachedConfig = {
-    serviceAccountEmail: parsed.client_email,
-    // Vercel guarda los saltos de línea escapados: hay que restaurarlos.
-    privateKey: parsed.private_key.replace(/\\n/g, "\n"),
-    rootFolderId,
-  };
+  _cachedConfig = { serviceAccountEmail: email, privateKey, rootFolderId };
   return _cachedConfig;
 }
 
@@ -57,15 +50,22 @@ export function _resetDriveConfigCache() {
 
 // ── Drive client ──────────────────────────────────────────────────────────────
 
+/**
+ * El cliente de Drive, con el modo que toque (ver `google-auth.ts`).
+ *
+ * Sin `GOOGLE_OAUTH_CLIENTE` esto hace exactamente lo de siempre: exige la
+ * configuración completa y construye el JWT de la cuenta de servicio. De esta
+ * ruta cuelgan las fotos de campo en producción, así que la comprobación de
+ * `DRIVE_ROOT_FOLDER_ID` se conserva aunque el cliente no la necesite — quitarla
+ * sería mover el momento en que un despliegue mal configurado se entera.
+ *
+ * En OAuth de usuario no se exige, porque ahí no hay cuenta de servicio que
+ * configurar y la raíz de las fotos no interviene en lo que se está probando.
+ */
 export async function getDriveClient(): Promise<drive_v3.Drive> {
-  const config = await getDriveConfig();
+  if (modoDeGoogle() === "cuenta-de-servicio") await getDriveConfig();
 
-  const auth = new google.auth.JWT({
-    email: config.serviceAccountEmail,
-    key: config.privateKey,
-    scopes: ["https://www.googleapis.com/auth/drive"],
-  });
-
+  const auth = await autenticar([ALCANCES.DRIVE]);
   return google.drive({ version: "v3", auth });
 }
 
