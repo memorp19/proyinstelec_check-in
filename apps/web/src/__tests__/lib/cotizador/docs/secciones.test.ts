@@ -25,6 +25,9 @@ function plantilla() {
     .parrafo(DE_LA_PLANTILLA.alcance)
     .parrafo("")
     .parrafo("Documentos Aplicables y/o Referencias.")
+    // El renglón en blanco que la plantilla trae antes de los Términos: es el
+    // que se lleva el salto de página.
+    .parrafo("")
     .parrafo("Términos y Condiciones Comerciales")
     .parrafo("Atentamente.")
     .construir();
@@ -128,15 +131,43 @@ describe("saltoAntesDeTerminos", () => {
     expect("updateParagraphStyle" in s && s.updateParagraphStyle.fields).toBe("pageBreakBefore");
   });
 
-  it("apunta al renglón de los Términos y no a otro", () => {
+  /**
+   * En el renglón en blanco de antes, no en el título. El membrete es una
+   * imagen de página completa detrás del texto y su leyenda cae a la altura
+   * del margen superior: un título que empieza arriba del todo sale encima.
+   * Así lo hace el documento real.
+   */
+  it("lo pone en el renglón en blanco de antes, no en el título", () => {
     const doc = plantilla();
-    const terminos = doc.body!.content!.find((e) =>
+    const sueltos = doc.body!.content!.filter((e) => e.paragraph);
+    const i = sueltos.findIndex((e) =>
+      (e.paragraph?.elements?.[0]?.textRun?.content ?? "").startsWith("Términos"),
+    );
+    const s = saltoAntesDeTerminos(doc).solicitudes[0];
+
+    expect("updateParagraphStyle" in s && s.updateParagraphStyle.range.startIndex).toBe(
+      sueltos[i - 1].startIndex,
+    );
+    expect("updateParagraphStyle" in s && s.updateParagraphStyle.range.startIndex).not.toBe(
+      sueltos[i].startIndex,
+    );
+  });
+
+  it("sin renglón en blanco antes, lo pone en el título y avisa", () => {
+    const doc = new ArmaDocumento()
+      .parrafo("Documentos Aplicables y/o Referencias.")
+      .parrafo("Términos y Condiciones Comerciales")
+      .construir();
+    const r = saltoAntesDeTerminos(doc);
+
+    const titulo = doc.body!.content!.find((e) =>
       (e.paragraph?.elements?.[0]?.textRun?.content ?? "").startsWith("Términos"),
     )!;
-    const s = saltoAntesDeTerminos(doc).solicitudes[0];
+    const s = r.solicitudes[0];
     expect("updateParagraphStyle" in s && s.updateParagraphStyle.range.startIndex).toBe(
-      terminos.startIndex,
+      titulo.startIndex,
     );
+    expect(r.avisos.join(" ")).toContain("encima del membrete");
   });
 
   it("si no está el renglón, avisa en vez de fallar", () => {

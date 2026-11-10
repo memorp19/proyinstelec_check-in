@@ -130,11 +130,21 @@ export function ajustarActividades(doc: DocumentoDocs, documento: DatosDocumento
  * la API de Docs después de guardar para ponerlo (`COT_05:1418`). Los tres
  * documentos reales lo traen, sin excepción.
  *
+ * ── En el renglón en blanco de antes, no en el título ──
+ *
+ * Así lo hace el documento real: el salto está en un párrafo **vacío** y el
+ * título viene después. La diferencia se ve: el papel membretado es una
+ * imagen de página completa detrás del texto, y la leyenda del logo cae justo
+ * a la altura del margen superior. Un título que empieza ahí arriba del todo
+ * sale **encima de la leyenda**; el renglón en blanco lo baja una línea y lo
+ * libra.
+ *
  * Es una solicitud de estilo, así que no mueve índices.
  */
 export function saltoAntesDeTerminos(doc: DocumentoDocs): Ajuste {
-  const p = buscar(prosa(doc), INICIO_DE.terminos);
-  if (!p) {
+  const lista = prosa(doc);
+  const titulo = buscar(lista, INICIO_DE.terminos);
+  if (!titulo) {
     return {
       solicitudes: [],
       avisos: [
@@ -143,16 +153,26 @@ export function saltoAntesDeTerminos(doc: DocumentoDocs): Ajuste {
       ],
     };
   }
+
+  const anterior = lista[lista.indexOf(titulo) - 1];
+  const donde = vacio(anterior) ? anterior : titulo;
+  const avisos = vacio(anterior)
+    ? []
+    : [
+        "La plantilla ya no trae un renglón en blanco antes de los Términos: " +
+          "el título va a salir pegado al borde de la hoja, encima del membrete.",
+      ];
+
   return {
     solicitudes: [
       {
         updateParagraphStyle: {
-          range: { startIndex: p.startIndex, endIndex: p.endIndex },
+          range: { startIndex: donde.startIndex, endIndex: donde.endIndex },
           paragraphStyle: { pageBreakBefore: true },
           fields: "pageBreakBefore",
         },
       },
     ],
-    avisos: [],
+    avisos,
   };
 }
