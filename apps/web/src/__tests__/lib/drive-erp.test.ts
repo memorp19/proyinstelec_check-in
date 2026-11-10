@@ -342,8 +342,24 @@ describe("buscarPdfCotizacion — no confundir versiones", () => {
     expect(await elegir("PCOTOP-002-2026", [])).toBeNull();
   });
 
-  // La regla exige `<folio> ` con espacio exacto y los PDF los nombra el equipo
-  // a mano. Sin saber qué había en la carpeta, un no-match es indiagnosticable.
+  // Los PDF que generó Apps Script durante años se llaman `<folio>_<titulo>_…`.
+  // Exigiendo solo el espacio, el envío al cliente no encontraba ninguno de
+  // ellos — y son todos los históricos.
+  it("acepta el guion bajo del sistema viejo", async () => {
+    expect(
+      await elegir("PCOTOP-290-2026", ["PCOTOP-290-2026_Estudio de Arco_SC INGENIERIA.pdf"]),
+    ).toBe("PCOTOP-290-2026_Estudio de Arco_SC INGENIERIA.pdf");
+  });
+
+  // El separador sigue siendo obligatorio: sin él, el folio de la v0 es
+  // prefijo del de todas sus versiones y se adjuntaría el PDF de otra.
+  it("el guion bajo tampoco confunde versiones", async () => {
+    expect(await elegir("PCOTOP-002-2026", ["PCOTOP-002-2026-1_Subestación.pdf"])).toBeNull();
+  });
+
+  // La regla exige un separador —espacio o guion bajo— y los PDF los nombra el
+  // equipo a mano. Sin saber qué había en la carpeta, un no-match es
+  // indiagnosticable.
   describe("qué había en la carpeta", () => {
     async function buscar(folio: string, nombres: string[]) {
       const list = vi.fn().mockResolvedValue({
@@ -356,13 +372,13 @@ describe("buscarPdfCotizacion — no confundir versiones", () => {
 
     it("sin match devuelve los nombres que sí estaban", async () => {
       const r = await buscar("PCOTOP-002-2026", [
-        "PCOTOP-002-2026_Subestación.pdf",
+        "PCOTOP-002-2026-Subestación.pdf",
         "Cotización PCOTOP-002-2026.pdf",
       ]);
 
       expect(r.pdf).toBeNull();
       expect(r.nombresEnCarpeta).toEqual([
-        "PCOTOP-002-2026_Subestación.pdf",
+        "PCOTOP-002-2026-Subestación.pdf",
         "Cotización PCOTOP-002-2026.pdf",
       ]);
     });

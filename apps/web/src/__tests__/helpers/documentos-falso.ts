@@ -26,6 +26,9 @@ import type { ArchivoExportado, Documentos } from "@/src/lib/documentos-google";
  * escriba a mano se equivoca y además no se entiende. Aquí se calculan como
  * los calcula Docs: cada carácter ocupa uno, y un párrafo termina con `\n`.
  */
+/** El rojo con el que la plantilla marca lo que hay que llenar. */
+const ROJO = { color: { rgbColor: { red: 1, green: 0, blue: 0 } } };
+
 export class ArmaDocumento {
   private indice = 1; // Docs empieza en 1: el 0 no existe.
   private contenido: ElementoEstructural[] = [];
@@ -44,6 +47,24 @@ export class ArmaDocumento {
     const el = this.nuevoParrafo(texto);
     el.paragraph!.bullet = { listId, nestingLevel: nivel };
     this.contenido.push(el);
+    return this;
+  }
+
+  /**
+   * Un párrafo en rojo, como los que la plantilla usa para marcar lo que hay
+   * que llenar. Es lo que el generador tiene que dejar en negro.
+   */
+  parrafoRojo(texto: string): this {
+    const el = this.nuevoParrafo(texto);
+    el.paragraph!.elements![0].textRun!.textStyle = { foregroundColor: ROJO };
+    this.contenido.push(el);
+    return this;
+  }
+
+  /** Una viñeta cuyo **glifo** está en rojo, aunque su texto no lo esté. */
+  vinetaRoja(texto: string, listId = "lista-1"): this {
+    this.vineta(texto, listId);
+    this.contenido.at(-1)!.paragraph!.bullet!.textStyle = { foregroundColor: ROJO };
     return this;
   }
 

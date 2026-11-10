@@ -117,8 +117,9 @@ export function tituloParaDocumento(titulo: string | null | undefined): string {
 /** El servicio que se cotiza, sacado del título. */
 function servicioDelTitulo(titulo: string | null | undefined): string {
   let t = tituloParaDocumento(titulo);
-  // Lo que va después del guion suele ser el sitio, no el servicio.
-  t = t.split(/\s+-\s+/)[0].trim();
+  // Lo que va después del guion suele ser el sitio, no el servicio. El guion
+  // largo cuenta: los títulos se escriben a mano y Word lo pone solo.
+  t = t.split(/\s+[-–]\s+/)[0].trim();
   return t.replace(/^servicio\s+de\s+/i, "");
 }
 
@@ -157,13 +158,16 @@ export function textosSugeridos(
   const servicioMin =
     !servicio || /^mantenimiento\s+preventivo/i.test(servicio) ? "mantenimiento preventivo" : servicio;
   const sitio = sitioDelProyecto(tituloParaDocumento(titulo), cliente);
+  // Sin punto si el sitio ya trae el suyo: casi todas las razones sociales
+  // terminan en "S.A. de C.V." y el legacy imprime "C.V.." en todas.
+  const sitioConPunto = /\.$/.test(sitio.trim()) ? sitio.trim() : `${sitio.trim()}.`;
 
   return {
     objeto:
       "El objeto de la presente propuesta técnica que ofrecemos consiste en contratar la " +
       `prestación del servicio de ${servicioMin}, así como la asesoría en diagnósticos ` +
       "requerida, con el fin de mantener el buen estado operativo de la(s) Subestación(es) " +
-      `Eléctrica(s) propiedad del ${sitio}.`,
+      `Eléctrica(s) propiedad del ${sitioConPunto}`,
     alcance:
       `El alcance principal del servicio de ${servicioMin} que se solicita contratar ` +
       "considera el logro del mejor rendimiento, disponibilidad y confiabilidad de los " +

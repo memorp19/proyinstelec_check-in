@@ -27,7 +27,12 @@
  */
 import { NORMAS } from "../normas";
 import { parrafos, segmentos, type ParrafoUbicado } from "./recorrido";
-import type { DocumentoDocs, Rango, SolicitudBorrarRango } from "./tipos";
+import type {
+  DocumentoDocs,
+  Rango,
+  SolicitudBorrarRango,
+  SolicitudInsertarTexto,
+} from "./tipos";
 
 /**
  * `id` del catálogo → con qué empieza ese renglón **en la plantilla**.
@@ -130,38 +135,75 @@ function finDeSegmento(doc: DocumentoDocs): Map<string, number> {
 }
 
 export interface NormasQuitadas {
-  solicitudes: SolicitudBorrarRango[];
+  solicitudes: Array<SolicitudBorrarRango | SolicitudInsertarTexto>;
   avisos: string[];
 }
 
 /**
- * Quita de la plantilla las normas que no se eligieron.
+ * Deja en el documento las normas elegidas, con el texto del catálogo.
  *
- * `elegidas` son los ids que sí salen (lo que devuelve `normasElegidas`). Lo
- * que no esté ahí se borra, párrafo completo.
+ * Dos cosas a la vez, y la segunda es la que importa:
  *
- * De atrás hacia adelante, por lo de siempre: `deleteContentRange` corre los
- * índices posteriores y la API aplica en orden.
+ * 1. **Quita** las que no se eligieron, párrafo completo.
+ * 2. **Reescribe** el texto de las que se quedan, con el de `NORMAS`.
+ *
+ * Lo segundo hace falta porque la plantilla trae el texto con erratas que el
+ * catálogo ya corrigió: `IEEC` por `IEEE`, una comilla que no cierra, un
+ * punto final de más y espacios sobrantes. Apps Script no las hereda —escribe
+ * las suyas— y por eso ningún documento real las tiene. Heredarlas teniendo
+ * el texto bueno a mano sería copiar una errata a propósito.
+ *
+ * Se reescribe borrando el texto y volviéndolo a insertar en el mismo índice,
+ * no borrando el párrafo: así conserva su viñeta, su lista y su sangría, que
+ * es justo lo que no se puede reconstruir desde la API.
+ *
+ * De atrás hacia adelante, por lo de siempre: todo lo que cambia longitudes
+ * corre los índices posteriores y la API aplica en orden.
  */
 export function quitarNormas(doc: DocumentoDocs, elegidas: string[]): NormasQuitadas {
   const ubicadas = normasEnPlantilla(doc);
   const sobran = new Set(elegidas);
   const fin = finDeSegmento(doc);
-  const rangos: Rango[] = [];
+  const textoDelCatalogo = new Map(NORMAS.map((n) => [n.id, n.texto]));
+
+  /** Cada operación con el índice en el que empieza, para ordenarlas juntas. */
+  const pasos: Array<{ en: number; solicitud: SolicitudBorrarRango | SolicitudInsertarTexto }> = [];
 
   for (const [id, p] of ubicadas.encontradas) {
-    if (sobran.has(id)) continue;
     const tope = fin.get(p.segmentId) ?? p.endIndex;
-    const endIndex = Math.min(p.endIndex, tope - 1);
-    if (endIndex <= p.startIndex) continue;
-    rangos.push({
-      startIndex: p.startIndex,
-      endIndex,
-      ...(p.segmentId ? { segmentId: p.segmentId } : {}),
+    const conSegmento = (r: Rango): Rango => (p.segmentId ? { ...r, segmentId: p.segmentId } : r);
+
+    if (!sobran.has(id)) {
+      const endIndex = Math.min(p.endIndex, tope - 1);
+      if (endIndex <= p.startIndex) continue;
+      pasos.push({
+        en: p.startIndex,
+        solicitud: { deleteContentRange: { range: conSegmento({ startIndex: p.startIndex, endIndex }) } },
+      });
+      continue;
+    }
+
+    const bueno = textoDelCatalogo.get(id);
+    // `texto` trae el `\n` final del párrafo, que no se toca.
+    if (!bueno || p.texto.replace(/\n$/, "") === bueno) continue;
+
+    const endIndex = Math.min(p.endIndex - 1, tope - 1);
+    if (endIndex > p.startIndex) {
+      pasos.push({
+        en: p.startIndex,
+        solicitud: { deleteContentRange: { range: conSegmento({ startIndex: p.startIndex, endIndex }) } },
+      });
+    }
+    pasos.push({
+      en: p.startIndex,
+      solicitud: { insertText: { location: { index: p.startIndex }, text: bueno } },
     });
   }
 
-  rangos.sort((a, b) => b.startIndex - a.startIndex);
+  // De abajo hacia arriba. Dentro del mismo párrafo se conserva el orden en
+  // que se apilaron —primero borrar, después insertar—, que es el único que
+  // deja el índice de la inserción donde debe estar.
+  pasos.sort((a, b) => b.en - a.en);
 
   // Una norma elegida que la plantilla no trae sí merece aviso aparte: el
   // cliente no la va a ver aunque alguien la haya palomeado.
@@ -174,5 +216,5 @@ export function quitarNormas(doc: DocumentoDocs, elegidas: string[]): NormasQuit
     );
   }
 
-  return { solicitudes: rangos.map((range) => ({ deleteContentRange: { range } })), avisos };
+  return { solicitudes: pasos.map((p) => p.solicitud), avisos };
 }

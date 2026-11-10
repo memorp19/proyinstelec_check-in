@@ -13,6 +13,9 @@ vi.mock("@/src/lib/cotizaciones", () => ({
   getVigente: vi.fn(),
   getVersion: vi.fn(),
   marcarNoAsignadas: vi.fn().mockResolvedValue(0),
+  // Las versiones de estas pruebas no pasaron por el cotizador: el PDF se
+  // busca por nombre, que es lo que estas pruebas ejercen.
+  pdfGeneradoDe: vi.fn().mockResolvedValue(null),
   puedeEnviarseAlCliente: vi.fn(),
   registrarAprobacion: vi.fn().mockResolvedValue({}),
   updateCotizacion: vi.fn().mockResolvedValue(undefined),

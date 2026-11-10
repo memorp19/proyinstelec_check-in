@@ -151,7 +151,14 @@ export async function copiarPlantillasCotizacion(params: {
  * "PCOTOP-002-2026-1"), y la carpeta la comparten todas.
  */
 export function esPdfConTitulo(nombre: string | null | undefined, folio: string): boolean {
-  return (nombre ?? "").toUpperCase().startsWith(`${folio.toUpperCase()} `);
+  const n = (nombre ?? "").toUpperCase();
+  const f = folio.toUpperCase();
+  // Espacio **o** guion bajo. El ERP nombra con espacio, pero los PDF que
+  // generó Apps Script durante años se llaman `PCOTOP-290-2026_<titulo>_…`,
+  // y exigiendo solo el espacio el envío al cliente no encontraba ninguno.
+  // El separador sigue siendo obligatorio: sin él, el folio de la v0 sería
+  // prefijo del de todas sus versiones.
+  return n.startsWith(`${f} `) || n.startsWith(`${f}_`);
 }
 
 /**
@@ -193,8 +200,34 @@ export interface ResultadoPdfCotizacion {
 export async function buscarPdfCotizacion(params: {
   folderId: string;
   folio: string;
+  /**
+   * El id que guardó el generador. Si está, manda sobre cualquier búsqueda
+   * por nombre: es el único dato que no depende de cómo alguien haya
+   * bautizado el archivo.
+   */
+  pdfDriveId?: string | null;
 }): Promise<ResultadoPdfCotizacion> {
   const drive = await getDriveClient();
+
+  if (params.pdfDriveId) {
+    try {
+      const meta = await drive.files.get({
+        fileId: params.pdfDriveId,
+        fields: "id, name, trashed",
+        ...ESCRIBIR_TODAS_LAS_UNIDADES,
+      });
+      if (!meta.data.trashed) {
+        const contenido = await descargarArchivo(drive, params.pdfDriveId);
+        return {
+          pdf: { filename: meta.data.name ?? `${params.folio}.pdf`, contenido },
+          nombresEnCarpeta: [meta.data.name ?? "(sin nombre)"],
+        };
+      }
+    } catch {
+      // Lo apartaron o lo borraron a mano: se sigue buscando por nombre, que
+      // es lo que había antes de que existiera la columna.
+    }
+  }
   const res = await drive.files.list({
     q: `'${params.folderId}' in parents and mimeType='application/pdf' and trashed=false`,
     fields: "files(id, name)",

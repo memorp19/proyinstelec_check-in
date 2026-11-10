@@ -5,6 +5,7 @@ import {
   type DatosDeTabla,
   type PartidaDeTabla,
 } from "@/src/lib/cotizador/docs/tabla";
+import type { SolicitudEstiloFila } from "@/src/lib/cotizador/docs/tipos";
 import { TablaSimulada } from "../../../helpers/tabla-simulada";
 
 /**
@@ -347,5 +348,107 @@ describe("solicitudesDeTabla · plantillas que no son la esperada", () => {
     const r = solicitudesDeTabla(simulada.comoDocumento(), datos());
     expect(r.solicitudes).toEqual([]);
     expect(r.avisos.join(" ")).toContain("renglón de ejemplo");
+  });
+});
+
+describe("solicitudesDeTabla · que la tabla se lea al partirse", () => {
+  const estilosDeFila = (d: DatosDeTabla) =>
+    armarYAplicar(d).solicitudes.filter(
+      (s): s is SolicitudEstiloFila => "updateTableRowStyle" in s,
+    );
+
+  /**
+   * El encabezado que se repite no se pide desde aquí: la API contesta
+   * `Unallowed field: tableHeader`. Se deja puesto en la plantilla. Esta
+   * prueba fija que no se vuelva a intentar, porque el lote entero falla.
+   */
+  it("no intenta marcar el encabezado, que la API no deja", () => {
+    const campos = estilosDeFila(datos()).map((s) => s.updateTableRowStyle.fields);
+    expect(campos.join(" ")).not.toContain("tableHeader");
+  });
+
+  /** Una partida con quince viñetas salta entera, no se corta por la mitad. */
+  it("ninguna fila se parte entre páginas", () => {
+    const todas = estilosDeFila(datos()).find((s) =>
+      s.updateTableRowStyle.tableRowStyle.preventOverflow,
+    );
+    expect(todas).toBeDefined();
+    // Sin `rowIndices` la API lo aplica a todas, que es lo que se quiere.
+    expect(todas?.updateTableRowStyle.rowIndices).toBeUndefined();
+  });
+
+  /** Hablan de filas, no de índices: da igual cuánto texto tenga dentro. */
+  it("van antes de unir, que es lo que cambia las columnas", () => {
+    const solicitudes = armarYAplicar(datos()).solicitudes;
+    const union = solicitudes.findIndex((s) => "mergeTableCells" in s);
+    const ultimoEstilo = solicitudes.map((s) => "updateTableRowStyle" in s).lastIndexOf(true);
+    expect(ultimoEstilo).toBeLessThan(union);
+  });
+});
+
+describe("solicitudesDeTabla · los totales, como en los documentos reales", () => {
+  it("ni el Total ni la letra llevan negritas", () => {
+    const { solicitudes } = armarYAplicar(datos());
+    const negritas = solicitudes.filter(
+      (s) => "updateTextStyle" in s && (s as { updateTextStyle: { textStyle: { bold?: boolean } } }).updateTextStyle.textStyle.bold,
+    );
+    // La única negrita que queda es la del título de la partida si lo pide su
+    // formato; con `NORMAL` no hay ninguna.
+    expect(negritas).toEqual([]);
+  });
+
+  it("el título de la partida sigue pudiendo ir en negritas", () => {
+    const { solicitudes } = armarYAplicar(datos({ partidas: [partida({ formato: "NEGRITAS" })] }));
+    const negritas = solicitudes.filter(
+      (s) => "updateTextStyle" in s && (s as { updateTextStyle: { textStyle: { bold?: boolean } } }).updateTextStyle.textStyle.bold,
+    );
+    expect(negritas).toHaveLength(1);
+  });
+
+  /**
+   * Abajo y no en medio: así la letra queda a la altura del renglón del Total
+   * y no flotando entre Subtotal e IVA.
+   */
+  it("la celda de la letra se alinea abajo", () => {
+    const union = bordesDeLaTabla(100, 2).find((s) => "mergeTableCells" in s);
+    expect(union).toBeDefined();
+    const estiloDeLaUnida = bordesDeLaTabla(100, 2)
+      .filter((s) => "updateTableCellStyle" in s)
+      .at(-1) as { updateTableCellStyle: { tableCellStyle: { contentAlignment?: string }; fields: string } };
+    expect(estiloDeLaUnida.updateTableCellStyle.tableCellStyle.contentAlignment).toBe("BOTTOM");
+    expect(estiloDeLaUnida.updateTableCellStyle.fields).toContain("contentAlignment");
+  });
+});
+
+describe("solicitudesDeTabla · la nota de la partida", () => {
+  /**
+   * Renglón propio y sin número, debajo del concepto: la nota habla de la
+   * partida entera, y mezclarla con el alcance la haría parecer una viñeta
+   * más de lo que se incluye.
+   */
+  it("sale en su propio renglón, sin número y en negritas", () => {
+    const { tabla } = armarYAplicar(
+      datos({ partidas: [partida({ nota: "Nota: el cliente proporciona la plataforma." })] }),
+    );
+    expect(tabla.numeroDeFilas).toBe(1 + 1 + 1 + 3);
+    expect(tabla.texto(2, 0)).toBe("");
+    expect(tabla.texto(2, 1)).toBe("Nota: el cliente proporciona la plataforma.");
+    expect(tabla.texto(2, 4)).toBe("");
+  });
+
+  it("una nota en blanco no agrega renglón", () => {
+    const { tabla } = armarYAplicar(datos({ partidas: [partida({ nota: "   " })] }));
+    expect(tabla.numeroDeFilas).toBe(1 + 1 + 3);
+  });
+
+  it("la nota cuenta como fila de partida para los bordes", () => {
+    const { solicitudes } = armarYAplicar(
+      datos({ partidas: [partida({ nota: "Nota: algo." })] }),
+    );
+    const union = solicitudes.find((s) => "mergeTableCells" in s) as {
+      mergeTableCells: { tableRange: { tableCellLocation: { rowIndex: number } } };
+    };
+    // Encabezado + partida + nota = los totales empiezan en la fila 3.
+    expect(union.mergeTableCells.tableRange.tableCellLocation.rowIndex).toBe(3);
   });
 });

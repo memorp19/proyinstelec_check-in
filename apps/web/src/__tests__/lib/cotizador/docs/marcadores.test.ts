@@ -113,3 +113,35 @@ describe("sustituciones", () => {
     expect(r.solicitudes[0].replaceAllText.replaceText).toBe("");
   });
 });
+
+/**
+ * El "S.A. de C.V.." de todos los documentos del sistema viejo.
+ *
+ * La plantilla escribe "propiedad del {{SITIO}}." y casi todas las razones
+ * sociales terminan en punto, así que el legacy imprime dos. Nadie lo arregló
+ * ahí; copiarlo a propósito no tiene defensa.
+ */
+describe("sustituciones · el punto de más", () => {
+  const doc = (texto: string) => new ArmaDocumento().parrafo(texto).construir();
+  const vacios = () =>
+    Object.fromEntries(MARCADORES.map((m) => [m, ""])) as Record<Marcador, string>;
+
+  it("un valor que ya trae punto se come el de la plantilla", () => {
+    const valores = { ...vacios(), SITIO: "IGSA S.A.P.I de C.V." };
+    const r = sustituciones(doc("propiedad del {{SITIO}}."), valores);
+    const formas = r.solicitudes.map((s) => s.replaceAllText.containsText.text);
+
+    // Primero la forma con punto, que es la más larga: al revés, la corta ya
+    // no dejaría ver la otra.
+    expect(formas.indexOf("{{SITIO}}.")).toBeLessThan(formas.indexOf("{{SITIO}}"));
+    const conPunto = r.solicitudes.find((s) => s.replaceAllText.containsText.text === "{{SITIO}}.");
+    expect(conPunto?.replaceAllText.replaceText).toBe("IGSA S.A.P.I de C.V.");
+  });
+
+  it("un valor sin punto deja el de la plantilla donde está", () => {
+    const valores = { ...vacios(), SITIO: "Prologis Puente Grande" };
+    const r = sustituciones(doc("propiedad del {{SITIO}}."), valores);
+    const formas = r.solicitudes.map((s) => s.replaceAllText.containsText.text);
+    expect(formas).not.toContain("{{SITIO}}.");
+  });
+});

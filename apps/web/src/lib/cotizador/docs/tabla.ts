@@ -47,6 +47,7 @@ import type {
   Rango,
   Solicitud,
   SolicitudEstiloCelda,
+  SolicitudEstiloFila,
   SolicitudUnirCeldas,
   UbicacionCelda,
 } from "./tipos";
@@ -63,6 +64,16 @@ export interface PartidaDeTabla {
   unidad: string;
   precioUnitario: number;
   importe: number;
+  /**
+   * La nota de la partida, que sale en su **propio renglón, sin número**,
+   * debajo del concepto y en negritas.
+   *
+   * Es un renglón y no un párrafo más dentro de la celda porque así sale en
+   * los documentos reales: la nota habla de la partida entera —«el cliente
+   * proporciona la plataforma», «el software que se usará»— y mezclarla con
+   * el alcance la haría parecer una viñeta más de lo que se incluye.
+   */
+  nota?: string;
 }
 
 export interface TotalesDeTabla {
@@ -128,6 +139,7 @@ export function tablaDeCotizacion(armado: Armado, calculo: ResultadoCotizacion):
       unidad: p.unidad,
       precioUnitario: c?.precioUnitario ?? 0,
       importe: c?.importe ?? 0,
+      nota: p.notas ?? undefined,
     };
   });
 
@@ -276,6 +288,17 @@ function filasDePartidas(d: DatosDeTabla, opciones: OpcionesDeTabla): Fila[] {
       [{ texto: importeParaDocumento(p.precioUnitario, moneda), alineacion: "CENTER" }],
       [{ texto: importeParaDocumento(p.importe, moneda), alineacion: "CENTER" }],
     ]);
+
+    const nota = (p.nota ?? "").trim();
+    if (nota) {
+      fuera.push([
+        vacia(),
+        [{ texto: nota, negritas: true, alineacion: "JUSTIFIED" }],
+        vacia(),
+        vacia(),
+        vacia(),
+      ]);
+    }
   }
 
   return fuera;
@@ -296,12 +319,15 @@ function filasDeTotales(t: TotalesDeTabla): Fila[] {
   ];
   const letra = importeEnLetra(t.total, t.moneda);
 
+  // Sin negritas, ni en el Total ni en la letra. Los tres documentos reales
+  // los traen en letra normal: la jerarquía la hacen el recuadro y la
+  // posición, no el grosor.
   return renglones.map(([etiqueta, importe], f) => {
     const fila: Fila = [vacia(), vacia(), vacia(), vacia(), vacia()];
     fila[COL_UNITARIO] = [{ texto: etiqueta, alineacion: "START" }];
-    fila[COL_IMPORTE] = [{ texto: importe, alineacion: "CENTER", negritas: f === 2 }];
+    fila[COL_IMPORTE] = [{ texto: importe, alineacion: "CENTER" }];
     if (f === 2) {
-      fila[COLUMNA_DE_LA_LETRA] = [{ texto: letra, alineacion: "START", negritas: true }];
+      fila[COLUMNA_DE_LA_LETRA] = [{ texto: letra, alineacion: "START" }];
     }
     return fila;
   });
@@ -486,7 +512,12 @@ export function solicitudesDeTabla(
     });
   });
 
-  // ── 4. Unir la celda de la letra y quitar las líneas de más ─────────────────
+  // ── 4. Encabezado que se repite y filas que no se parten ────────────────────
+  solicitudes.push(...filasDeLaTabla(tabla.index));
+
+  // ── 5. Unir la celda de la letra y quitar las líneas de más ─────────────────
+  // Unir se queda al final del todo: después de unir, las columnas de esas
+  // filas ya no son las mismas.
   solicitudes.push(...bordesDeLaTabla(tabla.index, cuerpo.length - FILAS_DE_TOTALES));
 
   if (datos.partidas.length === 0) {
@@ -576,10 +607,49 @@ export function bordesDeLaTabla(
   fuera.push({
     updateTableCellStyle: {
       tableRange: rango(finPartidas, 0, FILAS_DE_TOTALES, 3),
-      tableCellStyle: { borderLeft: SIN_LINEA, borderBottom: SIN_LINEA },
-      fields: "borderLeft,borderBottom",
+      // Abajo, no en medio: así la letra queda a la altura del renglón del
+      // Total y no flotando entre Subtotal e IVA, que es como sale en los
+      // documentos reales.
+      tableCellStyle: {
+        borderLeft: SIN_LINEA,
+        borderBottom: SIN_LINEA,
+        contentAlignment: "BOTTOM",
+      },
+      fields: "borderLeft,borderBottom,contentAlignment",
     },
   });
 
   return fuera;
+}
+
+/**
+ * Que ninguna fila se parta entre páginas.
+ *
+ * `preventOverflow` en todas: una partida con quince viñetas salta entera a
+ * la hoja siguiente en vez de cortarse por la mitad. Habla en números de
+ * fila, así que da igual cuánto texto tenga dentro.
+ *
+ * ── Lo que falta aquí, y por qué no está ──
+ *
+ * El **encabezado que se repite** al pasar de página (`tableHeader`) no se
+ * puede poner desde el código: la API responde
+ * `Unallowed field: tableHeader`, y `DocumentApp` tampoco lo tiene, así que
+ * el ERP viejo tampoco lo pone. En los documentos reales está en la 290 y la
+ * 289 pero **no** en la 282, que es el patrón de algo que se marca a mano.
+ *
+ * El sitio donde sí se puede dejar puesto de una vez es la **plantilla**: la
+ * fila 1 es el molde que se clona, y la 0 es la que hay que fijar.
+ */
+export function filasDeLaTabla(inicioTabla: number): SolicitudEstiloFila[] {
+  const tableStartLocation = { index: inicioTabla };
+  return [
+    {
+      // Sin `rowIndices` se aplica a todas las filas.
+      updateTableRowStyle: {
+        tableStartLocation,
+        tableRowStyle: { preventOverflow: true },
+        fields: "preventOverflow",
+      },
+    },
+  ];
 }
