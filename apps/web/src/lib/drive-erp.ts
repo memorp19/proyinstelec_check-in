@@ -1,3 +1,5 @@
+/** Estático a propósito: ver la nota de `drive.ts`. */
+import { Readable } from "node:stream";
 import type { drive_v3 } from "googleapis";
 import {
   getDriveClient,
@@ -312,7 +314,6 @@ export async function subirArchivoErp(params: {
   contenido: Buffer;
 }): Promise<{ driveFileId: string; webViewLink: string }> {
   const drive = await getDriveClient();
-  const { Readable } = await import("stream");
   const res = await drive.files.create({
     requestBody: { name: params.filename, parents: [params.folderId] },
     media: { mimeType: params.mimeType, body: Readable.from(params.contenido) },

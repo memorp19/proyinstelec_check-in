@@ -1,5 +1,16 @@
 import { google, type drive_v3 } from "googleapis";
 import { createHash } from "crypto";
+/**
+ * Estático y con el prefijo `node:`, nunca `await import("stream")`.
+ *
+ * Con la importación dinámica, webpack compila el módulo a
+ * `__webpack_require__.t(…, "stream", 23)`, que devuelve un objeto sin la
+ * exportación con nombre: `Readable` llega `undefined` y `Readable.from(…)`
+ * revienta con «Cannot read properties of undefined (reading 'from')» — solo
+ * dentro de Next, nunca al correr el mismo código con `tsx`, que es lo que
+ * hizo que tardara en verse.
+ */
+import { Readable } from "node:stream";
 import { ALCANCES, autenticar, credencialesDeCuentaDeServicio, modoDeGoogle } from "./google-auth";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -312,7 +323,6 @@ export async function uploadFile(params: {
   const hash = createHash("sha256").update(buffer).digest("hex");
   const drive = await getDriveClient();
 
-  const { Readable } = await import("stream");
   const stream = Readable.from(buffer);
 
   const res = await drive.files.create({
