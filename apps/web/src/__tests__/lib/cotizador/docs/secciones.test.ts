@@ -7,7 +7,13 @@
  */
 import { describe, it, expect } from "vitest";
 import { documentoVacio, type DatosDocumento } from "@/src/lib/cotizador/documento";
-import { ajustarActividades, saltoAntesDeTerminos } from "@/src/lib/cotizador/docs/secciones";
+import {
+  ajustarActividades,
+  ajustarMoneda,
+  NOMBRE_DE_MONEDA,
+  saltoAntesDeTerminos,
+} from "@/src/lib/cotizador/docs/secciones";
+import type { Solicitud } from "@/src/lib/cotizador/docs/tipos";
 import { ArmaDocumento } from "../../../helpers/documentos-falso";
 
 const DE_LA_PLANTILLA = {
@@ -174,5 +180,102 @@ describe("saltoAntesDeTerminos", () => {
     const r = saltoAntesDeTerminos(new ArmaDocumento().parrafo("nada").construir());
     expect(r.solicitudes).toEqual([]);
     expect(r.avisos.join(" ")).toContain("hoja nueva");
+  });
+});
+
+
+// ── La moneda de los Términos ─────────────────────────────────────────────────
+
+/**
+ * El renglón de los precios tal como está en la plantilla: dos corridas, y la
+ * segunda —el nombre de la moneda— en negritas.
+ */
+function plantillaConPrecios() {
+  return new ArmaDocumento()
+    .parrafo("Términos y Condiciones Comerciales")
+    .parrafo("CONDICIONES DE PAGO:")
+    .corridas([
+      { texto: "Nuestros precios son firmes en " },
+      { texto: "Moneda Nacional", negrita: true },
+    ])
+    .parrafo("La vigencia de esta propuesta es de {{VIGENCIA}} días.")
+    .construir();
+}
+
+const rangosBorrados = (s: Solicitud[]) =>
+  s.flatMap((x) => ("deleteContentRange" in x ? [x.deleteContentRange.range] : []));
+const inserciones = (s: Solicitud[]) =>
+  s.flatMap((x) => ("insertText" in x ? [x.insertText] : []));
+const estilosDeTexto = (s: Solicitud[]) =>
+  s.flatMap((x) => ("updateTextStyle" in x ? [x.updateTextStyle] : []));
+
+describe("ajustarMoneda", () => {
+  // La plantilla ya está escrita en pesos: el caso normal no toca el documento.
+  it("en pesos no emite ni una solicitud", () => {
+    const r = ajustarMoneda(plantillaConPrecios(), "MXN");
+    expect(r.solicitudes).toEqual([]);
+    expect(r.avisos).toEqual([]);
+  });
+
+  it("en dólares cambia el nombre de la moneda", () => {
+    const { solicitudes, avisos } = ajustarMoneda(plantillaConPrecios(), "USD");
+    expect(avisos).toEqual([]);
+    expect(inserciones(solicitudes).map((i) => i.text)).toEqual(["Dólares Americanos"]);
+  });
+
+  /** El resto del renglón es texto legal: se borra la moneda y nada más. */
+  it("borra exactamente «Moneda Nacional», no el párrafo", () => {
+    const { solicitudes } = ajustarMoneda(plantillaConPrecios(), "USD");
+    const [rango] = rangosBorrados(solicitudes);
+    expect(rango.endIndex - rango.startIndex).toBe(NOMBRE_DE_MONEDA.MXN.length);
+    // Y se inserta justo donde estaba.
+    expect(inserciones(solicitudes)[0].location.index).toBe(rango.startIndex);
+  });
+
+  /**
+   * `insertText` hereda el estilo del carácter de **delante** —el "en " sin
+   * negritas—, no el del texto que se borró. Sin volver a ponerlas, "Dólares
+   * Americanos" saldría en redonda debajo de un renglón que iba en negritas.
+   */
+  it("conserva las negritas", () => {
+    const { solicitudes } = ajustarMoneda(plantillaConPrecios(), "USD");
+    const [estilo] = estilosDeTexto(solicitudes);
+    expect(estilo.textStyle).toEqual({ bold: true });
+    expect(estilo.fields).toBe("bold");
+  });
+
+  it("el estilo se aplica al texto nuevo, no al viejo", () => {
+    const { solicitudes } = ajustarMoneda(plantillaConPrecios(), "USD");
+    const [rango] = rangosBorrados(solicitudes);
+    expect(estilosDeTexto(solicitudes)[0].range).toEqual({
+      startIndex: rango.startIndex,
+      endIndex: rango.startIndex + "Dólares Americanos".length,
+    });
+  });
+
+  it("y va después de borrar e insertar, que es cuando el rango ya es el nuevo", () => {
+    const { solicitudes } = ajustarMoneda(plantillaConPrecios(), "USD");
+    expect(solicitudes.map((s) => Object.keys(s)[0])).toEqual([
+      "deleteContentRange",
+      "insertText",
+      "updateTextStyle",
+    ]);
+  });
+
+  // Tocar un renglón que no se reconoce es peor que no tocar ninguno.
+  it("sin el renglón de los precios, avisa y no toca nada", () => {
+    const sinPrecios = new ArmaDocumento().parrafo("Términos y Condiciones Comerciales").construir();
+    const r = ajustarMoneda(sinPrecios, "USD");
+    expect(r.solicitudes).toEqual([]);
+    expect(r.avisos[0]).toContain("Nuestros precios son firmes en");
+  });
+
+  it("si el renglón ya no dice «Moneda Nacional», avisa y no reescribe", () => {
+    const otro = new ArmaDocumento()
+      .parrafo("Nuestros precios son firmes en la divisa que se pacte")
+      .construir();
+    const r = ajustarMoneda(otro, "USD");
+    expect(r.solicitudes).toEqual([]);
+    expect(r.avisos[0]).toContain("Moneda Nacional");
   });
 });

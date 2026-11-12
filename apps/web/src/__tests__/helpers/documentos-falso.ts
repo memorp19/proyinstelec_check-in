@@ -101,6 +101,32 @@ export class ArmaDocumento {
     return this;
   }
 
+  /**
+   * Un párrafo partido en varias corridas, con negritas donde se diga.
+   *
+   * Es lo que hace falta para probar una sustitución **dentro** de un renglón:
+   * la plantilla real tiene "Nuestros precios son firmes en " en redonda y
+   * "Moneda Nacional" en negritas, en dos corridas del mismo párrafo.
+   */
+  corridas(partes: Array<{ texto: string; negrita?: boolean }>): this {
+    const inicio = this.indice;
+    const elements = [...partes, { texto: "\n" }].map(({ texto, negrita }) => {
+      const desde = this.indice;
+      this.indice += texto.length;
+      return {
+        startIndex: desde,
+        endIndex: this.indice,
+        textRun: { content: texto, ...(negrita ? { textStyle: { bold: true } } : {}) },
+      };
+    });
+    this.contenido.push({
+      startIndex: inicio,
+      endIndex: this.indice,
+      paragraph: { elements, paragraphStyle: { namedStyleType: "NORMAL_TEXT" } },
+    });
+    return this;
+  }
+
   /** Un encabezado con sus párrafos. Sus índices son de su propio segmento. */
   conEncabezado(...textos: string[]): this {
     const guardado = this.indice;

@@ -12,8 +12,9 @@
  *
  * Por eso cada solicitud lleva la **parte** del documento a la que pertenece:
  *
- * - **Contenido**: lo que dice el documento. Marcadores, normas, párrafos,
- *   tabla, totales y letra. Sin esto no hay cotización.
+ * - **Contenido**: lo que dice el documento. Marcadores, normas, párrafos, la
+ *   moneda de los Términos, tabla, totales y letra. Sin esto no hay
+ *   cotización.
  * - **Formato**: cómo se ve. Negro, salto de página, filas que no se parten,
  *   encabezado fijo, bordes y la celda unida de la letra. Sin esto el
  *   documento se lee igual, pero no se ve como los reales.
@@ -54,6 +55,9 @@ export const PARTES = {
   destinatario: { nombre: "los renglones vacíos del destinatario", grupo: "contenido" },
   normas: { nombre: "las normas", grupo: "contenido" },
   actividades: { nombre: "los párrafos de Actividades Generales", grupo: "contenido" },
+  // Las negritas que se le vuelven a poner van aquí y no en formato: son las
+  // que ya tenía «Moneda Nacional», no algo que el ERP le agregue.
+  moneda: { nombre: "el nombre de la moneda en los Términos", grupo: "contenido" },
   tabla: { nombre: "la tabla de partidas", grupo: "contenido" },
   totales: { nombre: "los totales", grupo: "contenido" },
   letra: { nombre: "la cantidad en letra", grupo: "contenido" },
