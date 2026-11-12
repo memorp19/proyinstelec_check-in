@@ -21,17 +21,21 @@ import { tituloParaDocumento } from "../normas";
  * columna guarda lo que se cargó, y la recarga de 2026 metió 75 con "-v1".
  * Nombrar un archivo con eso le enseñaría al equipo una convención muerta.
  *
- * El título pasa por `tituloParaDocumento`, que convierte `_` en ` - `: es lo
- * que el cliente lee, y es el mismo que va dentro del documento.
+ * El título pasa por `tituloParaDocumento`, que convierte `_` en ` - ` y le
+ * pega la razón social cuando el título no la trae: es lo que el cliente lee,
+ * y es el mismo que va dentro del documento. Que el archivo y la portada
+ * digan lo mismo no es cosmético — por el nombre se busca el PDF.
  */
 export function nombreDelDocumento(params: {
   numero: number;
   anio: number;
   version: number;
   titulo: string | null | undefined;
+  /** La razón social, que va al final del título cuando éste no la trae. */
+  cliente?: string | null;
 }): string {
   const folio = folioCotizacion(params.numero, params.anio, params.version);
-  const titulo = tituloParaDocumento(params.titulo);
+  const titulo = tituloParaDocumento(params.titulo, params.cliente);
   return `${folio} ${titulo}`.trim();
 }
 

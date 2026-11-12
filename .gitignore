@@ -51,6 +51,13 @@ _to_delete_snapshots/
 # montos y folios. Se copian a mano y NUNCA se versionan.
 importacion/
 
+# Credenciales de Google para desarrollo. Viven FUERA del repo (ver
+# GOOGLE_OAUTH_CLIENTE en .env.example); esto cubre la copia que algún día
+# alguien arrastre dentro sin darse cuenta.
+llaves/
+*oauth-cliente*.json
+*oauth-token*.json
+
 # El JSON de la plantilla del cotizador: trae el documento entero de la
 # empresa y los ids de Drive. Se exporta a mano cuando hace falta revisarlo
 # y se deja FUERA del repo; las pruebas lo leen por ERP_PLANTILLA_JSON.

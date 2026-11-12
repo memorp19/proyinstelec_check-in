@@ -24,9 +24,11 @@ import { normasElegidas } from "../normas";
 import type { ResultadoCotizacion } from "../tipos";
 import type { Solicitud } from "./tipos";
 import { nombreDelDocumento } from "./nombre";
+import { solicitudesDeNegro } from "./colores";
 import { sustituciones, type Marcador } from "./marcadores";
 import { quitarNormas } from "./normas-plantilla";
 import { ocultarRenglones } from "./ocultar";
+import { ajustarActividades, saltoAntesDeTerminos } from "./secciones";
 import { solicitudesDeTabla, tablaDeCotizacion } from "./tabla";
 import { fechaFija, valoresDeMarcadores } from "./valores";
 
@@ -82,10 +84,17 @@ export interface DocumentoGenerado {
  * posteriores. Como todo se calcula sobre el JSON original, lo que cambia
  * longitudes se emite **de abajo hacia arriba del documento**:
  *
- * 1. La **tabla de partidas**, que está al final (índice ~3000).
- * 2. Las **normas** que no se eligieron (~1000).
- * 3. Los **renglones del destinatario** que no salen (~300).
- * 4. Las **sustituciones**, que no usan índices: `replaceAllText` compara
+ * 1. El **color** y el **salto de página**, que no mueven ni un índice pero
+ *    sí necesitan que los del original sigan siendo válidos. Por eso van
+ *    primero: después del primer borrado ya no lo serían. Y como el negro se
+ *    aplica antes que las inserciones, lo que se inserte luego lo hereda de
+ *    lo que tiene al lado, que para entonces ya es negro.
+ * 2. La **tabla de partidas**, que está al final (índice ~3000).
+ * 3. Las **normas**: se quitan las que no se eligieron y se reescriben las
+ *    que se quedan (~2000).
+ * 4. Los **párrafos de Actividades Generales** (~1800).
+ * 5. Los **renglones del destinatario** que no salen (~300).
+ * 6. Las **sustituciones**, que no usan índices: `replaceAllText` compara
  *    texto. Van al final porque cambian longitudes en todo el documento.
  *
  * Al revés, el primer borrado invalidaría todos los índices de abajo.
@@ -106,10 +115,15 @@ export function solicitudesDelDocumento(
     direccionCliente: d.direccionCliente,
   });
 
+  const negro = solicitudesDeNegro(plantilla);
+  const salto = saltoAntesDeTerminos(plantilla);
+
   const cuadro = solicitudesDeTabla(plantilla, tablaDeCotizacion(d.armado, d.calculo));
 
   const elegidas = normasElegidas(d.documento.normas, d.titulo).map((n) => n.id);
   const normas = quitarNormas(plantilla, elegidas);
+
+  const actividades = ajustarActividades(plantilla, d.documento);
 
   // Quitar antes de sustituir: el renglón se localiza por su marcador, y una
   // vez sustituido ya no hay por dónde agarrarlo.
@@ -122,12 +136,22 @@ export function solicitudesDelDocumento(
 
   return {
     solicitudes: [
+      ...negro,
+      ...salto.solicitudes,
       ...cuadro.solicitudes,
       ...normas.solicitudes,
+      ...actividades.solicitudes,
       ...quitados.solicitudes,
       ...puestos.solicitudes,
     ],
-    avisos: [...avisos, ...cuadro.avisos, ...normas.avisos, ...deFaltantes],
+    avisos: [
+      ...avisos,
+      ...salto.avisos,
+      ...cuadro.avisos,
+      ...normas.avisos,
+      ...actividades.avisos,
+      ...deFaltantes,
+    ],
   };
 }
 

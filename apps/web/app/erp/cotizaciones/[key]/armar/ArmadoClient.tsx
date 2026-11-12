@@ -17,6 +17,7 @@ import { Documento } from "./secciones/Documento";
 import { Totales } from "./secciones/Totales";
 import { ActualizarPrecios } from "./secciones/ActualizarPrecios";
 import { VistaPrevia } from "./secciones/VistaPrevia";
+import { VisorDocumento, type DocumentoGenerado } from "./secciones/VisorDocumento";
 import { btnGhost, btnPrimary, etiqueta, tarjeta } from "./ui";
 
 // ── Lo que manda la API ───────────────────────────────────────────────────────
@@ -85,6 +86,9 @@ export function ArmadoClient({
   const [enviando, setEnviando] = useState(false);
   const [resultadoEnvio, setResultadoEnvio] = useState<{ total: number; letra: string; avisos: string[] } | null>(null);
   const [verPrecios, setVerPrecios] = useState(false);
+  const [generando, setGenerando] = useState(false);
+  const [documento, setDocumento] = useState<DocumentoGenerado | null>(null);
+  const [errorDocumento, setErrorDocumento] = useState<string | null>(null);
   const [verPrevia, setVerPrevia] = useState(abrirVistaPrevia);
 
   /**
@@ -178,6 +182,38 @@ export function ArmadoClient({
     if (temporizador.current) clearTimeout(temporizador.current);
     if (armado) await guardar(armado);
   }, [armado, guardar]);
+
+  // ── Ver cotización: generar el documento y el PDF ───────────────────────────
+  /**
+   * Se guarda antes de generar. El documento se arma con lo que hay en la
+   * base, no con lo que hay en la pantalla: sin guardar primero saldría un PDF
+   * sin el último cambio y nadie entendería por qué.
+   *
+   * Tarda unos siete segundos —cinco viajes a Google— así que el botón dice
+   * lo que está pasando en vez de quedarse mudo.
+   */
+  const generarCotizacion = useCallback(async () => {
+    if (!armado) return;
+    setGenerando(true);
+    setErrorDocumento(null);
+    try {
+      await guardarYa();
+
+      const r = await fetch(`/api/erp/cotizaciones/${cotKey}/documento`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ version }),
+      });
+      const cuerpo = await r.json();
+      if (!r.ok) throw new Error(cuerpo.error ?? "No se pudo generar la cotización");
+
+      setDocumento(cuerpo as DocumentoGenerado);
+    } catch (e) {
+      setErrorDocumento((e as Error).message);
+    } finally {
+      setGenerando(false);
+    }
+  }, [armado, cotKey, guardarYa, version]);
 
   // ── Mandar a revisión, desde la vista previa ────────────────────────────────
   /**
@@ -370,6 +406,37 @@ export function ArmadoClient({
           </div>
         )}
 
+        {/**
+          * El documento de verdad, no el resumen.
+          *
+          * Solo en PROCESO y con partidas: una versión ya mandada a revisión
+          * tiene su documento —el que el cliente recibió— y rehacerlo desde
+          * aquí lo sustituiría por otro con precios que pudieron moverse.
+          */}
+        {!soloLectura && cotizacion.estatus === "PROCESO" && armado.partidas.length > 0 && (
+          <div className={`${tarjeta} p-4 flex flex-wrap items-center gap-4`}>
+            <div className="flex-1 min-w-[240px]">
+              <p className={etiqueta}>Cotización en PDF</p>
+              <p className="font-body text-xs text-white/50 mt-1">
+                El documento con el formato de la empresa, en la carpeta de la cotización. Tarda
+                unos segundos: son varias idas y vueltas a Google.
+              </p>
+              {errorDocumento && (
+                <p className="font-body text-xs text-danger bg-danger/15 rounded-lg px-3 py-2 mt-2">
+                  {errorDocumento}
+                </p>
+              )}
+            </div>
+            <button
+              className={btnPrimary}
+              disabled={generando}
+              onClick={() => void generarCotizacion()}
+            >
+              {generando ? "Generando el documento…" : "Ver cotización"}
+            </button>
+          </div>
+        )}
+
         {verPrevia && (
           <VistaPrevia
             armado={armado}
@@ -382,6 +449,15 @@ export function ArmadoClient({
             error={error}
             onCerrar={() => setVerPrevia(false)}
             onMandar={() => void mandarARevision()}
+          />
+        )}
+
+        {documento && (
+          <VisorDocumento
+            documento={documento}
+            generando={generando}
+            onCerrar={() => setDocumento(null)}
+            onRegenerar={() => void generarCotizacion()}
           />
         )}
 

@@ -122,6 +122,34 @@ describe("nombreDelDocumento", () => {
     );
   });
 
+  /**
+   * El archivo se llama como la portada. No es cosmético: por el nombre se
+   * busca el PDF cuando no hay id guardado.
+   */
+  it("lleva la razón social cuando el título no la trae", () => {
+    expect(
+      nombreDelDocumento({
+        numero: 450,
+        anio: 2026,
+        version: 0,
+        titulo: "Mantenimiento Preventivo de Subestaciones",
+        cliente: "IGSA S.A.P.I de C.V.",
+      }),
+    ).toBe("PCOTOP-450-2026 Mantenimiento Preventivo de Subestaciones - IGSA S.A.P.I de C.V.");
+  });
+
+  it("con guion bajo no la repite: el título ya la trae", () => {
+    expect(
+      nombreDelDocumento({
+        numero: 1,
+        anio: 2026,
+        version: 0,
+        titulo: "Servicio_Planta Norte",
+        cliente: "Planta Norte",
+      }),
+    ).toBe("PCOTOP-001-2026 Servicio - Planta Norte");
+  });
+
   // El folio de la v0 es prefijo del de todas sus versiones: comparar por
   // prefijo apartaría el documento de otra versión de la misma cotización.
   it("esVersionAnterior compara exacto, no por prefijo", () => {
@@ -195,7 +223,7 @@ describe("generarDocumento", () => {
     expect(documentos.copiados).toEqual([
       {
         plantillaId: "doc-plantilla",
-        nombre: "PCOTOP-001-2026 Servicio de Mantenimiento",
+        nombre: "PCOTOP-001-2026 Servicio de Mantenimiento - Minera Sur",
         carpetaId: "carpeta-450",
         id: "copia-1",
       },
@@ -205,7 +233,7 @@ describe("generarDocumento", () => {
     expect(documentos.aplicadas[0].id).toBe("copia-1");
     expect(documentos.exportados).toEqual(["copia-1"]);
     expect(r.docId).toBe("copia-1");
-    expect(r.pdf.nombre).toBe("PCOTOP-001-2026 Servicio de Mantenimiento.pdf");
+    expect(r.pdf.nombre).toBe("PCOTOP-001-2026 Servicio de Mantenimiento - Minera Sur.pdf");
   });
 
   it("no escribe en la base: devuelve la fecha para que la guarde quien llame", async () => {

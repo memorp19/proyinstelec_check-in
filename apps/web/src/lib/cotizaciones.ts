@@ -1,6 +1,6 @@
 import { and, desc, eq, ilike, max, ne, or, sql, type SQL } from "drizzle-orm";
 import { getDb } from "../db";
-import { aprobaciones, cotizaciones } from "../db/schema";
+import { aprobaciones, cotArmado, cotizaciones } from "../db/schema";
 import { folioCotizacion, pad } from "./folios";
 import { registrarBitacora } from "./bitacora";
 
@@ -226,6 +226,36 @@ export async function getVersion(
     )
     .limit(1);
   return fila ? aCotizacion(fila) : null;
+}
+
+/**
+ * El id del PDF que el ERP generó para esa versión, si lo hay.
+ *
+ * Vive en `cot_armado` y no en `cotizaciones` porque es **por versión**: cada
+ * una tiene su documento. Se consulta aparte para no cargar con una columna
+ * del cotizador todo lo que lee cotizaciones.
+ *
+ * Es lo que hace que el envío al cliente encuentre el PDF **por id** en vez
+ * de por nombre. `null` cuando la versión no pasó por el cotizador —todas las
+ * importadas—, y entonces se busca por nombre, como siempre.
+ */
+export async function pdfGeneradoDe(cotizacion: {
+  numero: number;
+  anio: number;
+  version: number;
+}): Promise<string | null> {
+  const [fila] = await getDb()
+    .select({ pdfDriveId: cotArmado.pdfDriveId })
+    .from(cotArmado)
+    .where(
+      and(
+        eq(cotArmado.numero, cotizacion.numero),
+        eq(cotArmado.anio, cotizacion.anio),
+        eq(cotArmado.version, cotizacion.version),
+      ),
+    )
+    .limit(1);
+  return fila?.pdfDriveId ?? null;
 }
 
 /** La versión vigente (la de mayor número de versión) o null si no existe. */
