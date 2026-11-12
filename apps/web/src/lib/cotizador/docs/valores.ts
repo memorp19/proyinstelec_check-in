@@ -87,6 +87,8 @@ export interface Valores {
   ocultos: RenglonOculto[];
   /** Lo que quedó con `⟨falta⟩`, en palabras, para la vista previa. */
   avisos: string[];
+  /** Los mismos huecos, sin redactar. Son los que bloquean el envío a revisión. */
+  faltantes: Marcador[];
 }
 
 /** Nombre legible de cada marcador, para el aviso. */
@@ -157,11 +159,14 @@ export function valoresDeMarcadores(d: DatosParaMarcadores): Valores {
   // Solo de lo que de verdad va a salir impreso: un renglón que se quitó a
   // propósito no es un hueco, es una decisión.
   const quitados = new Set(ocultos.map((o) => o.marcador));
-  const avisos = (Object.keys(valores) as Marcador[])
-    .filter((m) => valores[m] === FALTA_DATO && !quitados.has(m as never))
-    .map((m) => `Falta ${COMO_SE_LLAMA[m] ?? m}: sale como ${FALTA_DATO} en el documento.`);
+  const faltantes = (Object.keys(valores) as Marcador[]).filter(
+    (m) => valores[m] === FALTA_DATO && !quitados.has(m as never),
+  );
+  const avisos = faltantes.map(
+    (m) => `Falta ${COMO_SE_LLAMA[m] ?? m}: sale como ${FALTA_DATO} en el documento.`,
+  );
 
-  return { valores, ocultos, avisos };
+  return { valores, ocultos, avisos, faltantes };
 }
 
 // ── La fecha, que se fija una vez ─────────────────────────────────────────────
@@ -188,4 +193,75 @@ export function fechaFija(
     d.getDate(),
   ).padStart(2, "0")}`;
   return { fecha: iso, esNueva: true };
+}
+
+// ── Lo que falta ──────────────────────────────────────────────────────────────
+
+/** Dónde se captura cada dato, con el nombre que tiene en la pantalla. */
+const DONDE_SE_CAPTURA: Partial<Record<Marcador, string>> = {
+  CLIENTE: "en los datos de la cotización",
+  TITULO: "en los datos de la cotización",
+  FECHA: "en Documento → Fecha de la cotización",
+  CONTACTO: "en Documento → Contacto",
+  TELEFONO: "en Documento → Teléfono",
+  EMAIL: "en Documento → Correo",
+  DIRECCION_1: "en Documento → Dirección, renglón 1",
+  LUGAR: "en Condiciones comerciales → Lugar de entrega",
+};
+
+export interface Faltante {
+  marcador: Marcador;
+  /** «el lugar de entrega». */
+  que: string;
+  /** «en Condiciones comerciales → Lugar de entrega». */
+  donde: string;
+}
+
+export interface DatosParaFaltantes {
+  cliente: string;
+  titulo: string;
+  documento: DatosDocumento;
+  condiciones: Condiciones;
+  /** Entra en los valores por completitud; el folio nunca sale `⟨falta⟩`. */
+  folio?: string;
+  direccionContacto?: string | null;
+  direccionCliente?: string | null;
+  /** Inyectable para fijar la fecha en las pruebas. */
+  hoy?: () => Date;
+}
+
+/**
+ * Qué saldría como `⟨falta⟩` si el documento se generara ahora.
+ *
+ * Es `valoresDeMarcadores` otra vez, sin Google de por medio: la pantalla y la
+ * ruta de revisión preguntan **lo mismo que decide el documento**, y no una
+ * lista de campos obligatorios escrita aparte que se desincronizaría al primer
+ * cambio de plantilla. Un renglón apagado a propósito no cuenta — no es un
+ * hueco, es una decisión, y eso ya lo resuelve `ocultos`.
+ *
+ * ── Por qué la fecha pasa por `fechaFija` ──
+ *
+ * Una cotización a la que nadie le ha dado a "Ver cotización" tiene la fecha
+ * vacía, y `fechaDeDocumento("")` es `⟨falta⟩`. Pero al generar el documento
+ * se fija sola con la de hoy, así que no es un hueco: sin esto, **ninguna**
+ * cotización se podría mandar a revisión antes de generar su PDF.
+ */
+export function faltantesDelDocumento(d: DatosParaFaltantes): Faltante[] {
+  const { fecha } = fechaFija(d.documento.fecha, d.hoy);
+  const { faltantes } = valoresDeMarcadores({
+    cliente: d.cliente,
+    folio: d.folio ?? "",
+    fecha,
+    titulo: d.titulo,
+    documento: d.documento,
+    condiciones: d.condiciones,
+    direccionContacto: d.direccionContacto,
+    direccionCliente: d.direccionCliente,
+  });
+
+  return faltantes.map((m) => ({
+    marcador: m,
+    que: COMO_SE_LLAMA[m] ?? m,
+    donde: DONDE_SE_CAPTURA[m] ?? "en la pantalla de la cotización",
+  }));
 }

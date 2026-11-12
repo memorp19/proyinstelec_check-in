@@ -8,6 +8,7 @@ import {
   type Armado,
   type ResultadoCotizacion,
 } from "@/src/lib/cotizador";
+import { FALTA_DATO, type Faltante } from "@/src/lib/cotizador/docs/valores";
 import { btnGhost, btnPrimary, conMoneda, etiqueta, pesos } from "../ui";
 
 /**
@@ -28,6 +29,7 @@ export function VistaPrevia({
   titulo,
   folio,
   sinArmado,
+  faltantes,
   enviando,
   error,
   onCerrar,
@@ -40,6 +42,8 @@ export function VistaPrevia({
   folio: string;
   /** Las importadas de 2026 no pasaron por el cotizador y no tienen partidas. */
   sinArmado: boolean;
+  /** Lo que saldría como `⟨falta⟩` en el documento. Con algo aquí, no se manda. */
+  faltantes: Faltante[];
   enviando: boolean;
   error: string | null;
   onCerrar: () => void;
@@ -194,20 +198,50 @@ export function VistaPrevia({
             </>
           )}
 
+          {/**
+            * Lo que falta, con dónde se captura cada cosa.
+            *
+            * El documento imprime `⟨falta⟩` donde no hay dato — visible a
+            * propósito— y esa marca no tiene por qué llegarle al revisor ni al
+            * cliente. Decir solo "faltan datos" obligaría a buscarlos por las
+            * cuatro secciones de la pantalla.
+            */}
+          {faltantes.length > 0 && (
+            <div className="bg-danger/10 border border-danger/30 rounded-xl p-4">
+              <p className="font-body text-sm text-danger">
+                Todavía no se puede mandar: el documento saldría con{" "}
+                <span className="font-mono">{FALTA_DATO}</span> a la vista.
+              </p>
+              <ul className="mt-2 space-y-1">
+                {faltantes.map((f) => (
+                  <li key={f.marcador} className="font-body text-xs text-white/60">
+                    · Falta <span className="text-white/90">{f.que}</span> — se captura {f.donde}.
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           {error && <p className="font-mono text-xs text-danger">{error}</p>}
         </div>
 
         {/* Confirmar */}
         <div className="sticky bottom-0 bg-navy/95 backdrop-blur border-t border-white/10 px-5 py-4 flex flex-wrap items-center gap-3">
           <p className="flex-1 min-w-[220px] font-body text-xs text-white/50">
-            {sinArmado
-              ? "Al mandarla, el revisor la verá tal como está."
-              : "Al mandarla, estos importes se congelan: el revisor ve estos números y ya no se mueven."}
+            {faltantes.length > 0
+              ? `Captura ${faltantes.length === 1 ? "el dato que falta" : "los datos que faltan"} y vuelve: el botón se enciende solo.`
+              : sinArmado
+                ? "Al mandarla, el revisor la verá tal como está."
+                : "Al mandarla, estos importes se congelan: el revisor ve estos números y ya no se mueven."}
           </p>
           <button className={btnGhost} onClick={onCerrar}>
             Seguir editando
           </button>
-          <button className={btnPrimary} disabled={enviando} onClick={onMandar}>
+          <button
+            className={btnPrimary}
+            disabled={enviando || faltantes.length > 0}
+            onClick={onMandar}
+          >
             {enviando ? "Mandando…" : "Mandar a revisión"}
           </button>
         </div>

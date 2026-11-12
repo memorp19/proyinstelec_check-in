@@ -2,11 +2,13 @@ import { describe, it, expect } from "vitest";
 import { CONDICIONES_POR_OMISION, documentoVacio } from "@/src/lib/cotizador/documento";
 import {
   FALTA_DATO,
+  faltantesDelDocumento,
   fechaDeDocumento,
   fechaFija,
   fraseDeEntrega,
   fraseDeLugar,
   valoresDeMarcadores,
+  type DatosParaFaltantes,
   type DatosParaMarcadores,
 } from "@/src/lib/cotizador/docs/valores";
 
@@ -196,5 +198,98 @@ describe("valoresDeMarcadores", () => {
     expect(r.valores.PAGO).toBe("Por definir.");
     expect(r.valores.LUGAR).toBe(FALTA_DATO);
     expect(r.avisos.join(" ")).toContain("el lugar de entrega");
+  });
+});
+
+
+// ── Lo que falta ──────────────────────────────────────────────────────────────
+
+describe("faltantesDelDocumento", () => {
+  /** Una cotización a la que no le falta nada de lo que se imprime. */
+  const completa = (sobre: Partial<DatosParaFaltantes> = {}): DatosParaFaltantes => ({
+    cliente: "Minera Sur",
+    titulo: "Servicio de Mantenimiento",
+    documento: conContacto({
+      contacto: "Ing. Ruiz",
+      direccion1: "Camino Real 12",
+      telefono: "+ (52) 775 110 4791",
+      correo: "ruiz@ejemplo.mx",
+    }),
+    condiciones: { ...CONDICIONES_POR_OMISION, lugar: "la planta" },
+    ...sobre,
+  });
+
+  const marcadores = (d: DatosParaFaltantes) => faltantesDelDocumento(d).map((f) => f.marcador);
+
+  it("con todo capturado no falta nada", () => {
+    expect(faltantesDelDocumento(completa())).toEqual([]);
+  });
+
+  it("sin lugar de entrega, falta el lugar", () => {
+    const d = completa({ condiciones: { ...CONDICIONES_POR_OMISION, lugar: "" } });
+    expect(marcadores(d)).toEqual(["LUGAR"]);
+  });
+
+  /** El aviso sirve si dice dónde teclearlo; "faltan datos" no sirve. */
+  it("cada hueco dice qué es y dónde se captura", () => {
+    const d = completa({ condiciones: { ...CONDICIONES_POR_OMISION, lugar: "" } });
+    expect(faltantesDelDocumento(d)[0]).toEqual({
+      marcador: "LUGAR",
+      que: "el lugar de entrega",
+      donde: "en Condiciones comerciales → Lugar de entrega",
+    });
+  });
+
+  it("un documento en blanco los lista todos", () => {
+    const d = completa({ documento: documentoVacio(), condiciones: { ...CONDICIONES_POR_OMISION } });
+    expect(marcadores(d)).toEqual([
+      "CONTACTO",
+      "TELEFONO",
+      "EMAIL",
+      "DIRECCION_1",
+      "LUGAR",
+    ]);
+  });
+
+  /**
+   * La regla entera: solo bloquea lo que se **imprimiría** como ⟨falta⟩. Un
+   * renglón que alguien apagó a propósito no es un hueco, es una decisión.
+   */
+  it("un renglón apagado a propósito no bloquea", () => {
+    const d = completa({
+      documento: conContacto(
+        { contacto: "Ing. Ruiz", direccion1: "Camino Real 12", correo: "ruiz@ejemplo.mx" },
+        { telefono: true },
+      ),
+    });
+    expect(faltantesDelDocumento(d)).toEqual([]);
+  });
+
+  it("la segunda dirección nunca bloquea: si no hay, se borra el renglón", () => {
+    expect(marcadores(completa())).not.toContain("DIRECCION_2");
+  });
+
+  /**
+   * Sin esto no se podría mandar a revisión ninguna cotización antes de
+   * generar su PDF: la fecha está vacía hasta que el documento se genera, y
+   * entonces se fija sola con la de hoy.
+   */
+  it("la fecha vacía no bloquea, porque se fija al generar", () => {
+    const d = completa();
+    expect(d.documento.fecha).toBe("");
+    expect(marcadores(d)).not.toContain("FECHA");
+  });
+
+  it("sin razón social ni título, los dos", () => {
+    const d = completa({ cliente: "", titulo: "" });
+    expect(marcadores(d)).toContain("CLIENTE");
+    expect(marcadores(d)).toContain("TITULO");
+  });
+
+  /** Es la misma cuenta que los avisos de la vista previa, no otra lista. */
+  it("son exactamente los avisos de valoresDeMarcadores", () => {
+    const d = completa({ condiciones: { ...CONDICIONES_POR_OMISION, lugar: "" } });
+    const { avisos } = valoresDeMarcadores({ ...d, folio: "PCOTOP-001-2026", fecha: "2026-10-05" });
+    expect(faltantesDelDocumento(d)).toHaveLength(avisos.length);
   });
 });

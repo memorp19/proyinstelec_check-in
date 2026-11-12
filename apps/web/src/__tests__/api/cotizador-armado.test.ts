@@ -18,6 +18,7 @@ vi.mock("@/src/lib/cotizador-db", () => ({
 vi.mock("@/src/lib/cotizaciones-flujos", () => ({ enviarARevision: vi.fn() }));
 vi.mock("@/src/lib/banxico", () => ({ tipoDeCambioFix: vi.fn() }));
 
+import { CONDICIONES_POR_OMISION, documentoVacio } from "@/src/lib/cotizador";
 import { auth } from "@/src/auth";
 /** `auth()` está sobrecargada en Auth.js v5; el cast deja usarla como mock simple. */
 const mockAuth = auth as unknown as ReturnType<typeof vi.fn>;
@@ -58,11 +59,24 @@ const cotizacion = {
   elaboro: "EAOL", created_by: "ana@proyinstelec.mx",
 };
 
+/** Un documento sin huecos. Con menos que esto, la ruta no deja mandarla. */
+const documentoCompleto = () => ({
+  ...documentoVacio(),
+  contacto: {
+    contacto: "Ing. Ruiz",
+    direccion1: "Camino Real 12",
+    direccion2: "",
+    telefono: "+ (52) 775 110 4791",
+    correo: "ruiz@ejemplo.mx",
+  },
+});
+
 const armado = {
   numero: 450, anio: 2026, version: 0,
   moneda: "MXN", monedaGastos: "MXN", reparto: "IGUAL",
   asesoriaPct: 10, ivaPct: 16, tipoCambio: null,
-  condiciones: {}, documento: {},
+  condiciones: { ...CONDICIONES_POR_OMISION, lugar: "la planta" },
+  documento: documentoCompleto(),
   partidas: [{ id: "P1", orden: 1, titulo: "Una", bloques: [], cantidad: 1, unidad: "servicio", ajuste: 0, precioUnitarioFinal: null, recibeGastosGenerales: true, gastoManual: null, formato: "NORMAL", notas: "", conceptos: [] }],
   gastos: [],
 };
@@ -306,6 +320,57 @@ describe("POST revisión", () => {
   it("una transición que el flujo no permite, 422", async () => {
     vi.mocked(enviarARevision).mockRejectedValue(new Error("Transición no permitida: ENVIADA → REVISION"));
     expect((await POST_REVISION(pedir({ version: 0 }, "POST"), { params })).status).toBe(422);
+  });
+
+  // ── Lo que saldría como ⟨falta⟩ ────────────────────────────────────────────
+
+  /**
+   * La pantalla ya apaga el botón, pero esta ruta se puede llamar sin la
+   * pantalla. Y el 422 llega **antes del congelado**: una versión congelada de
+   * algo que no se mandó dejaría al cotizador sin poder seguir editándola.
+   */
+  it("con un dato que saldría como ⟨falta⟩, 422 y no congela", async () => {
+    vi.mocked(getArmado).mockResolvedValue({
+      ...completo,
+      armado: { ...armado, condiciones: { ...CONDICIONES_POR_OMISION, lugar: "" } },
+    } as never);
+
+    const r = await POST_REVISION(pedir({ version: 0 }, "POST"), { params });
+    const cuerpo = await r.json();
+
+    expect(r.status).toBe(422);
+    expect(cuerpo.faltantes).toEqual([
+      {
+        marcador: "LUGAR",
+        que: "el lugar de entrega",
+        donde: "en Condiciones comerciales → Lugar de entrega",
+      },
+    ]);
+    expect(cuerpo.error).toContain("el lugar de entrega");
+    expect(congelarVersion).not.toHaveBeenCalled();
+    expect(enviarARevision).not.toHaveBeenCalled();
+  });
+
+  it("con todo capturado sí pasa", async () => {
+    expect((await POST_REVISION(pedir({ version: 0 }, "POST"), { params })).status).toBe(200);
+  });
+
+  // Un renglón que alguien apagó a propósito no es un hueco, es una decisión.
+  it("un renglón ocultado a propósito no bloquea", async () => {
+    vi.mocked(getArmado).mockResolvedValue({
+      ...completo,
+      armado: {
+        ...armado,
+        documento: {
+          ...documentoCompleto(),
+          contacto: { ...documentoCompleto().contacto, telefono: "" },
+          ocultar: { telefono: true },
+        },
+      },
+    } as never);
+
+    expect((await POST_REVISION(pedir({ version: 0 }, "POST"), { params })).status).toBe(200);
+    expect(congelarVersion).toHaveBeenCalled();
   });
 });
 

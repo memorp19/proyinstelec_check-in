@@ -9,6 +9,7 @@ import {
   type ResultadoCotizacion,
   type ServicioCatalogo,
 } from "@/src/lib/cotizador";
+import { faltantesDelDocumento } from "@/src/lib/cotizador/docs/valores";
 import { Partidas } from "./secciones/Partidas";
 import { Gastos } from "./secciones/Gastos";
 import { MonedaYAsesoria } from "./secciones/MonedaYAsesoria";
@@ -134,6 +135,31 @@ export function ArmadoClient({
     [armado],
   );
 
+  /**
+   * Los datos que saldrían como `⟨falta⟩` en el documento.
+   *
+   * Se calculan aquí, con la misma función pura que usa el generador, y no
+   * pidiéndoselos al servidor: así el aviso aparece mientras se escribe, y no
+   * al dar al botón. Quien bloquea de verdad es la ruta — esto solo evita el
+   * viaje y dice dónde se captura cada cosa.
+   *
+   * Las que no pasaron por el cotizador no tienen documento que generar, así
+   * que tampoco tienen nada que les falte.
+   */
+  const faltantes = useMemo(
+    () =>
+      armado && datos && armado.partidas.length > 0
+        ? faltantesDelDocumento({
+            cliente: datos.cotizacion.cliente,
+            titulo: datos.cotizacion.titulo,
+            folio: datos.cotizacion.folio,
+            documento: armado.documento,
+            condiciones: armado.condiciones,
+          })
+        : [],
+    [armado, datos],
+  );
+
   // ── Autoguardado ────────────────────────────────────────────────────────────
   const guardar = useCallback(
     async (actual: Armado) => {
@@ -226,6 +252,9 @@ export function ArmadoClient({
    */
   const mandarARevision = useCallback(async () => {
     if (!armado) return;
+    // Sin forma de saltarlo: el botón está apagado, y si alguien llegara aquí
+    // igual, la ruta responde 422.
+    if (faltantes.length > 0) return;
     setEnviando(true);
     setError(null);
     try {
@@ -256,7 +285,7 @@ export function ArmadoClient({
     } finally {
       setEnviando(false);
     }
-  }, [armado, cargar, cotKey, guardarYa, version]);
+  }, [armado, cargar, cotKey, faltantes, guardarYa, version]);
 
   // ── Dibujo ──────────────────────────────────────────────────────────────────
   if (cargando) {
@@ -445,6 +474,7 @@ export function ArmadoClient({
             titulo={cotizacion.titulo}
             folio={cotizacion.folio}
             sinArmado={armado.partidas.length === 0}
+            faltantes={faltantes}
             enviando={enviando}
             error={error}
             onCerrar={() => setVerPrevia(false)}
