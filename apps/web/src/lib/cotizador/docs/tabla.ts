@@ -48,6 +48,7 @@ import type {
   Solicitud,
   SolicitudEstiloCelda,
   SolicitudEstiloFila,
+  SolicitudFijarEncabezado,
   SolicitudUnirCeldas,
   UbicacionCelda,
 } from "./tipos";
@@ -623,24 +624,40 @@ export function bordesDeLaTabla(
 }
 
 /**
- * Que ninguna fila se parta entre páginas.
+ * Que la tabla se siga leyendo cuando pasa de hoja.
  *
- * `preventOverflow` en todas: una partida con quince viñetas salta entera a
- * la hoja siguiente en vez de cortarse por la mitad. Habla en números de
- * fila, así que da igual cuánto texto tenga dentro.
+ * Dos cosas, y ninguna habla de índices de carácter: las dos se refieren a la
+ * tabla por su `tableStartLocation` y a sus filas por número.
  *
- * ── Lo que falta aquí, y por qué no está ──
+ * 1. `preventOverflow` en todas las filas: una partida con quince viñetas
+ *    salta entera a la hoja siguiente en vez de cortarse por la mitad.
+ * 2. `pinTableHeaderRows` sobre la fila 0: el encabezado —PARTIDA, CONCEPTO,
+ *    CANTIDAD…— se repite arriba de cada hoja en la que la tabla siga.
  *
- * El **encabezado que se repite** al pasar de página (`tableHeader`) no se
- * puede poner desde el código: la API responde
- * `Unallowed field: tableHeader`, y `DocumentApp` tampoco lo tiene, así que
- * el ERP viejo tampoco lo pone. En los documentos reales está en la 290 y la
- * 289 pero **no** en la 282, que es el patrón de algo que se marca a mano.
+ * ── Por qué el encabezado estaba sin hacer ──
  *
- * El sitio donde sí se puede dejar puesto de una vez es la **plantilla**: la
- * fila 1 es el molde que se clona, y la 0 es la que hay que fijar.
+ * Se intentó como `tableHeader` **dentro de `updateTableRowStyle`**, y la API
+ * contesta `Unallowed field: tableHeader` y tumba el lote entero. De ahí la
+ * conclusión equivocada de que no se podía y había que marcarlo a mano en la
+ * plantilla.
+ *
+ * Sí se puede: es una **solicitud aparte**. Así lo hace el ERP viejo desde el
+ * 3 de noviembre de 2026 (`COT_05_Documento.gs:1581`,
+ * `ajustesFinalesConDocsApi_`), que por el mismo motivo tiene que bajar de
+ * `DocumentApp` a la API de Docs.
+ *
+ * ── Una diferencia con el original ──
+ *
+ * Allá los dos ajustes van en **dos llamadas distintas**, para que si uno
+ * falla el otro se aplique igual. Aquí van en el lote único del documento: si
+ * la API rechazara el fijado, no saldría el documento en vez de salir sin el
+ * encabezado repetido. Es a propósito —un documento a medias no se distingue
+ * de uno bueno de un vistazo—, y el precio es que un cambio de la API se nota
+ * al generar y no semanas después.
  */
-export function filasDeLaTabla(inicioTabla: number): SolicitudEstiloFila[] {
+export function filasDeLaTabla(
+  inicioTabla: number,
+): Array<SolicitudEstiloFila | SolicitudFijarEncabezado> {
   const tableStartLocation = { index: inicioTabla };
   return [
     {
@@ -650,6 +667,10 @@ export function filasDeLaTabla(inicioTabla: number): SolicitudEstiloFila[] {
         tableRowStyle: { preventOverflow: true },
         fields: "preventOverflow",
       },
+    },
+    {
+      // La 0 es el encabezado; la 1 es el molde que se clona.
+      pinTableHeaderRows: { tableStartLocation, pinnedHeaderRowsCount: 1 },
     },
   ];
 }

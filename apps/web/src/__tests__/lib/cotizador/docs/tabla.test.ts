@@ -5,7 +5,10 @@ import {
   type DatosDeTabla,
   type PartidaDeTabla,
 } from "@/src/lib/cotizador/docs/tabla";
-import type { SolicitudEstiloFila } from "@/src/lib/cotizador/docs/tipos";
+import type {
+  SolicitudEstiloFila,
+  SolicitudFijarEncabezado,
+} from "@/src/lib/cotizador/docs/tipos";
 import { TablaSimulada } from "../../../helpers/tabla-simulada";
 
 /**
@@ -358,11 +361,38 @@ describe("solicitudesDeTabla · que la tabla se lea al partirse", () => {
     );
 
   /**
-   * El encabezado que se repite no se pide desde aquí: la API contesta
-   * `Unallowed field: tableHeader`. Se deja puesto en la plantilla. Esta
-   * prueba fija que no se vuelva a intentar, porque el lote entero falla.
+   * El encabezado se repite arriba de cada hoja en la que siga la tabla.
+   *
+   * Se pide con `pinTableHeaderRows`, que es una solicitud **aparte**, como
+   * lo hace el ERP viejo (`COT_05_Documento.gs:1581`). La fila 0 es la del
+   * encabezado; la 1 es el molde que se clona.
    */
-  it("no intenta marcar el encabezado, que la API no deja", () => {
+  it("fija el encabezado de la tabla", () => {
+    const fijados = armarYAplicar(datos()).solicitudes.filter(
+      (s): s is SolicitudFijarEncabezado => "pinTableHeaderRows" in s,
+    );
+    expect(fijados).toHaveLength(1);
+    expect(fijados[0].pinTableHeaderRows.pinnedHeaderRowsCount).toBe(1);
+  });
+
+  /** Habla de la tabla por su inicio, igual que el resto de los estilos. */
+  it("lo fija sobre la tabla de partidas, no sobre otra", () => {
+    const solicitudes = armarYAplicar(datos()).solicitudes;
+    const fijado = solicitudes.find(
+      (s): s is SolicitudFijarEncabezado => "pinTableHeaderRows" in s,
+    );
+    const estilo = estilosDeFila(datos())[0];
+    expect(fijado?.pinTableHeaderRows.tableStartLocation).toEqual(
+      estilo.updateTableRowStyle.tableStartLocation,
+    );
+  });
+
+  /**
+   * Es el error que lo dejó sin hacer: pedirlo como campo de
+   * `updateTableRowStyle` contesta `Unallowed field: tableHeader` y tumba el
+   * lote entero, así que no saldría ningún documento.
+   */
+  it("no lo pide como campo de updateTableRowStyle", () => {
     const campos = estilosDeFila(datos()).map((s) => s.updateTableRowStyle.fields);
     expect(campos.join(" ")).not.toContain("tableHeader");
   });

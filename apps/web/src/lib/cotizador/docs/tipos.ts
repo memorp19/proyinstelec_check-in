@@ -148,7 +148,8 @@ export type Solicitud =
   | SolicitudQuitarVinetas
   | SolicitudUnirCeldas
   | SolicitudEstiloCelda
-  | SolicitudEstiloFila;
+  | SolicitudEstiloFila
+  | SolicitudFijarEncabezado;
 
 export interface SolicitudReemplazarTexto {
   replaceAllText: {
@@ -215,10 +216,8 @@ export interface SolicitudEstiloCelda {
   };
 }
 
-/** Lo que distingue una fila: si repite encabezado y si se puede partir. */
+/** Lo que distingue una fila: si se puede partir entre dos hojas. */
 export interface EstiloFila {
-  /** Repite la fila al principio de cada página en la que siga la tabla. */
-  tableHeader?: boolean;
   /**
    * Impide que el contenido de la fila se parta entre dos páginas.
    *
@@ -241,6 +240,24 @@ export interface SolicitudEstiloFila {
     rowIndices?: number[];
     tableRowStyle: EstiloFila;
     fields: string;
+  };
+}
+
+/**
+ * Repite las primeras filas de la tabla arriba de cada hoja en la que siga.
+ *
+ * Es una **solicitud propia**, no un campo de `tableRowStyle`. Pedirlo como
+ * `tableHeader` dentro de `updateTableRowStyle` es lo que contesta
+ * `Unallowed field: tableHeader` y tumba el lote entero.
+ *
+ * Tampoco existe en `DocumentApp`: el ERP viejo también tiene que bajar a la
+ * API de Docs para ponerlo (`COT_05:1581`).
+ */
+export interface SolicitudFijarEncabezado {
+  pinTableHeaderRows: {
+    tableStartLocation: { index: number };
+    /** Cuántas filas desde la 0. En la tabla de partidas, una. */
+    pinnedHeaderRowsCount: number;
   };
 }
 
