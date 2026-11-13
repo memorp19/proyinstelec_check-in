@@ -16,7 +16,13 @@ import {
   type Cotizacion,
 } from "./cotizaciones";
 import { contactosParaEnvio, type ClienteEmpresa, type Contacto } from "./clientes";
-import { enviarCorreo, plantillaCorreo, type Adjunto, type ResultadoCorreo } from "./correo";
+import {
+  enviarCorreo,
+  escaparHtml,
+  plantillaCorreo,
+  type Adjunto,
+  type ResultadoCorreo,
+} from "./correo";
 import {
   buscarPdfCotizacion,
   ensureCarpetaOT,
@@ -24,6 +30,7 @@ import {
   subirArchivoErp,
 } from "./drive-erp";
 import { folioCotizacion, folioOT } from "./folios";
+import { notaParaRevisor } from "./nota-revision";
 import { createOT, agregarResponsable, setCarpetaDriveOT } from "./ot";
 import { permisosEfectivos } from "./permisos";
 import { listUsers, type UserProfile } from "./users";
@@ -196,6 +203,22 @@ export async function crearNuevaVersionCompleta(params: {
 // ── 1. Enviar a revisión ──────────────────────────────────────────────────────
 
 /**
+ * El recuadro de la nota dentro del correo.
+ *
+ * El aviso de que **no sale en la cotización** va dentro del recuadro, no en
+ * la documentación: quien la escribe ve el correo que la lleva, y así nadie
+ * usa la nota para decirle algo al cliente.
+ */
+function recuadroDeNota(nota: string, quien: string): string {
+  if (!nota) return "";
+  return `<div style="margin:16px 0 0;padding:12px 16px;background:#f3f4f6;border-left:3px solid #1d4ed8;border-radius:6px;">
+      <p style="margin:0 0 6px;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:1px;">Nota de ${escaparHtml(quien)}</p>
+      <p style="margin:0;color:#111827;font-size:13px;white-space:pre-wrap;">${escaparHtml(nota)}</p>
+      <p style="margin:8px 0 0;color:#9ca3af;font-size:11px;">Solo va en este correo: no aparece en la cotización.</p>
+    </div>`;
+}
+
+/**
  * Manda a revisión **la versión que se indica**, no la vigente.
  *
  * `version` es obligatoria a propósito. Crear una versión nueva no exige
@@ -210,8 +233,11 @@ export async function enviarARevision(params: {
   anio: number;
   version: number;
   usuario: string;
+  /** Recado para quien revisa. Opcional, y nunca llega al documento. */
+  nota?: string;
 }): Promise<{ cotizacion: Cotizacion; avisos: string[] }> {
   const avisos: string[] = [];
+  const nota = notaParaRevisor(params.nota);
   const cotizacion = await cambiarEstatus(
     params.numero,
     params.anio,
@@ -226,6 +252,17 @@ export async function enviarARevision(params: {
     referencia: cotPk(cotizacion.numero, cotizacion.anio),
     detalle: folio,
   });
+
+  // La nota queda registrada aunque el correo falle: es lo que alguien dijo al
+  // mandarla, y el correo es solo por dónde viaja.
+  if (nota) {
+    await registrarBitacora({
+      accion: "COTIZACION_NOTA_REVISION",
+      usuario: params.usuario,
+      referencia: cotPk(cotizacion.numero, cotizacion.anio),
+      detalle: `${folio} · ${nota}`,
+    });
+  }
 
   // PDF adjunto si ya existe en la carpeta (opcional en esta etapa)
   let adjuntos: Adjunto[] | undefined;
@@ -259,6 +296,7 @@ export async function enviarARevision(params: {
       html: plantillaCorreo({
         titulo: "Cotización lista para revisión",
         cuerpoHtml: `<table>${filaTabla("Folio", folio)}${filaTabla("Cliente", cotizacion.cliente)}${filaTabla("Título", cotizacion.titulo)}${filaTabla("Elaboró", cotizacion.elaboro)}</table>
+          ${recuadroDeNota(nota, params.usuario)}
           <p style="margin:16px 0 0;"><a href="${urlSistema()}/erp/revision" style="display:inline-block;background:#1d4ed8;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-size:13px;font-weight:bold;">Revisar en el sistema</a></p>
           <p style="color:#6b7280;font-size:12px;margin-top:12px;">Desde ahí puedes aprobarla o solicitar una corrección.</p>`,
       }),
@@ -276,7 +314,9 @@ export async function enviarARevision(params: {
       asunto: `Enviada a revisión · ${folio}`,
       html: plantillaCorreo({
         titulo: "Tu cotización fue enviada a revisión",
-        cuerpoHtml: `<p style="font-size:13px;color:#111827;">${folio} · ${cotizacion.cliente}. Te avisaremos cuando el revisor la apruebe o pida una corrección.</p>`,
+        cuerpoHtml:
+          `<p style="font-size:13px;color:#111827;">${folio} · ${cotizacion.cliente}. Te avisaremos cuando el revisor la apruebe o pida una corrección.</p>` +
+          recuadroDeNota(nota, params.usuario),
       }),
       registradoPor: params.usuario,
       referencia: cotPk(cotizacion.numero, cotizacion.anio),

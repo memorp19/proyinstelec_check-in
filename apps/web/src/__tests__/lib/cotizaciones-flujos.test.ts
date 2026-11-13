@@ -6,6 +6,15 @@ vi.mock("@/src/lib/bitacora", () => ({ registrarBitacora: vi.fn().mockResolvedVa
 vi.mock("@/src/lib/correo", () => ({
   enviarCorreo: vi.fn().mockResolvedValue({ enviado: true }),
   plantillaCorreo: vi.fn((p: { cuerpoHtml: string }) => p.cuerpoHtml),
+  // Fiel al de verdad, que tiene su propia prueba en correo.test.ts: aquí hace
+  // falta para poder afirmar que la nota sale escapada.
+  escaparHtml: (t: string) =>
+    String(t ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;"),
 }));
 vi.mock("@/src/lib/cotizaciones", () => ({
   cotPk: (numero: number, anio: number) => `COT#${String(numero).padStart(3, "0")}-${anio}`,
@@ -166,6 +175,86 @@ describe("enviarARevision", () => {
     expect(registrarBitacora).toHaveBeenCalledWith(
       expect.objectContaining({ accion: "COTIZACION_A_REVISION", detalle: "PCOTOP-001-2026-1" }),
     );
+  });
+
+  // ── La nota para el revisor ────────────────────────────────────────────────
+
+  describe("la nota para el revisor", () => {
+    const mandarCon = (nota?: string) => {
+      dosEnProceso();
+      return enviarARevision({
+        numero: 1, anio: 2026, version: 0, usuario: "ana@proyinstelec.mx", nota,
+      });
+    };
+    const correos = () => vi.mocked(enviarCorreo).mock.calls.map(([c]) => c);
+
+    it("va en el correo al revisor y en la confirmación a quien elaboró", async () => {
+      await mandarCon("Sin viáticos: el cliente los paga aparte.");
+      const html = correos().map((c) => c.html);
+      expect(html).toHaveLength(2);
+      for (const h of html) expect(h).toContain("Sin viáticos: el cliente los paga aparte.");
+    });
+
+    /**
+     * Es la regla entera: el recado es para el revisor, no para el cliente.
+     * El aviso va DENTRO del correo porque es ahí donde lo lee quien lo
+     * escribió, y no en un manual que nadie abre.
+     */
+    it("el correo dice que no aparece en la cotización", async () => {
+      await mandarCon("Revísame la partida 2.");
+      for (const c of correos()) {
+        expect(c.html).toContain("Solo va en este correo: no aparece en la cotización.");
+      }
+    });
+
+    it("dice de quién es la nota", async () => {
+      await mandarCon("Revísame la partida 2.");
+      expect(correos()[0].html).toContain("Nota de ana@proyinstelec.mx");
+    });
+
+    // Lo que alguien teclea no es marcado: un <b> tiene que verse, no aplicarse.
+    it("la nota sale escapada", async () => {
+      await mandarCon('Ojo con <b>esto</b> & "lo otro".');
+      const html = correos()[0].html;
+      expect(html).toContain("&lt;b&gt;esto&lt;/b&gt;");
+      expect(html).toContain("&amp;");
+      expect(html).not.toContain("<b>esto</b>");
+    });
+
+    it("se recorta a 1,500 caracteres", async () => {
+      await mandarCon("x".repeat(2000));
+      expect(correos()[0].html).toContain("x".repeat(1500));
+      expect(correos()[0].html).not.toContain("x".repeat(1501));
+    });
+
+    // Queda registrada aunque el correo falle: es lo que alguien dijo al
+    // mandarla, y el correo es solo por dónde viaja.
+    it("queda en la bitácora con su propia acción", async () => {
+      await mandarCon("Urge para el viernes.");
+      expect(registrarBitacora).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accion: "COTIZACION_NOTA_REVISION",
+          usuario: "ana@proyinstelec.mx",
+          detalle: "PCOTOP-001-2026 · Urge para el viernes.",
+        }),
+      );
+    });
+
+    it("sin nota, todo sale como antes", async () => {
+      await mandarCon();
+      for (const c of correos()) expect(c.html).not.toContain("Nota de");
+      expect(registrarBitacora).not.toHaveBeenCalledWith(
+        expect.objectContaining({ accion: "COTIZACION_NOTA_REVISION" }),
+      );
+    });
+
+    it("una nota en blanco es como no mandar ninguna", async () => {
+      await mandarCon("    ");
+      for (const c of correos()) expect(c.html).not.toContain("Nota de");
+      expect(registrarBitacora).not.toHaveBeenCalledWith(
+        expect.objectContaining({ accion: "COTIZACION_NOTA_REVISION" }),
+      );
+    });
   });
 });
 

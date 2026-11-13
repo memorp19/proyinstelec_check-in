@@ -205,6 +205,22 @@ export async function enviarCorreo(envio: EnvioCorreo): Promise<ResultadoCorreo>
 /**
  * Envuelve el contenido en la plantilla HTML estándar de los correos del ERP.
  */
+/**
+ * Texto de una persona dentro del HTML de un correo.
+ *
+ * Lo que alguien teclea no es marcado: un `<` en una nota tiene que verse como
+ * un `<` y no abrir una etiqueta. Sin esto, un texto con `<b>` cambiaría el
+ * resto del correo, y uno con `</div>` lo rompería a media plantilla.
+ */
+export function escaparHtml(texto: string): string {
+  return String(texto ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 export function plantillaCorreo(params: { titulo: string; cuerpoHtml: string; urlSistema?: string }): string {
   const url = params.urlSistema ?? process.env.NEXTAUTH_URL ?? "";
   return `<!DOCTYPE html>

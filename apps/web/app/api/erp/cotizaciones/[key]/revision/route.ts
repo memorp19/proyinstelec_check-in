@@ -3,6 +3,7 @@ import { auth } from "@/src/auth";
 import { exigirPermiso } from "@/src/lib/permisos";
 import { getVersion, getVigente, parseCotKey } from "@/src/lib/cotizaciones";
 import { enviarARevision } from "@/src/lib/cotizaciones-flujos";
+import { notaParaRevisor } from "@/src/lib/nota-revision";
 
 /**
  * Manda a revisión una cotización que no pasó por el cotizador (las cargadas
@@ -22,11 +23,14 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
   if (!key) return NextResponse.json({ error: "Llave inválida" }, { status: 400 });
 
   let pedida: number | null = null;
+  // La nota para el revisor: al correo y a la bitácora, nunca a la cotización.
+  let nota = "";
   try {
-    const cuerpo = (await req.json()) as { version?: number };
+    const cuerpo = (await req.json()) as { version?: number; nota?: unknown };
     if (Number.isInteger(cuerpo.version) && cuerpo.version! >= 0) pedida = cuerpo.version!;
+    nota = notaParaRevisor(cuerpo.nota);
   } catch {
-    // Sin cuerpo: la vigente.
+    // Sin cuerpo: la vigente y sin nota.
   }
 
   const cotizacion =
@@ -41,6 +45,7 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
       anio: key.anio,
       version: cotizacion.version,
       usuario: session!.user.email ?? "",
+      nota,
     });
     return NextResponse.json({ cotizacion: actualizada, avisos });
   } catch (err) {

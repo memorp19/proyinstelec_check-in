@@ -91,6 +91,11 @@ export function ArmadoClient({
   const [documento, setDocumento] = useState<DocumentoGenerado | null>(null);
   const [errorDocumento, setErrorDocumento] = useState<string | null>(null);
   const [verPrevia, setVerPrevia] = useState(abrirVistaPrevia);
+  /**
+   * El recado para quien revisa. Vive solo aquí, en el estado de la pantalla:
+   * no se autoguarda ni entra al armado, porque no es parte de la cotización.
+   */
+  const [nota, setNota] = useState("");
 
   /**
    * La marca de tiempo del último guardado aceptado. Va en una ref y no en el
@@ -268,12 +273,15 @@ export function ArmadoClient({
       const r = await fetch(ruta, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ version }),
+        body: JSON.stringify({ version, nota }),
       });
       const cuerpo = await r.json();
       if (!r.ok) throw new Error(cuerpo.error ?? "No se pudo mandar a revisión");
 
       setVerPrevia(false);
+      // Ya viajó en el correo: dejarla escrita haría que la siguiente versión
+      // saliera con el recado de la anterior.
+      setNota("");
       setResultadoEnvio({
         total: cuerpo.total ?? 0,
         letra: cuerpo.letra ?? "",
@@ -285,7 +293,7 @@ export function ArmadoClient({
     } finally {
       setEnviando(false);
     }
-  }, [armado, cargar, cotKey, faltantes, guardarYa, version]);
+  }, [armado, cargar, cotKey, faltantes, guardarYa, nota, version]);
 
   // ── Dibujo ──────────────────────────────────────────────────────────────────
   if (cargando) {
@@ -475,6 +483,8 @@ export function ArmadoClient({
             folio={cotizacion.folio}
             sinArmado={armado.partidas.length === 0}
             faltantes={faltantes}
+            nota={nota}
+            onNota={setNota}
             enviando={enviando}
             error={error}
             onCerrar={() => setVerPrevia(false)}

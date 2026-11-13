@@ -18,7 +18,13 @@ vi.mock("googleapis", () => ({
 
 import { google } from "googleapis";
 import { registrarBitacora } from "@/src/lib/bitacora";
-import { enviarCorreo, construirMime, plantillaCorreo, _resetCorreoConfigCache } from "@/src/lib/correo";
+import {
+  enviarCorreo,
+  construirMime,
+  escaparHtml,
+  plantillaCorreo,
+  _resetCorreoConfigCache,
+} from "@/src/lib/correo";
 
 const FAKE_KEY = JSON.stringify({
   client_email: "erp@proyecto.iam.gserviceaccount.com",
@@ -133,5 +139,36 @@ describe("plantillaCorreo", () => {
     expect(html).toContain("Nueva actividad");
     expect(html).toContain("<p>Detalle</p>");
     expect(html).toContain("https://app.proyinstelec.mx/erp");
+  });
+});
+
+
+// ── El escape del texto de una persona ────────────────────────────────────────
+
+describe("escaparHtml", () => {
+  /** Un `<b>` tecleado por alguien tiene que verse, no aplicarse. */
+  it("neutraliza las etiquetas", () => {
+    expect(escaparHtml("Ojo con <b>esto</b>")).toBe("Ojo con &lt;b&gt;esto&lt;/b&gt;");
+  });
+
+  it("escapa el ampersand PRIMERO, para no escapar dos veces", () => {
+    // Al revés, el "&" de "&lt;" que acaba de salir se volvería "&amp;lt;".
+    expect(escaparHtml("<a & b>")).toBe("&lt;a &amp; b&gt;");
+  });
+
+  it("escapa las comillas, que van dentro de atributos", () => {
+    expect(escaparHtml(`dijo "hola" y 'adiós'`)).toBe("dijo &quot;hola&quot; y &#39;adiós&#39;");
+  });
+
+  it("el texto normal no se toca", () => {
+    expect(escaparHtml("Revísame la partida 2, urge.")).toBe("Revísame la partida 2, urge.");
+    expect(escaparHtml("Acentos y eñes: cotización, diseño.")).toBe(
+      "Acentos y eñes: cotización, diseño.",
+    );
+  });
+
+  it("lo que no es texto no lo rompe", () => {
+    expect(escaparHtml(undefined as unknown as string)).toBe("");
+    expect(escaparHtml(null as unknown as string)).toBe("");
   });
 });

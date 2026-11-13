@@ -9,7 +9,8 @@ import {
   type ResultadoCotizacion,
 } from "@/src/lib/cotizador";
 import { FALTA_DATO, type Faltante } from "@/src/lib/cotizador/docs/valores";
-import { btnGhost, btnPrimary, conMoneda, etiqueta, pesos } from "../ui";
+import { LARGO_MAXIMO_NOTA } from "@/src/lib/nota-revision";
+import { btnGhost, btnPrimary, conMoneda, etiqueta, input, pesos } from "../ui";
 
 /**
  * Lo que va a ver el cliente, antes de que nadie lo mande a ningún lado.
@@ -30,6 +31,8 @@ export function VistaPrevia({
   folio,
   sinArmado,
   faltantes,
+  nota,
+  onNota,
   enviando,
   error,
   onCerrar,
@@ -44,6 +47,9 @@ export function VistaPrevia({
   sinArmado: boolean;
   /** Lo que saldría como `⟨falta⟩` en el documento. Con algo aquí, no se manda. */
   faltantes: Faltante[];
+  /** El recado para quien revisa. Va al correo, nunca al documento. */
+  nota: string;
+  onNota: (valor: string) => void;
   enviando: boolean;
   error: string | null;
   onCerrar: () => void;
@@ -221,6 +227,38 @@ export function VistaPrevia({
               </ul>
             </div>
           )}
+
+          {/**
+            * La nota para el revisor.
+            *
+            * Va **solo en el correo**, y eso se dice aquí y no en un manual:
+            * quien la escribe tiene que saber, mientras la escribe, que el
+            * cliente no la va a leer. Si no, acabaría usándose para decirle
+            * algo al cliente que nunca le llega.
+            */}
+          <div className="border-t border-white/10 pt-3">
+            <label className="block">
+              <span className={etiqueta}>Nota para el revisor (opcional)</span>
+              <textarea
+                value={nota}
+                onChange={(e) => onNota(e.target.value.slice(0, LARGO_MAXIMO_NOTA))}
+                rows={2}
+                maxLength={LARGO_MAXIMO_NOTA}
+                placeholder="Ej. El cliente pidió el precio sin los viáticos; va en el ajuste de la partida 2."
+                className={`${input} mt-1`}
+              />
+            </label>
+            <div className="flex justify-between gap-3 mt-1">
+              <span className="font-body text-[10px] text-white/30">
+                Solo va en el correo al revisor: no aparece en la cotización ni en el PDF.
+              </span>
+              {nota.length > 0 && (
+                <span className="font-mono text-[10px] text-white/30 tabular-nums shrink-0">
+                  {nota.length} / {LARGO_MAXIMO_NOTA}
+                </span>
+              )}
+            </div>
+          </div>
 
           {error && <p className="font-mono text-xs text-danger">{error}</p>}
         </div>

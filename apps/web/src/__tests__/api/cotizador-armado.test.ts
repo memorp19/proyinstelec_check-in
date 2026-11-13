@@ -355,6 +355,35 @@ describe("POST revisión", () => {
     expect((await POST_REVISION(pedir({ version: 0 }, "POST"), { params })).status).toBe(200);
   });
 
+  // ── La nota para el revisor ────────────────────────────────────────────────
+
+  it("la nota llega al flujo, que es quien la manda en el correo", async () => {
+    await POST_REVISION(pedir({ version: 0, nota: "Revisa la partida 2." }, "POST"), { params });
+    expect(enviarARevision).toHaveBeenCalledWith(
+      expect.objectContaining({ nota: "Revisa la partida 2." }),
+    );
+  });
+
+  it("sin nota, la ruta manda cadena vacía y no undefined", async () => {
+    await POST_REVISION(pedir({ version: 0 }, "POST"), { params });
+    expect(enviarARevision).toHaveBeenCalledWith(expect.objectContaining({ nota: "" }));
+  });
+
+  /**
+   * El recorte y el saneado son del servidor, no de la pantalla: esta ruta se
+   * puede llamar sin pasar por el navegador.
+   */
+  it("una nota de más de 1,500 caracteres llega recortada", async () => {
+    await POST_REVISION(pedir({ version: 0, nota: "x".repeat(2000) }, "POST"), { params });
+    const { nota } = vi.mocked(enviarARevision).mock.calls.at(-1)![0];
+    expect(nota).toHaveLength(1500);
+  });
+
+  it("una nota que no es texto se ignora", async () => {
+    await POST_REVISION(pedir({ version: 0, nota: { evil: true } }, "POST"), { params });
+    expect(enviarARevision).toHaveBeenCalledWith(expect.objectContaining({ nota: "" }));
+  });
+
   // Un renglón que alguien apagó a propósito no es un hueco, es una decisión.
   it("un renglón ocultado a propósito no bloquea", async () => {
     vi.mocked(getArmado).mockResolvedValue({
