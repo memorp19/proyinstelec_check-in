@@ -17,9 +17,13 @@ vi.mock("googleapis", () => ({
 }));
 
 import { google } from "googleapis";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { registrarBitacora } from "@/src/lib/bitacora";
 import {
   enviarCorreo,
+  carpetaDeVolcado,
   construirMime,
   escaparHtml,
   plantillaCorreo,
@@ -170,5 +174,112 @@ describe("escaparHtml", () => {
   it("lo que no es texto no lo rompe", () => {
     expect(escaparHtml(undefined as unknown as string)).toBe("");
     expect(escaparHtml(null as unknown as string)).toBe("");
+  });
+});
+
+// ── El correo que no se manda, escrito en disco ───────────────────────────────
+
+describe("volcado del correo en desarrollo", () => {
+  let carpeta: string;
+  const VERCEL = process.env.VERCEL;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    carpeta = await mkdtemp(join(tmpdir(), "correos-prueba-"));
+    process.env.CORREO_VOLCADO_DIR = carpeta;
+    process.env.CORREO_DESHABILITADO = "true";
+    delete process.env.VERCEL;
+  });
+
+  afterEach(async () => {
+    delete process.env.CORREO_VOLCADO_DIR;
+    delete process.env.CORREO_DESHABILITADO;
+    if (VERCEL === undefined) delete process.env.VERCEL;
+    else process.env.VERCEL = VERCEL;
+    await rm(carpeta, { recursive: true, force: true });
+  });
+
+  const mandar = (html = "<p>Hola</p>", asunto = "Lista para Revisión · PCOTOP-001-2026") =>
+    enviarCorreo({ para: ["revisor@proyinstelec.mx"], asunto, html });
+
+  /**
+   * Es el agujero que esto viene a tapar: con el correo deshabilitado solo
+   * quedaba una línea en la consola con el destinatario y el asunto, así que
+   * revisar el cuerpo obligaba a mandarse el correo a uno mismo.
+   */
+  it("escribe el cuerpo del correo que no se envió", async () => {
+    const r = await mandar("<p>El <b>cuerpo</b></p>");
+    expect(r).toEqual({ enviado: false, motivo: "deshabilitado" });
+
+    const [archivo] = await readdir(carpeta);
+    expect(archivo).toBeDefined();
+    expect(await readFile(join(carpeta, archivo), "utf8")).toContain("<p>El <b>cuerpo</b></p>");
+  });
+
+  // Lo que se abre en el navegador tiene que verse como el correo de verdad:
+  // los metadatos van en un comentario, no en un recuadro encima.
+  it("los metadatos van en un comentario, no en el cuerpo", async () => {
+    await mandar();
+    const [archivo] = await readdir(carpeta);
+    const contenido = await readFile(join(carpeta, archivo), "utf8");
+    expect(contenido.startsWith("<!--")).toBe(true);
+    expect(contenido).toContain("revisor@proyinstelec.mx");
+    expect(contenido).toContain("NO se envió");
+  });
+
+  it("el nombre del archivo lleva la marca de tiempo y el asunto, sin acentos", async () => {
+    await mandar();
+    const [archivo] = await readdir(carpeta);
+    expect(archivo).toMatch(/^\d{4}-\d{2}-\d{2}T[\d-]+__Lista-para-Revision-PCOTOP-001-2026\.html$/);
+  });
+
+  /** Un correo por archivo: dos envíos no se pisan. */
+  it("cada correo es un archivo", async () => {
+    await mandar("<p>uno</p>", "Uno");
+    await mandar("<p>dos</p>", "Dos");
+    expect(await readdir(carpeta)).toHaveLength(2);
+  });
+
+  /**
+   * La puerta es `esDesarrollo()`, y `VERCEL` la pone la plataforma en todos
+   * sus entornos. Un despliegue no escribe correos en disco ni aunque alguien
+   * dejara `CORREO_DESHABILITADO` puesto por error.
+   */
+  it("en un despliegue no escribe nada", async () => {
+    process.env.VERCEL = "1";
+    const r = await mandar();
+    expect(r.enviado).toBe(false);
+    expect(await readdir(carpeta)).toEqual([]);
+  });
+
+  /**
+   * Una comodidad de desarrollo no puede cambiar lo que pasa con el correo.
+   *
+   * Para que falle de verdad, la carpeta cuelga de un **archivo**: `mkdir`
+   * recursivo crea cualquier ruta que no exista, así que un nombre inventado
+   * no probaría nada.
+   */
+  it("si la carpeta no se puede escribir, el no-envío sigue su curso", async () => {
+    const estorbo = join(carpeta, "esto-es-un-archivo");
+    await writeFile(estorbo, "no soy una carpeta", "utf8");
+    process.env.CORREO_VOLCADO_DIR = join(estorbo, "dentro");
+
+    const errores = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await enviarCorreo({ para: ["a@x.com"], asunto: "x", html: "<p>x</p>" });
+
+    expect(r).toEqual({ enviado: false, motivo: "deshabilitado" });
+    expect(errores).toHaveBeenCalledWith(
+      "[correo] no se pudo escribir el volcado:",
+      expect.any(String),
+    );
+    expect(registrarBitacora).toHaveBeenCalledWith(
+      expect.objectContaining({ accion: "CORREO_OMITIDO" }),
+    );
+    errores.mockRestore();
+  });
+
+  it("sin CORREO_VOLCADO_DIR usa una carpeta fuera del repositorio", () => {
+    delete process.env.CORREO_VOLCADO_DIR;
+    expect(carpetaDeVolcado()).toBe(join(tmpdir(), "proyinstelec-correos"));
   });
 });

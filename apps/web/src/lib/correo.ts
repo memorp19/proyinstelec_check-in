@@ -1,3 +1,6 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { google } from "googleapis";
 import { registrarBitacora } from "./bitacora";
 import { DEMO_MODE } from "../demo";
@@ -124,6 +127,79 @@ export function construirMime(params: {
   return lineas.join("\r\n");
 }
 
+// ── El correo que no se manda, para poder mirarlo ─────────────────────────────
+
+/**
+ * Si estamos en una máquina de desarrollo.
+ *
+ * Las dos condiciones, y las dos tienen que fallar para que se escriba algo:
+ * `NODE_ENV` lo pone Next en cada build, y `VERCEL` la pone la plataforma en
+ * todos sus entornos —incluidos los de vista previa—. Un despliegue no escribe
+ * correos en disco ni aunque alguien dejara `CORREO_DESHABILITADO` puesto.
+ */
+const esDesarrollo = (): boolean =>
+  process.env.NODE_ENV !== "production" && !process.env.VERCEL;
+
+/** La carpeta del volcado: **fuera del repositorio**, en el temporal del sistema. */
+export const carpetaDeVolcado = (): string =>
+  process.env.CORREO_VOLCADO_DIR?.trim() || join(tmpdir(), "proyinstelec-correos");
+
+/** `Lista para Revisión · PCOTOP-001-2026` → `Lista-para-Revision-PCOTOP-001-2026`. */
+function nombreDeArchivo(asunto: string, cuando: Date): string {
+  const marca = cuando.toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const limpio = asunto
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+  return `${marca}__${limpio || "sin-asunto"}.html`;
+}
+
+/**
+ * Escribe en disco el correo que NO se mandó, para poder abrirlo y revisarlo.
+ *
+ * Con `CORREO_DESHABILITADO=true` el ERP solo dejaba una línea en la consola
+ * con el destinatario y el asunto: para comprobar el cuerpo —que una nota
+ * salga escapada, que el recuadro esté donde va— no había forma que no fuera
+ * mandarse el correo a uno mismo.
+ *
+ * **Solo en desarrollo.** En producción no se llama, y si se llamara no haría
+ * nada: `esDesarrollo()` es la única puerta.
+ *
+ * Los metadatos van en un comentario de HTML y no en un recuadro visible, para
+ * que lo que se abre en el navegador se vea **exactamente** como el correo que
+ * habría salido. Los adjuntos solo se nombran: no se escriben.
+ *
+ * Nunca lanza. Esto es una comodidad de desarrollo; si falla, el envío —o el
+ * no-envío— sigue su curso y la consola lo dice.
+ */
+async function volcarCorreo(envio: EnvioCorreo, detalle: string): Promise<string | null> {
+  if (!esDesarrollo()) return null;
+
+  try {
+    const carpeta = carpetaDeVolcado();
+    await mkdir(carpeta, { recursive: true });
+    const ruta = join(carpeta, nombreDeArchivo(envio.asunto, new Date()));
+
+    const adjuntos = (envio.adjuntos ?? [])
+      .map((a) => `${a.filename} (${a.mimeType}, ${a.contenido.length} bytes)`)
+      .join(", ");
+    // `--` dentro de un comentario de HTML lo cierra antes de tiempo.
+    const sinGuiones = (t: string) => t.replace(/--+/g, "—");
+    const cabecera =
+      `<!--\n  ${sinGuiones(detalle)}\n` +
+      (adjuntos ? `  Adjuntos: ${sinGuiones(adjuntos)}\n` : "") +
+      `  Este correo NO se envió: CORREO_DESHABILITADO o DEMO_MODE.\n-->\n`;
+
+    await writeFile(ruta, cabecera + envio.html, "utf8");
+    return ruta;
+  } catch (err) {
+    console.error("[correo] no se pudo escribir el volcado:", (err as Error).message);
+    return null;
+  }
+}
+
 // ── Envío ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -131,7 +207,9 @@ export function construirMime(params: {
  * el mensaje sale de la cuenta CORREO_REMITENTE).
  *
  * En DEMO_MODE o con CORREO_DESHABILITADO=true no envía: registra el intento
- * en consola y bitácora (CORREO_OMITIDO) y devuelve { enviado: false }.
+ * en consola y bitácora (CORREO_OMITIDO) y devuelve { enviado: false }. En
+ * desarrollo, además, **escribe el cuerpo en disco** para poder revisarlo
+ * (`volcarCorreo`), y dice en la consola dónde quedó.
  * Todo resultado queda en bitácora (CORREO_ENVIADO / CORREO_OMITIDO / CORREO_ERROR).
  */
 export async function enviarCorreo(envio: EnvioCorreo): Promise<ResultadoCorreo> {
@@ -146,6 +224,8 @@ export async function enviarCorreo(envio: EnvioCorreo): Promise<ResultadoCorreo>
 
   if (DEMO_MODE || process.env.CORREO_DESHABILITADO === "true") {
     console.log(`[correo omitido] ${detalle}`);
+    const volcado = await volcarCorreo(envio, detalle);
+    if (volcado) console.log(`[correo omitido] cuerpo en ${volcado}`);
     await registrarBitacora({
       accion: "CORREO_OMITIDO",
       usuario,
