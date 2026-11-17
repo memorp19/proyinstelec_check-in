@@ -33,7 +33,8 @@ import { folioCotizacion, folioOT } from "./folios";
 import { notaParaRevisor } from "./nota-revision";
 import { createOT, agregarResponsable, setCarpetaDriveOT } from "./ot";
 import { permisosEfectivos } from "./permisos";
-import { listUsers, type UserProfile } from "./users";
+import { conPuntoFinal } from "./texto";
+import { getUserByEmail, listUsers, type UserProfile } from "./users";
 
 /**
  * Flujos de negocio de cotizaciones (revisión → aprobación → envío → OC → OT),
@@ -91,6 +92,18 @@ export async function correoDeElaborador(elaboro: string): Promise<string | null
   if (porIniciales) return porIniciales.email;
   const porNombre = todos.find((u) => u.nombre.toLowerCase() === valor);
   return porNombre?.email ?? null;
+}
+
+/**
+ * Cómo se le nombra a alguien en un correo: su nombre del catálogo, y el
+ * correo **solo** si no hay nombre.
+ *
+ * Un recuadro firmado "NOTA DE SUPERADMIN@PROYINSTELEC.MX" no dice quién
+ * escribió el recado; dice qué cuenta se usó. El revisor necesita lo primero.
+ */
+export async function nombreDeUsuario(email: string): Promise<string> {
+  const usuario = await getUserByEmail(email);
+  return usuario?.nombre.trim() || email;
 }
 
 const urlSistema = () => process.env.NEXTAUTH_URL ?? "";
@@ -219,11 +232,18 @@ export async function crearNuevaVersionCompleta(params: {
  * El aviso de que **no sale en la cotización** va dentro del recuadro, no en
  * la documentación: quien la escribe ve el correo que la lleva, y así nadie
  * usa la nota para decirle algo al cliente.
+ *
+ * `quien` es el **nombre** de quien la escribió, no su correo (ver
+ * `nombreDeUsuario`), y la etiqueta ya no va en `text-transform:uppercase`:
+ * lleva dentro un nombre, y un nombre en mayúsculas deja de ser el nombre de
+ * nadie —"McAllen" pasa a "MCALLEN"—. De paso, Outlook de escritorio ni
+ * siquiera aplica esa regla, así que el mismo correo se veía de dos formas
+ * según quién lo abriera.
  */
 function recuadroDeNota(nota: string, quien: string): string {
   if (!nota) return "";
   return `<div style="margin:16px 0 0;padding:12px 16px;background:#f3f4f6;border-left:3px solid #1d4ed8;border-radius:6px;">
-      <p style="margin:0 0 6px;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:1px;">Nota de ${escaparHtml(quien)}</p>
+      <p style="margin:0 0 6px;color:#6b7280;font-size:11px;font-weight:bold;">Nota de ${escaparHtml(quien)}</p>
       <p style="margin:0;color:#111827;font-size:13px;white-space:pre-wrap;">${escaparHtml(nota)}</p>
       <p style="margin:8px 0 0;color:#9ca3af;font-size:11px;">Solo va en este correo: no aparece en la cotización.</p>
     </div>`;
@@ -275,6 +295,10 @@ export async function enviarARevision(params: {
     });
   }
 
+  // Quién firma el recuadro. Se busca solo si hay nota: sin ella nadie firma
+  // nada y el catálogo no tiene por qué consultarse.
+  const firmaNota = nota ? await nombreDeUsuario(params.usuario) : "";
+
   // PDF adjunto si ya existe en la carpeta (opcional en esta etapa)
   let adjuntos: Adjunto[] | undefined;
   if (cotizacion.drive_folder_id) {
@@ -307,7 +331,7 @@ export async function enviarARevision(params: {
       html: plantillaCorreo({
         titulo: "Cotización lista para revisión",
         cuerpoHtml: `<table>${filaTabla("Folio", folio)}${filaTabla("Cliente", cotizacion.cliente)}${filaTabla("Título", cotizacion.titulo)}${filaTabla("Elaboró", cotizacion.elaboro)}</table>
-          ${recuadroDeNota(nota, params.usuario)}
+          ${recuadroDeNota(nota, firmaNota)}
           <p style="margin:16px 0 0;"><a href="${urlSistema()}/erp/revision" style="display:inline-block;background:#1d4ed8;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-size:13px;font-weight:bold;">Revisar en el sistema</a></p>
           <p style="color:#6b7280;font-size:12px;margin-top:12px;">Desde ahí puedes aprobarla o solicitar una corrección.</p>`,
       }),
@@ -326,8 +350,8 @@ export async function enviarARevision(params: {
       html: plantillaCorreo({
         titulo: "Tu cotización fue enviada a revisión",
         cuerpoHtml:
-          `<p style="font-size:13px;color:#111827;">${folio} · ${escaparHtml(cotizacion.cliente)}. Te avisaremos cuando el revisor la apruebe o pida una corrección.</p>` +
-          recuadroDeNota(nota, params.usuario),
+          `<p style="font-size:13px;color:#111827;">${folio} · ${escaparHtml(conPuntoFinal(cotizacion.cliente))} Te avisaremos cuando el revisor la apruebe o pida una corrección.</p>` +
+          recuadroDeNota(nota, firmaNota),
       }),
       registradoPor: params.usuario,
       referencia: cotPk(cotizacion.numero, cotizacion.anio),
