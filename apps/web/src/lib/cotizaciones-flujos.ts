@@ -94,8 +94,19 @@ export async function correoDeElaborador(elaboro: string): Promise<string | null
 }
 
 const urlSistema = () => process.env.NEXTAUTH_URL ?? "";
+/**
+ * Un renglón de las tablas de los correos.
+ *
+ * **Escapa los dos lados.** Casi todo lo que entra aquí lo tecleó alguien —la
+ * razón social, el título, las iniciales, el número de orden de compra— y lo
+ * que alguien teclea no es marcado: un cliente llamado `Aceros & Cía <MX>`
+ * tiene que leerse así, no romper la tabla a media fila.
+ *
+ * Va en el helper y no en cada llamada a propósito: así no hay forma de
+ * agregar un renglón nuevo y olvidarse del escape.
+ */
 const filaTabla = (etiqueta: string, valor: string) =>
-  `<tr><td style="padding:4px 12px 4px 0;color:#6b7280;font-size:13px;">${etiqueta}</td><td style="padding:4px 0;color:#111827;font-size:13px;font-weight:bold;">${valor}</td></tr>`;
+  `<tr><td style="padding:4px 12px 4px 0;color:#6b7280;font-size:13px;">${escaparHtml(etiqueta)}</td><td style="padding:4px 0;color:#111827;font-size:13px;font-weight:bold;">${escaparHtml(valor)}</td></tr>`;
 
 /** Importe con separadores de miles: "1234.5" → "1,234.50". */
 export function formatearMonto(monto: string, moneda: "MXN" | "USD"): string {
@@ -315,7 +326,7 @@ export async function enviarARevision(params: {
       html: plantillaCorreo({
         titulo: "Tu cotización fue enviada a revisión",
         cuerpoHtml:
-          `<p style="font-size:13px;color:#111827;">${folio} · ${cotizacion.cliente}. Te avisaremos cuando el revisor la apruebe o pida una corrección.</p>` +
+          `<p style="font-size:13px;color:#111827;">${folio} · ${escaparHtml(cotizacion.cliente)}. Te avisaremos cuando el revisor la apruebe o pida una corrección.</p>` +
           recuadroDeNota(nota, params.usuario),
       }),
       registradoPor: params.usuario,
@@ -360,7 +371,7 @@ export async function aprobarCotizacion(params: {
       asunto: `Aprobada · ${folio}`,
       html: plantillaCorreo({
         titulo: "Cotización aprobada",
-        cuerpoHtml: `<p style="font-size:13px;color:#111827;">${folio} · ${vigente.cliente} fue aprobada. Ya puedes enviarla al cliente desde el sistema.</p>`,
+        cuerpoHtml: `<p style="font-size:13px;color:#111827;">${folio} · ${escaparHtml(vigente.cliente)} fue aprobada. Ya puedes enviarla al cliente desde el sistema.</p>`,
       }),
       registradoPor: params.aprobadoPor,
       referencia: cotPk(vigente.numero, vigente.anio),
@@ -411,7 +422,7 @@ export async function solicitarCorreccion(params: {
         titulo: "Se solicitó una corrección",
         cuerpoHtml: `<table>${filaTabla("Folio", folio)}${filaTabla("Cliente", cotizacion.cliente)}</table>
           <p style="font-size:13px;color:#111827;margin-top:12px;">La cotización regresó a PROCESO. Comentarios del revisor:</p>
-          <blockquote style="border-left:3px solid #d1d5db;margin:8px 0;padding:4px 12px;color:#374151;font-size:13px;">${params.comentario.trim()}</blockquote>`,
+          <blockquote style="border-left:3px solid #d1d5db;margin:8px 0;padding:4px 12px;color:#374151;font-size:13px;">${escaparHtml(params.comentario.trim())}</blockquote>`,
       }),
       registradoPor: params.usuario,
       referencia: cotPk(cotizacion.numero, cotizacion.anio),
@@ -545,12 +556,15 @@ export async function enviarAlCliente(params: {
   const asunto =
     params.asunto?.trim() ||
     `Cotización PCOTOP-${String(cotizacion.numero).padStart(3, "0")} - ${cotizacion.cliente}`;
+  // `mensajeHtml` es marcado **a propósito**: lo compone quien envía, y por eso
+  // no se escapa. El cuerpo por omisión es otra cosa: lo arma el ERP con datos
+  // tecleados, y ahí cada uno va escapado. Este correo sale de la empresa.
   const cuerpo =
     params.mensajeHtml?.trim() ||
-    `<p style="font-size:13px;color:#111827;">Estimado(a) ${cotizacion.dirigida_a}:</p>
-     <p style="font-size:13px;color:#111827;">Por este medio le hacemos llegar nuestra propuesta económica del proyecto <b>${cotizacion.titulo}</b>, adjunta en PDF.</p>
+    `<p style="font-size:13px;color:#111827;">Estimado(a) ${escaparHtml(cotizacion.dirigida_a)}:</p>
+     <p style="font-size:13px;color:#111827;">Por este medio le hacemos llegar nuestra propuesta económica del proyecto <b>${escaparHtml(cotizacion.titulo)}</b>, adjunta en PDF.</p>
      <p style="font-size:13px;color:#111827;">Quedamos atentos a sus comentarios.</p>
-     <p style="font-size:13px;color:#111827;margin-top:16px;">${params.remitente.nombre}<br/>${params.telefonoFirma ?? ""}<br/>${params.remitente.email}</p>`;
+     <p style="font-size:13px;color:#111827;margin-top:16px;">${escaparHtml(params.remitente.nombre)}<br/>${escaparHtml(params.telefonoFirma ?? "")}<br/>${escaparHtml(params.remitente.email)}</p>`;
 
   const resultado = await enviarCorreo({
     para: params.destinatarios,

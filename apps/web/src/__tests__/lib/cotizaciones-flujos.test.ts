@@ -728,3 +728,105 @@ describe("ingresarOrdenCompra — elegir versión", () => {
     expect(r.avisos.join(" ")).not.toContain("NO ASIGNADA");
   });
 });
+
+// ── Lo que alguien teclea no es marcado ───────────────────────────────────────
+
+/**
+ * Los correos se arman concatenando texto de la base, y casi todo ese texto lo
+ * tecleó una persona: la razón social, el título, las iniciales, el comentario
+ * del revisor. Un cliente llamado `Aceros & Cía <MX>` no puede romper la tabla
+ * del correo, y menos el que sale de la empresa.
+ */
+describe("el texto tecleado va escapado en los correos", () => {
+  const FEO = 'Aceros & Cía <script>alert(1)</script> "SA"';
+  const sucia = { ...vigente, cliente: FEO, titulo: "Subestación <b>Norte</b>" };
+
+  it("la razón social y el título, en la tabla del correo al revisor", async () => {
+    vi.mocked(cambiarEstatus).mockResolvedValue({ ...sucia, estatus: "REVISION" } as any);
+
+    await enviarARevision({ numero: 1, anio: 2026, version: 0, usuario: "ana@proyinstelec.mx" });
+
+    const [alRevisor] = vi.mocked(enviarCorreo).mock.calls.map(([c]) => c);
+    expect(alRevisor.html).toContain("Aceros &amp; Cía &lt;script&gt;");
+    expect(alRevisor.html).toContain("Subestación &lt;b&gt;Norte&lt;/b&gt;");
+    expect(alRevisor.html).not.toContain("<script>");
+  });
+
+  it("y en la confirmación a quien elaboró", async () => {
+    vi.mocked(cambiarEstatus).mockResolvedValue({ ...sucia, estatus: "REVISION" } as any);
+
+    await enviarARevision({ numero: 1, anio: 2026, version: 0, usuario: "ana@proyinstelec.mx" });
+
+    const correos = vi.mocked(enviarCorreo).mock.calls.map(([c]) => c);
+    expect(correos[1].html).not.toContain("<script>");
+    expect(correos[1].html).toContain("Aceros &amp; Cía");
+  });
+
+  /**
+   * El asunto **no** es HTML: escaparlo haría que el revisor leyera
+   * «Aceros &amp;amp; Cía» en su bandeja.
+   */
+  it("el asunto no se escapa, porque no es HTML", async () => {
+    vi.mocked(cambiarEstatus).mockResolvedValue({ ...sucia, estatus: "REVISION" } as any);
+
+    await enviarARevision({ numero: 1, anio: 2026, version: 0, usuario: "ana@proyinstelec.mx" });
+
+    expect(vi.mocked(enviarCorreo).mock.calls[0][0].asunto).toContain("Aceros & Cía");
+  });
+
+  // Lo teclea el revisor, y va en el correo de vuelta a quien cotizó.
+  it("el comentario del revisor, al pedir una corrección", async () => {
+    vi.mocked(getVigente).mockResolvedValue(vigente as any);
+    vi.mocked(cambiarEstatus).mockResolvedValue({ ...vigente, estatus: "PROCESO" } as any);
+
+    await solicitarCorreccion({
+      numero: 1, anio: 2026,
+      comentario: 'Revisa el <b>precio</b> & la vigencia',
+      usuario: "eduardo@proyinstelec.mx",
+    });
+
+    const html = vi.mocked(enviarCorreo).mock.calls[0][0].html;
+    expect(html).toContain("Revisa el &lt;b&gt;precio&lt;/b&gt; &amp; la vigencia");
+    expect(html).not.toContain("<b>precio</b>");
+  });
+
+  describe("el correo al cliente", () => {
+    beforeEach(() => {
+      vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({ puede: true, cotizacion: sucia as any });
+      vi.mocked(buscarPdfCotizacion).mockResolvedValue({
+        pdf: { filename: "c.pdf", contenido: Buffer.from("PDF") },
+        nombresEnCarpeta: [],
+      } as any);
+      vi.mocked(listUsers).mockResolvedValue([] as any);
+      vi.mocked(cambiarEstatus).mockResolvedValue({ ...sucia, estatus: "ENVIADA" } as any);
+    });
+
+    // Este sale de la empresa: es el que más importa de todos.
+    it("escapa el título y a quién va dirigida en el cuerpo por omisión", async () => {
+      await enviarAlCliente({
+        numero: 1, anio: 2026, destinatarios: ["cliente@empresa.com"],
+        remitente: { email: "maria@proyinstelec.mx", nombre: 'María <"Tere">' },
+      });
+
+      const html = vi.mocked(enviarCorreo).mock.calls[0][0].html;
+      expect(html).toContain("Subestación &lt;b&gt;Norte&lt;/b&gt;");
+      expect(html).toContain("María &lt;&quot;Tere&quot;&gt;");
+      expect(html).not.toContain("<b>Norte</b>");
+    });
+
+    /**
+     * La excepción, y es deliberada: `mensajeHtml` lo compone quien envía
+     * **como marcado**. Escaparlo convertiría su párrafo en código a la vista.
+     */
+    it("pero no toca el mensaje que escribió quien envía", async () => {
+      await enviarAlCliente({
+        numero: 1, anio: 2026, destinatarios: ["cliente@empresa.com"],
+        remitente: { email: "maria@proyinstelec.mx", nombre: "María" },
+        mensajeHtml: "<p>Estimado cliente, va la <b>propuesta</b>.</p>",
+      });
+
+      const html = vi.mocked(enviarCorreo).mock.calls[0][0].html;
+      expect(html).toContain("<b>propuesta</b>");
+    });
+  });
+});
