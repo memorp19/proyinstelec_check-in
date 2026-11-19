@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { CONDICIONES_POR_OMISION, documentoVacio } from "@/src/lib/cotizador/documento";
+import { PARTES, type Tramo } from "@/src/lib/cotizador/docs/lote";
 import { esVersionAnterior, nombreDelDocumento } from "@/src/lib/cotizador/docs/nombre";
 import {
   generarDocumento,
@@ -8,7 +9,11 @@ import {
 } from "@/src/lib/cotizador/docs/generar";
 import type { Armado } from "@/src/lib/cotizador/armado";
 import type { ResultadoCotizacion } from "@/src/lib/cotizador/tipos";
-import { ArmaDocumento, documentosFalso } from "../../../helpers/documentos-falso";
+import {
+  ArmaDocumento,
+  documentosFalso,
+  type OpcionesDelFalso,
+} from "../../../helpers/documentos-falso";
 
 /** Todos los datos son inventados. */
 
@@ -212,6 +217,197 @@ describe("solicitudesDelDocumento", () => {
     const { avisos } = solicitudesDelDocumento(doc, datos(), "2026-10-05");
     // El contacto viene vacío: sale ⟨falta⟩ y se avisa.
     expect(avisos.join(" ")).toContain("el nombre del contacto");
+  });
+});
+
+/**
+ * Una plantilla que trae **todo** lo que lleva formato: un renglón en rojo,
+ * los Términos con su renglón en blanco antes, y el cuadro.
+ */
+const plantillaConFormato = () =>
+  new ArmaDocumento()
+    .parrafoRojo("{{CLIENTE}}")
+    .parrafo("{{TELEFONO}}")
+    .parrafo("{{FOLIO}} · {{FECHA}} · {{TITULO}}")
+    .tabla(cuadroDePartidas())
+    .parrafo("")
+    .parrafo("Términos y Condiciones Comerciales")
+    .construir();
+
+const deFormato = (tramos: Tramo[]) => tramos.filter((t) => t.parte.grupo === "formato");
+const deContenido = (tramos: Tramo[]) => tramos.filter((t) => t.parte.grupo === "contenido");
+
+describe("solicitudesDelDocumento · contenido y formato", () => {
+  const armadas = () =>
+    solicitudesDelDocumento(
+      plantillaConFormato(),
+      datos({ armado: armadoCon(2), calculo: calculoCon(2) }),
+      "2026-10-05",
+    );
+
+  it("los tramos son las mismas solicitudes que el lote, en el mismo orden", () => {
+    const { solicitudes, tramos } = armadas();
+    expect(tramos.flatMap((t) => t.solicitudes)).toEqual(solicitudes);
+  });
+
+  it("el formato son seis partes: negro, salto, filas, encabezado, bordes y celda unida", () => {
+    const partes = new Set(deFormato(armadas().tramos).map((t) => t.parte));
+    expect(partes).toEqual(
+      new Set([
+        PARTES.negro,
+        PARTES.salto,
+        PARTES.filasEnteras,
+        PARTES.encabezadoFijo,
+        PARTES.bordes,
+        PARTES.celdaUnida,
+      ]),
+    );
+  });
+
+  /**
+   * Lo que permite reintentar sin el formato: si alguna solicitud de formato
+   * insertara o borrara texto, quitarla correría los índices del contenido y
+   * el reintento escribiría en el lugar equivocado — sin fallar.
+   */
+  it("ninguna solicitud de formato inserta ni borra texto", () => {
+    const tipos = new Set(
+      deFormato(armadas().tramos).flatMap((t) => t.solicitudes.map((s) => Object.keys(s)[0])),
+    );
+    const deEstilo = [
+      "updateTextStyle",
+      "updateParagraphStyle",
+      "updateTableRowStyle",
+      "pinTableHeaderRows",
+      "updateTableCellStyle",
+      // Reorganiza la tabla, pero es lo último que la toca (`tabla.test.ts`).
+      "mergeTableCells",
+    ];
+    for (const tipo of tipos) expect(deEstilo).toContain(tipo);
+  });
+
+  /** Unir la celda reorganiza la tabla: nada que use índices puede ir detrás. */
+  it("después de unir la celda de la letra, nada toca la tabla", () => {
+    // Con un renglón del destinatario que quitar, para que haya algo detrás.
+    const { solicitudes } = solicitudesDelDocumento(
+      plantillaConFormato(),
+      datos({
+        documento: { ...documentoVacio(), fecha: "2026-10-05", ocultar: { telefono: true } },
+      }),
+      "2026-10-05",
+    );
+    const union = solicitudes.findIndex((s) => "mergeTableCells" in s);
+    expect(union).toBeGreaterThan(-1);
+    const inicioTabla = plantillaConFormato().body!.content!.find((e) => e.table)!.startIndex!;
+    const indices = solicitudes.slice(union + 1).flatMap((s) =>
+      "insertText" in s
+        ? [s.insertText.location.index]
+        : "deleteContentRange" in s
+          ? [s.deleteContentRange.range.startIndex]
+          : [],
+    );
+    expect(indices.length).toBeGreaterThan(0);
+    expect(indices.every((i) => i < inicioTabla)).toBe(true);
+  });
+});
+
+describe("generarDocumento · si Google rechaza el lote", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const conRechazo = (rechaza: OpcionesDelFalso["rechaza"]) => {
+    const documentos = documentosFalso(plantillaConFormato(), { rechaza });
+    return {
+      documentos,
+      entorno: { documentos, plantillaId: "doc-plantilla", carpetaId: "carpeta-450" },
+    };
+  };
+
+  it("si todo entra, un solo intento y ningún aviso de formato", async () => {
+    const consola = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { documentos, entorno: e } = conRechazo(undefined);
+
+    const r = await generarDocumento(datos(), e);
+
+    expect(documentos.intentos).toHaveLength(1);
+    expect(r.avisos.join(" ")).not.toContain("sin formato");
+    expect(consola).not.toHaveBeenCalled();
+  });
+
+  it("si rechaza el formato, el documento sale con todo el contenido y un aviso", async () => {
+    const consola = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { documentos, entorno: e } = conRechazo({
+      si: (s) => "pinTableHeaderRows" in s,
+      motivo: "Unknown name pinTableHeaderRows",
+    });
+
+    const r = await generarDocumento(datos(), e);
+
+    // Dos intentos: el completo y el de solo contenido, que es el que entró.
+    expect(documentos.intentos).toHaveLength(2);
+    expect(documentos.aplicadas).toHaveLength(1);
+    const esperado = deContenido(
+      solicitudesDelDocumento(plantillaConFormato(), datos(), "2026-10-05").tramos,
+    ).flatMap((t) => t.solicitudes);
+    expect(documentos.aplicadas[0].solicitudes).toEqual(esperado);
+    expect(r.solicitudes).toBe(esperado.length);
+
+    // Sale, y no se aparta.
+    expect(documentos.exportados).toEqual(["copia-1"]);
+    expect(documentos.papelera).toEqual([]);
+
+    // Qué se rechazó y por qué, primero; después, qué le falta al documento.
+    expect(r.avisos[0]).toContain("Google rechazó el encabezado fijo de la tabla");
+    expect(r.avisos[0]).toContain("Unknown name pinTableHeaderRows");
+    expect(r.avisos).toContain("El encabezado de la tabla no se repetirá entre páginas.");
+    expect(r.avisos).toContain("El texto que la plantilla marca en rojo sale en rojo.");
+    expect(r.avisos).toContain("Los Términos no empiezan en hoja nueva.");
+
+    // Y queda en la consola del servidor, con el mensaje de la API.
+    expect(consola).toHaveBeenCalledWith(
+      expect.stringContaining("[cotizador/documento]"),
+      expect.objectContaining({
+        docId: "copia-1",
+        mensaje: expect.stringContaining("Unknown name pinTableHeaderRows"),
+      }),
+    );
+  });
+
+  /**
+   * El error nombra la parte con el índice del **segundo** rechazo, que es de
+   * la lista sin formato. Con el rojo al principio, los dos índices no
+   * coinciden: usar el del primero nombraría el color negro.
+   */
+  it("si rechaza también el contenido, no sale y el error dice qué parte", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { documentos, entorno: e } = conRechazo({
+      si: (s) => "deleteTableRow" in s,
+      motivo: "Invalid table row index",
+    });
+
+    const fallo = generarDocumento(datos(), e);
+    await expect(fallo).rejects.toThrow("Google rechazó la tabla de partidas");
+    await expect(fallo).rejects.toThrow("Invalid table row index");
+
+    expect(documentos.intentos).toHaveLength(2);
+    expect(documentos.aplicadas).toEqual([]);
+    expect(documentos.exportados).toEqual([]);
+    // La copia a medio llenar no se queda con el nombre bueno.
+    expect(documentos.papelera).toEqual(["copia-1"]);
+  });
+
+  /**
+   * Un fallo de red no dice nada del formato. Reintentarlo sin él sacaría un
+   * documento sin formato que habría salido completo al volver a dar al botón.
+   */
+  it("un fallo que no es un rechazo no se reintenta", async () => {
+    const documentos = documentosFalso(plantillaConFormato(), {
+      fallaAlAplicar: new Error("socket hang up"),
+    });
+    await expect(
+      generarDocumento(datos(), { documentos, plantillaId: "doc-plantilla", carpetaId: "c" }),
+    ).rejects.toThrow("socket hang up");
+    expect(documentos.intentos).toHaveLength(1);
   });
 });
 

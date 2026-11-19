@@ -41,6 +41,7 @@ import { bloquesDeDescripcion, bloquesVisibles, type Bloque } from "../bloques";
 import { importeParaDocumento, cantidadConUnidad } from "../presentacion";
 import { importeEnLetra } from "../letras";
 import type { Moneda, ResultadoCotizacion } from "../tipos";
+import { agregar, PARTES, todas, type Parte, type Tramo } from "./lote";
 import { tablaDePartidas } from "./recorrido";
 import type {
   DocumentoDocs,
@@ -363,7 +364,13 @@ const inicioDeCeldaVacia = (inicioFila: number, columna: number): number =>
 // ── El armado ─────────────────────────────────────────────────────────────────
 
 export interface TablaArmada {
+  /** Todas, en el orden en que van al lote. */
   solicitudes: Solicitud[];
+  /**
+   * Las mismas, en el mismo orden, con la parte a la que pertenece cada una:
+   * la tabla, los totales, la letra o alguno de sus formatos. Ver `lote.ts`.
+   */
+  tramos: Tramo[];
   avisos: string[];
   /** Cuántas filas quedó midiendo la tabla, encabezado incluido. */
   filas: number;
@@ -384,6 +391,7 @@ export function solicitudesDeTabla(
   if (!ubicada) {
     return {
       solicitudes: [],
+      tramos: [],
       avisos: [
         "La plantilla no trae la tabla de partidas (ninguna tabla empieza con " +
           "«Partida»): el documento va a salir sin el cuadro.",
@@ -399,6 +407,7 @@ export function solicitudesDeTabla(
   if (filasEnPlantilla < 2) {
     return {
       solicitudes: [],
+      tramos: [],
       avisos: [
         "La tabla de partidas de la plantilla no trae un renglón de ejemplo debajo " +
           "del encabezado: sin él no hay de dónde copiar el formato.",
@@ -407,7 +416,8 @@ export function solicitudesDeTabla(
     };
   }
 
-  const solicitudes: Solicitud[] = [];
+  const tramos: Tramo[] = [];
+  const poner = (parte: Parte, ...s: Solicitud[]) => agregar(tramos, parte, s);
   const tabla = { index: ubicada.startIndex };
   const celda = (rowIndex: number, columnIndex: number): UbicacionCelda => ({
     tableStartLocation: tabla,
@@ -415,15 +425,25 @@ export function solicitudesDeTabla(
     columnIndex,
   });
 
+  // De qué parte es cada celda, para nombrarla si Google la rechaza. `k` es
+  // el renglón dentro de `cuerpo`, desde 0.
+  const primerTotal = cuerpo.length - FILAS_DE_TOTALES;
+  const parteDeCelda = (k: number, c: number): Parte =>
+    k < primerTotal
+      ? PARTES.tabla
+      : k === cuerpo.length - 1 && c === COLUMNA_DE_LA_LETRA
+        ? PARTES.letra
+        : PARTES.totales;
+
   // ── 1. Las filas ────────────────────────────────────────────────────────────
   // Se conserva la 1, que es el molde: trae los bordes, los anchos y la letra
   // del cuadro hecho a mano. Las demás se borran y se vuelven a crear como
   // copias suyas, igual que el original (`COT_05:962-966`).
   for (let f = filasEnPlantilla - 1; f >= 2; f--) {
-    solicitudes.push({ deleteTableRow: { tableCellLocation: celda(f, 0) } });
+    poner(PARTES.tabla, { deleteTableRow: { tableCellLocation: celda(f, 0) } });
   }
   for (let i = 0; i < cuerpo.length - 1; i++) {
-    solicitudes.push({ insertTableRow: { tableCellLocation: celda(1, 0), insertBelow: true } });
+    poner(PARTES.tabla, { insertTableRow: { tableCellLocation: celda(1, 0), insertBelow: true } });
   }
 
   // ── 2. Los textos, de la última celda a la primera ──────────────────────────
@@ -436,7 +456,7 @@ export function solicitudesDeTabla(
     for (let c = COLUMNAS - 1; c >= 0; c--) {
       const texto = textoDeCelda(fila[c]);
       if (!texto) continue;
-      solicitudes.push({
+      poner(parteDeCelda(k - 1, c), {
         insertText: { location: { index: inicioDeCeldaVacia(inicioDeFilaVacia(k), c) }, text: texto },
       });
     }
@@ -457,7 +477,7 @@ export function solicitudesDeTabla(
   // en el que se inserta: sin esto, el título de la primera partida saldría
   // con viñeta y sus viñetas saldrían con dos guiones. No cambia longitudes,
   // así que va con los estilos.
-  solicitudes.push({
+  poner(PARTES.tabla, {
     deleteParagraphBullets: {
       range: { startIndex: ubicada.tabla.tableRows![1].startIndex!, endIndex: cursor },
     },
@@ -465,7 +485,10 @@ export function solicitudesDeTabla(
 
   // Arial 8 negro en todo el cuerpo de la tabla, marcas de párrafo incluidas:
   // es lo que le da color y tamaño al guion de las viñetas (`COT_05:1657`).
-  solicitudes.push({
+  //
+  // Es contenido y no formato, aunque sea un estilo: sin él la tabla sale con
+  // la letra y el tamaño del molde, y lo que se insertó, en rojo.
+  poner(PARTES.tabla, {
     updateTextStyle: {
       range: { startIndex: ubicada.tabla.tableRows![1].startIndex!, endIndex: cursor },
       textStyle: {
@@ -480,11 +503,12 @@ export function solicitudesDeTabla(
 
   cuerpo.forEach((fila, k) => {
     fila.forEach((celdaPlana, c) => {
+      const parte = parteDeCelda(k, c);
       let i = inicioDeCelda(inicioFinal[k], fila, c);
       for (const p of celdaPlana) {
         const rango: Rango = { startIndex: i, endIndex: i + p.texto.length + 1 };
         if (p.alineacion || p.sangria) {
-          solicitudes.push({
+          poner(parte, {
             updateParagraphStyle: {
               range: rango,
               paragraphStyle: {
@@ -500,7 +524,7 @@ export function solicitudesDeTabla(
         }
         // Las negritas van después del barrido de arriba, que las apaga todas.
         if (p.negritas && p.texto) {
-          solicitudes.push({
+          poner(parte, {
             updateTextStyle: {
               range: { startIndex: i, endIndex: i + p.texto.length },
               textStyle: { bold: true },
@@ -513,19 +537,26 @@ export function solicitudesDeTabla(
     });
   });
 
-  // ── 4. Encabezado que se repite y filas que no se parten ────────────────────
-  solicitudes.push(...filasDeLaTabla(tabla.index));
+  // De aquí abajo todo es formato: si Google lo rechaza, el documento sale sin
+  // esto y con un aviso (`lote.ts`). Ninguna de estas solicitudes mueve
+  // índices, así que quitarlas no descuadra lo de arriba.
 
-  // ── 5. Unir la celda de la letra y quitar las líneas de más ─────────────────
+  // ── 4. Encabezado que se repite y filas que no se parten ────────────────────
+  for (const s of filasDeLaTabla(tabla.index)) {
+    poner("pinTableHeaderRows" in s ? PARTES.encabezadoFijo : PARTES.filasEnteras, s);
+  }
+
+  // ── 5. Quitar las líneas de más y unir la celda de la letra ─────────────────
   // Unir se queda al final del todo: después de unir, las columnas de esas
   // filas ya no son las mismas.
-  solicitudes.push(...bordesDeLaTabla(tabla.index, cuerpo.length - FILAS_DE_TOTALES));
+  poner(PARTES.bordes, ...lineasDeLaTabla(tabla.index, primerTotal));
+  poner(PARTES.celdaUnida, ...celdaDeLaLetra(tabla.index, primerTotal));
 
   if (datos.partidas.length === 0) {
     avisos.push("La cotización no tiene partidas: el cuadro sale solo con los totales.");
   }
 
-  return { solicitudes, avisos, filas: cuerpo.length + 1 };
+  return { solicitudes: todas(tramos), tramos, avisos, filas: cuerpo.length + 1 };
 }
 
 // ── Bordes y celdas unidas ────────────────────────────────────────────────────
@@ -555,16 +586,28 @@ export function bordesDeLaTabla(
   inicioTabla: number,
   filasDePartidas: number,
 ): Array<SolicitudUnirCeldas | SolicitudEstiloCelda> {
-  const fuera: Array<SolicitudUnirCeldas | SolicitudEstiloCelda> = [];
-  const rango = (fila: number, columna: number, filas: number, columnas: number) => ({
+  return [
+    ...lineasDeLaTabla(inicioTabla, filasDePartidas),
+    ...celdaDeLaLetra(inicioTabla, filasDePartidas),
+  ];
+}
+
+/** Un bloque de celdas de la tabla que empieza en `inicioTabla`. */
+const rangoDe =
+  (inicioTabla: number) => (fila: number, columna: number, filas: number, columnas: number) => ({
     tableCellLocation: { tableStartLocation: { index: inicioTabla }, rowIndex: fila, columnIndex: columna },
     rowSpan: filas,
     columnSpan: columnas,
   });
 
-  // La primera fila de partidas es la 1; la 0 es el encabezado.
-  const primera = 1;
-  const finPartidas = primera + filasDePartidas; // primera fila que ya no es partida
+/** La primera fila de partidas es la 1; la 0 es el encabezado. */
+const PRIMERA_PARTIDA = 1;
+
+/** Las dos primeras cosas de `bordesDeLaTabla`: las líneas que se quitan. */
+function lineasDeLaTabla(inicioTabla: number, filasDePartidas: number): SolicitudEstiloCelda[] {
+  const fuera: SolicitudEstiloCelda[] = [];
+  const rango = rangoDe(inicioTabla);
+  const primera = PRIMERA_PARTIDA;
 
   if (filasDePartidas > 1) {
     fuera.push({
@@ -600,8 +643,23 @@ export function bordesDeLaTabla(
     });
   }
 
-  // Unir va al final: después de unir, las columnas de esas filas ya no son
-  // las mismas y cualquier otro rango sobre ellas apuntaría a otra cosa.
+  return fuera;
+}
+
+/**
+ * La tercera de `bordesDeLaTabla`: la celda de la letra, unida y sin recuadro.
+ *
+ * Va al final: después de unir, las columnas de esas filas ya no son las
+ * mismas y cualquier otro rango sobre ellas apuntaría a otra cosa.
+ */
+function celdaDeLaLetra(
+  inicioTabla: number,
+  filasDePartidas: number,
+): Array<SolicitudUnirCeldas | SolicitudEstiloCelda> {
+  const rango = rangoDe(inicioTabla);
+  const finPartidas = PRIMERA_PARTIDA + filasDePartidas; // primera fila que ya no es partida
+
+  const fuera: Array<SolicitudUnirCeldas | SolicitudEstiloCelda> = [];
   fuera.push({
     mergeTableCells: { tableRange: rango(finPartidas, 0, FILAS_DE_TOTALES, 3) },
   });
@@ -646,14 +704,14 @@ export function bordesDeLaTabla(
  * `ajustesFinalesConDocsApi_`), que por el mismo motivo tiene que bajar de
  * `DocumentApp` a la API de Docs.
  *
- * ── Una diferencia con el original ──
+ * ── Si la API los rechaza ──
  *
- * Allá los dos ajustes van en **dos llamadas distintas**, para que si uno
- * falla el otro se aplique igual. Aquí van en el lote único del documento: si
- * la API rechazara el fijado, no saldría el documento en vez de salir sin el
- * encabezado repetido. Es a propósito —un documento a medias no se distingue
- * de uno bueno de un vistazo—, y el precio es que un cambio de la API se nota
- * al generar y no semanas después.
+ * Allá los dos ajustes van en **dos llamadas distintas** y el error del
+ * fijado se traga: si falla, el documento sale sin encabezado repetido y
+ * nadie se entera. Aquí van en el lote del documento, marcados como
+ * **formato** (`lote.ts`): si Google rechaza el lote, se reintenta sin el
+ * formato y el documento sale con un aviso que dice qué le falta. Ni se
+ * pierde la cotización por un detalle, ni sale incompleta sin decirlo.
  */
 export function filasDeLaTabla(
   inicioTabla: number,

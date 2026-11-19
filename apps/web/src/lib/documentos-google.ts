@@ -14,6 +14,7 @@ import { google, type docs_v1, type drive_v3 } from "googleapis";
 import { ALCANCES, autenticar, enProduccion } from "./google-auth";
 import { ESCRIBIR_TODAS_LAS_UNIDADES } from "./drive";
 import type { DocumentoDocs, Solicitud } from "./cotizador/docs/tipos";
+import { LoteRechazado } from "./cotizador/docs/lote";
 
 export interface ArchivoExportado {
   nombre: string;
@@ -41,6 +42,9 @@ export interface Documentos {
    *
    * En uno solo y no en varios porque la API las aplica como una unidad: si
    * una falla, no queda un documento a medio llenar con el nombre bueno.
+   *
+   * Si Google **rechaza** una solicitud, levanta `LoteRechazado`, con el
+   * número de la que señaló. Cualquier otro fallo sale tal cual.
    */
   aplicarCambios(id: string, solicitudes: Solicitud[]): Promise<void>;
 
@@ -141,6 +145,21 @@ export async function exigirCarpetaDePruebas(
 
 // ── La implementación real ────────────────────────────────────────────────────
 
+/**
+ * El estado HTTP de un error de `googleapis`.
+ *
+ * `gaxios` lo deja en `response.status` y en `status`; el transporte de
+ * `google-auth-library` copia además el `code` del cuerpo, que es el mismo
+ * número. Se mira en ese orden por si alguno no viene.
+ */
+function estadoHttp(err: unknown): number | undefined {
+  const e = err as { response?: { status?: unknown }; status?: unknown; code?: unknown } | null;
+  for (const v of [e?.response?.status, e?.status, e?.code]) {
+    if (typeof v === "number") return v;
+  }
+  return undefined;
+}
+
 async function clientes() {
   const auth = await autenticar([ALCANCES.DRIVE, ALCANCES.DOCUMENTOS]);
   return {
@@ -154,7 +173,8 @@ async function clientes() {
  *
  * Cinco llamadas y ninguna decisión: todo lo que hay que pensar ya está
  * decidido en las solicitudes que recibe. Si algo de aquí necesitara una
- * condición, estaría en el sitio equivocado.
+ * condición, estaría en el sitio equivocado. La única que hay —un 400 sale
+ * como `LoteRechazado`— traduce el error, no decide qué hacer con él.
  */
 export function documentosDeGoogle(): Documentos {
   return {
@@ -184,10 +204,19 @@ export function documentosDeGoogle(): Documentos {
 
     async aplicarCambios(id, solicitudes) {
       const { docs } = await clientes();
-      await docs.documents.batchUpdate({
-        documentId: id,
-        requestBody: { requests: solicitudes as unknown as docs_v1.Schema$Request[] },
-      });
+      try {
+        await docs.documents.batchUpdate({
+          documentId: id,
+          requestBody: { requests: solicitudes as unknown as docs_v1.Schema$Request[] },
+        });
+      } catch (err) {
+        // Traducir el error no es decidir nada: el 400 es Google diciendo que
+        // una solicitud no vale, y quién reacciona y cómo está en `lote.ts`.
+        if (estadoHttp(err) === 400) {
+          throw new LoteRechazado((err as Error).message, { cause: err });
+        }
+        throw err;
+      }
     },
 
     async exportarPdf({ id, nombre }) {

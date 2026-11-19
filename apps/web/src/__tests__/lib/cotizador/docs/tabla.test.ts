@@ -6,9 +6,12 @@ import {
   type PartidaDeTabla,
 } from "@/src/lib/cotizador/docs/tabla";
 import type {
+  Solicitud,
   SolicitudEstiloFila,
   SolicitudFijarEncabezado,
 } from "@/src/lib/cotizador/docs/tipos";
+import { PARTES, type Parte } from "@/src/lib/cotizador/docs/lote";
+import { importeEnLetra } from "@/src/lib/cotizador/letras";
 import { TablaSimulada } from "../../../helpers/tabla-simulada";
 
 /**
@@ -334,6 +337,60 @@ describe("bordesDeLaTabla", () => {
       .filter((s) => "updateTableCellStyle" in s)
       .map((s) => (s as { updateTableCellStyle: { tableRange: { tableCellLocation: { rowIndex: number } } } }).updateTableCellStyle.tableRange.tableCellLocation.rowIndex);
     expect(rangos.every((r) => r >= 1)).toBe(true);
+  });
+});
+
+/**
+ * Cada solicitud lleva su parte, para que un rechazo de Google se pueda
+ * nombrar y el formato se pueda quitar sin tocar el contenido (`lote.ts`).
+ */
+describe("solicitudesDeTabla · de qué parte es cada solicitud", () => {
+  const armada = () => armarYAplicar(datos({ partidas: [partida(), partida({ numero: 2 })] }));
+
+  const parteDe = (r: ReturnType<typeof armada>, que: (s: Solicitud) => boolean): Parte[] =>
+    r.tramos.flatMap((t) => (t.solicitudes.some(que) ? [t.parte] : []));
+
+  it("los tramos son las mismas solicitudes, en el mismo orden", () => {
+    const r = armada();
+    expect(r.tramos.flatMap((t) => t.solicitudes)).toEqual(r.solicitudes);
+  });
+
+  it("la letra, los totales y las partidas se nombran cada uno por su lado", () => {
+    const r = armada();
+    const texto = (t: string) => (s: Solicitud) => "insertText" in s && s.insertText.text === t;
+    expect(parteDe(r, texto(importeEnLetra(2320, "MXN")))).toEqual([PARTES.letra]);
+    expect(parteDe(r, texto("Total:"))).toEqual([PARTES.totales]);
+    expect(parteDe(r, texto("Mantenimiento a transformador"))).toEqual([PARTES.tabla]);
+    expect(parteDe(r, (s) => "deleteTableRow" in s)).toEqual([PARTES.tabla]);
+  });
+
+  it("lo que solo es formato va marcado como formato", () => {
+    const r = armada();
+    expect(parteDe(r, (s) => "pinTableHeaderRows" in s)).toEqual([PARTES.encabezadoFijo]);
+    expect(parteDe(r, (s) => "updateTableRowStyle" in s)).toEqual([PARTES.filasEnteras]);
+    expect(parteDe(r, (s) => "mergeTableCells" in s)).toEqual([PARTES.celdaUnida]);
+    // Las líneas que se quitan entre partidas, y la celda de la letra.
+    expect(new Set(parteDe(r, (s) => "updateTableCellStyle" in s))).toEqual(
+      new Set([PARTES.bordes, PARTES.celdaUnida]),
+    );
+  });
+
+  /** Sin el formato, la tabla sale igual de llena: ningún índice se movió. */
+  it("sin el formato, el texto de la tabla queda igual", () => {
+    const completa = armada().tabla;
+    const simulada = TablaSimulada.comoLaPlantilla(3043, 22);
+    const r = solicitudesDeTabla(
+      simulada.comoDocumento(),
+      datos({ partidas: [partida(), partida({ numero: 2 })] }),
+    );
+    simulada.aplicar(
+      r.tramos.filter((t) => t.parte.grupo === "contenido").flatMap((t) => t.solicitudes),
+    );
+
+    expect(simulada.numeroDeFilas).toBe(completa.numeroDeFilas);
+    for (let f = 0; f < completa.numeroDeFilas; f++) {
+      for (let c = 0; c < 5; c++) expect(simulada.texto(f, c)).toBe(completa.texto(f, c));
+    }
   });
 });
 
