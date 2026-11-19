@@ -1071,7 +1071,7 @@ cambian con el negocio y no deberían necesitar un despliegue. El catálogo pued
 además traer su propio `base_nodos` por código: el de la configuración es el
 punto de partida, no un techo.
 
-### 6.9 ✅ Eliminar: el número queda libre, y quién puede no cambia
+### 6.9 ⏳ Eliminar: el número queda libre, y quién puede no cambia — *decidido, pendiente de implementar*
 
 **Decidido por Eduardo el 13 nov 2026**, al leer `COT_34_Eliminacion.gs` del
 código que corre hoy en producción. Cierra la pregunta que esta sección tenía

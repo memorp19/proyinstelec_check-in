@@ -770,10 +770,10 @@ export function puedeEliminarse(c: Cotizacion): { puede: boolean; motivo: string
 /**
  * Borra una versión de cotización y todo lo que cuelga de ella.
  *
- * **El número no se reutiliza.** El contador de folios vive en su propia fila y
- * solo sube (`src/lib/folios.ts`); borrar un renglón no lo mueve. Es lo
- * correcto: si alguien ya vio pasar el PCOTOP-260-2026 en un correo, que otra
- * cotización distinta use ese folio después sería peor que el hueco.
+ * **Hoy el número no se reutiliza.** El contador de folios vive en su propia
+ * fila y solo sube (`src/lib/folios.ts`); borrar un renglón no lo mueve. La
+ * §6.9 de `docs/plan-fase3-cotizador.md` decidió liberarlo, como hace `COT_34`
+ * del legacy, y falta implementarlo en el PR de eliminación auditada.
  *
  * El armado, las partidas, los conceptos, los gastos y el congelado se van con
  * ella por las llaves foráneas de la 0006. La **carpeta de Drive no se toca**:
