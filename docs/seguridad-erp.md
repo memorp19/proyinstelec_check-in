@@ -35,9 +35,9 @@ uno es la propuesta del folio:
 |---|---|---|
 | **Enviar al cliente** *(nuevo, chico)* | M7: destinatarios libres y el «Mensaje» como HTML | Es lo único que **sale de la empresa** hoy. |
 | **Autoaprobación** | A4, y que «Elaboró» decida quién arma (§3.1) | Ya estaba en la brecha (punto 7). |
-| **Endurecimiento** *(nuevo, chico)* | M11 (transiciones en una sentencia), B11 (iframe), la foto del check-in (§3.4) | Tres cambios cortos, sin pantallas. |
+| **Endurecimiento** *(nuevo, chico)* | M11 (transiciones en una sentencia), B11 (iframe), la foto del check-in (§3.4), la bitácora del encabezado (§3.7) | Cambios cortos. La pantalla solo cambia para avisar «alguien más la cambió». |
 | **Eliminación auditada** | M9: cotizaciones y contactos | Ya estaba en el plan (§6.9). |
-| **El folio** *(propuesta, §6)* | B7: el número y el año los decide el servidor | Cuando se apruebe la propuesta. |
+| **El folio** *(propuesta, §6)* | B7: el número y el año los decide el servidor (el año, decidido el 20 nov) | Cuando se apruebe la propuesta. |
 | **Migración de OT y compras** | A1, A7, A12, M1–M3, M5, B3–B6 | Nada de eso existe todavía en el ERP: se escribe con las reglas de la §2. |
 
 Este PR no cambia ningún comportamiento. Agrega este documento y dos pruebas
@@ -73,8 +73,9 @@ Cada hallazgo de la revisión es un caso de alguna de estas reglas.
    índices únicos, `UPDATE … WHERE <estado leído>`, `ON CONFLICT` y `db.batch`.
    El driver HTTP de Neon no tiene transacciones interactivas, y esto es lo
    que las reemplaza (A9–A12, M11).
-7. **Nada se borra sin rastro.** Lo que se quita se marca o se copia antes,
-   con motivo y bitácora (M9, y la regla 3 del legacy).
+7. **Nada se borra ni se cambia sin rastro.** Lo que se quita se marca o se
+   copia antes, con motivo y bitácora. Lo que se edita deja en la bitácora
+   quién, qué campo, antes y después (M9, la regla 3 del legacy y §2.3).
 8. **Lo sensible va aparte y con su permiso.** No basta con no enseñarlo: no
    sale de su tabla sin el permiso (A1, M5).
 9. **Los datos viven en la base, no en archivos compartidos.** Solo el
@@ -155,11 +156,36 @@ flujo no se ha construido. Aquí queda cómo se van a implementar.
 - **Cerrar viáticos:** `UPDATE … WHERE estado = 'ENVIADA' RETURNING`, y solo
   quien recibe el renglón registra los excedentes.
 
+### 2.3 Las decisiones del 20 nov (solo del ERP)
+
+**El encabezado de una cotización es de todos; armarla, de su dueño**
+- **El encabezado** (título, dirigida a, prioridad, fecha de entrega, montos y
+  los estatus manuales, entre ellos cancelar) lo edita **cualquiera con
+  `modulo.cotizaciones`**, también en una cotización ajena. Así era en el Apps
+  Script, y así funciona ya el ERP: el `PATCH` de
+  `app/api/erp/cotizaciones/[key]/route.ts` pide solo ese permiso.
+- **Armar** (partidas, precios, documento) sigue siendo **de quien la dio de
+  alta o de `cotizaciones.armar.todas`** (`accesoAlArmado`,
+  `src/lib/cotizador-permisos.ts:38`).
+- **«Elaboró» no cuenta como encabezado.** Hoy decide quién arma (§3.1), así
+  que abrirlo a todos le daría el armado a cualquiera. Lo cambia solo quien la
+  arma. La pantalla del encabezado ni siquiera lo manda
+  (`CotizacionesClient.tsx:928-934`): hoy solo se cambia llamando a la ruta
+  a mano.
+- **Cada cambio del encabezado queda en la bitácora** con quién, qué campo,
+  antes y después. Hoy no se cumple: ⏳ PR de endurecimiento (§3.7).
+
+**El año de una cotización nueva es siempre el año en curso**
+- Sin excepción: no hay opción para dar de alta con el año anterior, ni
+  siquiera en los primeros días de enero.
+- Lo toma el servidor **de su propia fecha, en la zona horaria de México**, y
+  no acepta uno que mande el navegador. Cómo se implementa: §6, punto 4.
+
 ---
 
 ## 3. Lo que este mapa encontró en el ERP
 
-Seis cosas, ninguna grave, pero cinco repiten en chico un hallazgo del legacy.
+Siete cosas, ninguna grave, pero cinco repiten en chico un hallazgo del legacy.
 
 ### 3.1 «Elaboró» decide quién arma una cotización importada (como el A4)
 
@@ -172,14 +198,18 @@ Seis cosas, ninguna grave, pero cinco repiten en chico un hallazgo del legacy.
   puede poner sus iniciales en una importada de otro y armarla. Es el mismo
   defecto de raíz del A4: una columna de texto decidiendo un permiso.
 - **El mismo `PATCH`** deja cambiar el título, los montos o cancelar
-  cualquier cotización. En el legacy era igual.
+  cualquier cotización. **Eso se queda así** (decisión del 20 nov, §2.3): el
+  encabezado es de todos los que tienen `modulo.cotizaciones`, como en el Apps
+  Script. Lo que falta es su bitácora (§3.7).
 - **⏳ PR de autoaprobación:**
-  - `elaboro` se valida contra las iniciales del catálogo de usuarios;
-  - solo lo cambia quien la arma (o `cotizaciones.armar.todas`);
-  - la propiedad de una importada se reasigna explícitamente, con
-    bitácora, no tecleando iniciales.
-  - **Decisión pendiente:** si el encabezado de una cotización ajena se
-    edita con solo `modulo.cotizaciones`.
+  - `elaboro` sale de la lista blanca del `PATCH` abierto. Solo lo cambia
+    quien la arma (o `cotizaciones.armar.todas`), validado contra las
+    iniciales del catálogo de usuarios. La pantalla del encabezado no lo
+    manda, así que nadie pierde nada;
+  - la propiedad de una importada se reasigna explícitamente, con bitácora,
+    no tecleando iniciales;
+  - prueba: alguien con solo `modulo.cotizaciones` cambia el título de una
+    cotización ajena (200) pero no su `elaboro` (403).
 
 ### 3.2 «Enviar al cliente» manda a cualquiera, y el mensaje va como HTML (el M7, igual)
 
@@ -266,7 +296,55 @@ Seis cosas, ninguna grave, pero cinco repiten en chico un hallazgo del legacy.
 - **⏳ PR de endurecimiento:** `headers()` en `next.config.js` con
   `X-Frame-Options: DENY` y `frame-ancestors 'none'`.
 
-**Lo que no se puede ver desde el código:** quién es miembro de la unidad
+### 3.7 Los cambios del encabezado no dejan rastro completo
+
+La decisión del 20 nov (§2.3) pide que cada cambio del encabezado quede en la
+bitácora con quién, qué campo, antes y después. Revisado el 20 nov:
+
+| Qué se cambia | ¿Queda en la bitácora? |
+|---|---|
+| Estatus manual (cancelar, dependiente de proveedor o de cliente, volver a PROCESO) | **A medias.** Queda `COTIZACION_ESTATUS` con quién y el estatus nuevo (`app/api/erp/cotizaciones/[key]/route.ts:151-156`). Falta el anterior: `cambiarEstatus` lo lee y no lo devuelve (`src/lib/cotizaciones.ts:644`). |
+| Título, dirigida a, prioridad, fecha de entrega, montos y «Elaboró» | **No.** `updateCotizacion` escribe y no registra nada (`src/lib/cotizaciones.ts:534`). |
+
+Además, con el encabezado abierto a todos, es más fácil que dos personas
+editen la misma cotización a la vez. Hoy gana el último en guardar. La
+pantalla manda el formulario entero en cada guardado
+(`CotizacionesClient.tsx:928-934`), así que el segundo borra sin aviso lo que
+cambió el primero.
+
+**⏳ PR de endurecimiento:**
+- **Un renglón por campo que cambió:** `COTIZACION_ENCABEZADO`, con quién (la
+  sesión), el campo, el valor de antes, el de después y la versión.
+- **Solo lo que cambió de verdad.** Como la pantalla manda el formulario
+  entero, el servidor compara contra lo que había. Guardar sin cambios no
+  deja ninguna línea.
+- **No se pisa lo de otro.** Es el mismo patrón que el autoguardado del
+  armado (`guardarArmado` y `ConflictoDeEdicion`, `src/lib/cotizador-db.ts`):
+  - la pantalla manda el `updated_at` que leyó al abrir el formulario;
+  - el `UPDATE` va con `WHERE updated_at = <ese>`;
+  - si no regresa renglón, la respuesta es 409, «alguien más la cambió,
+    vuelve a abrirla», y no se escribe nada.
+- **El cambio y su línea, en una sola sentencia:**
+  `WITH c AS (UPDATE … RETURNING …) INSERT INTO bitacora … FROM c`.
+  - Hoy `registrarBitacora` nunca lanza, a propósito, y por eso un cambio
+    puede quedar sin su línea.
+  - Aquí la línea es lo que dice quién movió un monto de otro, así que van
+    juntos.
+  - El «antes» es lo que el servidor leyó, y el `WHERE updated_at` asegura
+    que nadie lo cambió entre la lectura y la escritura.
+- **El estatus:** el `UPDATE … WHERE estatus = <leído> RETURNING` de la §3.3
+  ya da el anterior, y la línea dice, por ejemplo, «PROCESO → CANCELADA».
+- **Las pruebas:**
+  - cambiar el título de una cotización ajena deja una línea con quién,
+    `titulo`, antes y después;
+  - guardar el formulario sin cambios no deja ninguna;
+  - cancelar deja «<anterior> → CANCELADA»;
+  - dos guardados con el mismo `updated_at`: el segundo recibe 409, sin
+    escribir nada y sin línea.
+
+### Fuera del código
+
+Lo que no se puede ver desde aquí: quién es miembro de la unidad
 compartida de Drive donde viven las carpetas, los Doc y los PDF de las
 cotizaciones. Ahí cualquier miembro puede editar a mano, como en el A2. Vale
 la pena revisar esa lista en Drive.
@@ -375,7 +453,7 @@ Es el equivalente del A5 y el M10.
 | B4 | IDs de archivos de Drive llegaban del navegador | 4 · solo IDs de esa solicitud | ⏳ Migración de OT y compras | En el check-in, el enlace de la foto también llega del navegador, pero solo se le enseña a la misma persona (§3.4) |
 | B5 | El tipo de archivo se aceptaba por lo que decía el navegador; los gastos sin tope | 4 | ⏳ Migración de OT y compras | Hoy: fotos con lista de tipos y tope de tamaño (`upload`, `perfil/foto`) |
 | B6 | Una sola persona firmaba los cuatro pasos de una requisición | 3 | ⏳ Migración de OT y compras | Decidir con la regla de compras: al menos «Aprobó» ≠ quien elaboró |
-| B7 | El alta confiaba en la versión y el año que mandaba el navegador | 4 | ⏳ El folio (§6) | La versión ya no: `createCotizacion` la fuerza a 0 (`lib/cotizaciones.test.ts`, «crea la versión 0 en PROCESO…»). El número y el año sí llegan del navegador |
+| B7 | El alta confiaba en la versión y el año que mandaba el navegador | 4 | ⏳ El folio (§6) | La versión ya no: `createCotizacion` la fuerza a 0 (`lib/cotizaciones.test.ts`, «crea la versión 0 en PROCESO…»). El número y el año sí llegan del navegador. Decidido el 20 nov: el año lo pone el servidor con la fecha de México, sin excepción (§2.3) |
 | B8 | Un enlace de correo aprobaba con un solo GET | 1 · aprobar es un POST con sesión y permiso | ✅ Por diseño | Los correos llevan a la pantalla (`/erp/revision`), no a una acción |
 | B9 | Si no se podía leer el estatus, la cotización se trataba como editable | 6 | ✅ Por diseño | Si la lectura falla, la ruta contesta error y no guarda |
 | B10 | Unas 45 herramientas del editor sin chequeo, que enseñaban IDs y costos | 10 | ✅ Por diseño | Son scripts locales (`scripts/`), con guardas contra producción |
@@ -392,7 +470,9 @@ Es el equivalente del A5 y el M10.
    (`app/erp/cotizaciones/CotizacionesClient.tsx:821`), que calcula
    `MAX(numero) + 1` del año (`src/lib/cotizaciones.ts:323`).
 2. Ese número aparece en un campo que **se puede editar**.
-3. El `POST` recibe `numero` y `anio` del navegador.
+3. El `POST` recibe `numero` y `anio` del navegador. El año sale del reloj
+   del navegador (`CotizacionesClient.tsx:197`). El `GET` que no recibe año
+   usa el del servidor (`app/api/erp/cotizaciones/route.ts:20`).
 4. Si el número ya existe, la llave primaria `(numero, anio, version)` lo
    rechaza y la ruta contesta 409 (`cotizaciones.ts:444`).
 
@@ -405,6 +485,10 @@ compartir número, porque lo impide la base.
 - El servidor acepta **cualquier número y año**: el 999, o el 2030. La §6.9
   del plan dice que un número por arriba del consecutivo no se ofrece, porque
   brincaría la numeración. Es el B7, a medias.
+- **El año sale de un reloj que no es el de México:** el del navegador, o el
+  del servidor, que en Vercel corre en UTC. Desde las 18:00 del 31 de
+  diciembre, hora de México, `new Date().getFullYear()` en el servidor ya da
+  el año nuevo.
 - `src/lib/folios.ts:14` ya reserva un contador `cotizacion-AAAA` que **nadie
   usa**. Si alguien lo empezara a usar sin sembrarlo, arrancaría en 1 con
   cientos de cotizaciones ya dadas de alta.
@@ -415,15 +499,16 @@ compartir número, porque lo impide la base.
 alta la cotización:**
 
 ```sql
+-- ${anio} = anioEnMexico(), punto 4. Nunca del navegador.
 WITH n AS (
   INSERT INTO contadores (tipo, n)
-  VALUES ('cotizacion-2026',
-          (SELECT COALESCE(MAX(numero), 0) + 1 FROM cotizaciones WHERE anio = 2026))
+  VALUES ('cotizacion-' || ${anio},
+          (SELECT COALESCE(MAX(numero), 0) + 1 FROM cotizaciones WHERE anio = ${anio}))
   ON CONFLICT (tipo) DO UPDATE SET n = GREATEST(contadores.n + 1, EXCLUDED.n)
   RETURNING n
 )
 INSERT INTO cotizaciones (numero, anio, version, folio, …)
-SELECT n.n, 2026, 0, 'PCOTOP-' || lpad(n.n::text, 3, '0') || '-2026', …
+SELECT n.n, ${anio}, 0, 'PCOTOP-' || lpad(n.n::text, 3, '0') || '-' || ${anio}, …
 FROM n
 RETURNING *;
 ```
@@ -455,17 +540,40 @@ auditada).
   numero`, dentro del mismo `WITH`.
 - Si otro lo tomó primero, 409 con el porqué.
 
-**4. El año lo pone el servidor.**
-- **Pregunta para Eduardo:** ¿alguna vez se da de alta una cotización con el
-  año anterior, por ejemplo en los primeros días de enero? Si sí, que sea una
-  opción explícita y quede en bitácora.
+**4. El año lo pone el servidor, con la fecha de México** (decidido el 20
+nov, §2.3).
+- **Siempre el año en curso, sin excepción.** No hay opción para dar de alta
+  con el año anterior.
+- **Una sola función, `anioEnMexico(ahora = new Date())`,** con
+  `Intl.DateTimeFormat` y `timeZone: "America/Mexico_City"`, como ya hacen
+  las fechas del check-in. La usan el alta y la sugerencia. Nunca
+  `getFullYear()`, que en el servidor da el año en UTC (ver «Lo que no»).
+- **El `POST` ya no lleva `anio`.** Si llega, contesta 400, «El año lo pone
+  el servidor», con una lista blanca como la del `PATCH`. Ignorarlo en
+  silencio escondería una pantalla vieja que siga en caché.
+- **`?siguiente=1` tampoco recibe año.** El año del filtro del listado sí
+  sigue llegando del navegador: solo decide qué se ve.
+- **Lo que no cambia:**
+  - una versión nueva conserva el año de su cotización: la v1 de la
+    450-2026 sigue siendo 2026 aunque se haga en enero. La regla es solo
+    para el alta;
+  - las importaciones del legacy (`scripts/`) traen su año, porque no pasan
+    por la ruta.
+- **El cambio de año:** si alguien abre el alta el 31 de diciembre y guarda
+  pasada la medianoche, la cotización sale con el año nuevo. La pantalla lo
+  dice con el mismo aviso del punto 2.
 
 **5. Las pruebas del PR:**
 - dos altas a la vez reciben números distintos (la sentencia es una sola: la
   prueba fija que no haya lectura y luego escritura);
 - pedir la sugerencia no mueve el contador;
 - un alta que falla no gasta número;
-- con el contador atrás del `MAX` (una importación), toma `MAX + 1`.
+- con el contador atrás del `MAX` (una importación), toma `MAX + 1`;
+- con el reloj fijo:
+  - el 31 de diciembre a las 23:30, hora de México (05:30 UTC del 1 de
+    enero), da de alta en el año que termina;
+  - el 1 de enero a las 00:05 da de alta en el año nuevo, con el número 1;
+- un `POST` que trae `anio` contesta 400 y no da de alta nada.
 
 **Lo que no resuelve:** mientras el Apps Script siga dando de alta
 cotizaciones (§6.5 del plan), el ERP no ve esos números hasta que se
