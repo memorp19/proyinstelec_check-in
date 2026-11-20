@@ -9,6 +9,8 @@
  *
  * 1. Copiar la plantilla a la carpeta, con el nombre bueno.
  * 2. Leerla, armar todas las solicitudes y aplicarlas **en un solo lote**.
+ *    Si Google lo rechaza, una vez más **solo con el contenido**: el
+ *    documento sale sin formato y con un aviso de qué le falta (`lote.ts`).
  * 3. Exportar el PDF.
  * 4. Guardar `doc_drive_id` y `pdf_drive_id`.
  * 5. **Al final**, apartar los anteriores.
@@ -23,10 +25,13 @@ import type { Condiciones, DatosDocumento } from "../documento";
 import { normasElegidas } from "../normas";
 import type { ResultadoCotizacion } from "../tipos";
 import type { Solicitud } from "./tipos";
+import { agregar, aplicarLote, PARTES, todas, type Tramo } from "./lote";
 import { nombreDelDocumento } from "./nombre";
+import { solicitudesDeNegro } from "./colores";
 import { sustituciones, type Marcador } from "./marcadores";
 import { quitarNormas } from "./normas-plantilla";
 import { ocultarRenglones } from "./ocultar";
+import { ajustarActividades, saltoAntesDeTerminos } from "./secciones";
 import { solicitudesDeTabla, tablaDeCotizacion } from "./tabla";
 import { fechaFija, valoresDeMarcadores } from "./valores";
 
@@ -63,9 +68,12 @@ export interface DocumentoGenerado {
   /** La fecha con la que salió, para guardarla si era la primera vez. */
   fecha: string;
   fechaEsNueva: boolean;
-  /** Huecos y marcadores faltantes, todo junto para la vista previa. */
+  /**
+   * Huecos y marcadores faltantes, todo junto para la vista previa. Si el
+   * formato no entró, lo primero es qué le falta al documento y por qué.
+   */
   avisos: string[];
-  /** Cuántas solicitudes se mandaron. Sirve para afirmarlo en una prueba. */
+  /** Cuántas solicitudes entraron. Sirve para afirmarlo en una prueba. */
   solicitudes: number;
 }
 
@@ -82,19 +90,30 @@ export interface DocumentoGenerado {
  * posteriores. Como todo se calcula sobre el JSON original, lo que cambia
  * longitudes se emite **de abajo hacia arriba del documento**:
  *
- * 1. La **tabla de partidas**, que está al final (índice ~3000).
- * 2. Las **normas** que no se eligieron (~1000).
- * 3. Los **renglones del destinatario** que no salen (~300).
- * 4. Las **sustituciones**, que no usan índices: `replaceAllText` compara
+ * 1. El **color** y el **salto de página**, que no mueven ni un índice pero
+ *    sí necesitan que los del original sigan siendo válidos. Por eso van
+ *    primero: después del primer borrado ya no lo serían. Y como el negro se
+ *    aplica antes que las inserciones, lo que se inserte luego lo hereda de
+ *    lo que tiene al lado, que para entonces ya es negro.
+ * 2. La **tabla de partidas**, que está al final (índice ~3000).
+ * 3. Las **normas**: se quitan las que no se eligieron y se reescriben las
+ *    que se quedan (~2000).
+ * 4. Los **párrafos de Actividades Generales** (~1800).
+ * 5. Los **renglones del destinatario** que no salen (~300).
+ * 6. Las **sustituciones**, que no usan índices: `replaceAllText` compara
  *    texto. Van al final porque cambian longitudes en todo el documento.
  *
  * Al revés, el primer borrado invalidaría todos los índices de abajo.
+ *
+ * Además de la lista, devuelve los **tramos**: las mismas solicitudes con la
+ * parte a la que pertenece cada una, que es lo que permite reintentar sin el
+ * formato y nombrar lo que Google rechace (`lote.ts`).
  */
 export function solicitudesDelDocumento(
   plantilla: Parameters<typeof sustituciones>[0],
   d: DatosDeGeneracion,
   fecha: string,
-): { solicitudes: Solicitud[]; avisos: string[] } {
+): { solicitudes: Solicitud[]; tramos: Tramo[]; avisos: string[] } {
   const { valores, ocultos, avisos } = valoresDeMarcadores({
     cliente: d.cliente,
     folio: nombreDelDocumento(d).split(" ")[0],
@@ -106,10 +125,15 @@ export function solicitudesDelDocumento(
     direccionCliente: d.direccionCliente,
   });
 
+  const negro = solicitudesDeNegro(plantilla);
+  const salto = saltoAntesDeTerminos(plantilla);
+
   const cuadro = solicitudesDeTabla(plantilla, tablaDeCotizacion(d.armado, d.calculo));
 
   const elegidas = normasElegidas(d.documento.normas, d.titulo).map((n) => n.id);
   const normas = quitarNormas(plantilla, elegidas);
+
+  const actividades = ajustarActividades(plantilla, d.documento);
 
   // Quitar antes de sustituir: el renglón se localiza por su marcador, y una
   // vez sustituido ya no hay por dónde agarrarlo.
@@ -120,14 +144,26 @@ export function solicitudesDelDocumento(
     (m) => `La plantilla no trae el marcador {{${m}}}: ese dato no va a salir en el documento.`,
   );
 
+  const tramos: Tramo[] = [];
+  agregar(tramos, PARTES.negro, negro);
+  agregar(tramos, PARTES.salto, salto.solicitudes);
+  for (const t of cuadro.tramos) agregar(tramos, t.parte, t.solicitudes);
+  agregar(tramos, PARTES.normas, normas.solicitudes);
+  agregar(tramos, PARTES.actividades, actividades.solicitudes);
+  agregar(tramos, PARTES.destinatario, quitados.solicitudes);
+  agregar(tramos, PARTES.marcadores, puestos.solicitudes);
+
   return {
-    solicitudes: [
-      ...cuadro.solicitudes,
-      ...normas.solicitudes,
-      ...quitados.solicitudes,
-      ...puestos.solicitudes,
+    solicitudes: todas(tramos),
+    tramos,
+    avisos: [
+      ...avisos,
+      ...salto.avisos,
+      ...cuadro.avisos,
+      ...normas.avisos,
+      ...actividades.avisos,
+      ...deFaltantes,
     ],
-    avisos: [...avisos, ...cuadro.avisos, ...normas.avisos, ...deFaltantes],
   };
 }
 
@@ -156,13 +192,16 @@ export async function generarDocumento(
   });
 
   let pdf: DocumentoGenerado["pdf"];
-  let armadas: { solicitudes: Solicitud[]; avisos: string[] };
+  let avisos: string[];
+  let aplicadas: number;
   try {
     const plantilla = await e.documentos.leerDocumento(docId);
-    armadas = solicitudesDelDocumento(plantilla, d, fecha);
-    if (armadas.solicitudes.length > 0) {
-      await e.documentos.aplicarCambios(docId, armadas.solicitudes);
-    }
+    const armadas = solicitudesDelDocumento(plantilla, d, fecha);
+    const lote = await aplicarLote(e.documentos, docId, armadas.tramos);
+    // Lo que le falta al documento va antes que los huecos: es lo primero que
+    // hay que saber antes de mirarlo.
+    avisos = [...lote.avisos, ...armadas.avisos];
+    aplicadas = lote.aplicadas;
     pdf = await e.documentos.exportarPdf({ id: docId, nombre });
   } catch (err) {
     // La copia a medio llenar no se queda con el nombre bueno: la siguiente
@@ -182,7 +221,7 @@ export async function generarDocumento(
     try {
       await e.documentos.moverAPapelera(id);
     } catch {
-      armadas.avisos.push("No se pudo mandar a la papelera el documento anterior.");
+      avisos.push("No se pudo mandar a la papelera el documento anterior.");
     }
   }
 
@@ -192,7 +231,7 @@ export async function generarDocumento(
     nombre,
     fecha,
     fechaEsNueva: esNueva,
-    avisos: armadas.avisos,
-    solicitudes: armadas.solicitudes.length,
+    avisos,
+    solicitudes: aplicadas,
   };
 }

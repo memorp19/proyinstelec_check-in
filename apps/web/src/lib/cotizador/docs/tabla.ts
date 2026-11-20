@@ -41,12 +41,15 @@ import { bloquesDeDescripcion, bloquesVisibles, type Bloque } from "../bloques";
 import { importeParaDocumento, cantidadConUnidad } from "../presentacion";
 import { importeEnLetra } from "../letras";
 import type { Moneda, ResultadoCotizacion } from "../tipos";
+import { agregar, PARTES, todas, type Parte, type Tramo } from "./lote";
 import { tablaDePartidas } from "./recorrido";
 import type {
   DocumentoDocs,
   Rango,
   Solicitud,
   SolicitudEstiloCelda,
+  SolicitudEstiloFila,
+  SolicitudFijarEncabezado,
   SolicitudUnirCeldas,
   UbicacionCelda,
 } from "./tipos";
@@ -63,6 +66,16 @@ export interface PartidaDeTabla {
   unidad: string;
   precioUnitario: number;
   importe: number;
+  /**
+   * La nota de la partida, que sale en su **propio renglón, sin número**,
+   * debajo del concepto y en negritas.
+   *
+   * Es un renglón y no un párrafo más dentro de la celda porque así sale en
+   * los documentos reales: la nota habla de la partida entera —«el cliente
+   * proporciona la plataforma», «el software que se usará»— y mezclarla con
+   * el alcance la haría parecer una viñeta más de lo que se incluye.
+   */
+  nota?: string;
 }
 
 export interface TotalesDeTabla {
@@ -128,6 +141,7 @@ export function tablaDeCotizacion(armado: Armado, calculo: ResultadoCotizacion):
       unidad: p.unidad,
       precioUnitario: c?.precioUnitario ?? 0,
       importe: c?.importe ?? 0,
+      nota: p.notas ?? undefined,
     };
   });
 
@@ -276,6 +290,17 @@ function filasDePartidas(d: DatosDeTabla, opciones: OpcionesDeTabla): Fila[] {
       [{ texto: importeParaDocumento(p.precioUnitario, moneda), alineacion: "CENTER" }],
       [{ texto: importeParaDocumento(p.importe, moneda), alineacion: "CENTER" }],
     ]);
+
+    const nota = (p.nota ?? "").trim();
+    if (nota) {
+      fuera.push([
+        vacia(),
+        [{ texto: nota, negritas: true, alineacion: "JUSTIFIED" }],
+        vacia(),
+        vacia(),
+        vacia(),
+      ]);
+    }
   }
 
   return fuera;
@@ -296,12 +321,15 @@ function filasDeTotales(t: TotalesDeTabla): Fila[] {
   ];
   const letra = importeEnLetra(t.total, t.moneda);
 
+  // Sin negritas, ni en el Total ni en la letra. Los tres documentos reales
+  // los traen en letra normal: la jerarquía la hacen el recuadro y la
+  // posición, no el grosor.
   return renglones.map(([etiqueta, importe], f) => {
     const fila: Fila = [vacia(), vacia(), vacia(), vacia(), vacia()];
     fila[COL_UNITARIO] = [{ texto: etiqueta, alineacion: "START" }];
-    fila[COL_IMPORTE] = [{ texto: importe, alineacion: "CENTER", negritas: f === 2 }];
+    fila[COL_IMPORTE] = [{ texto: importe, alineacion: "CENTER" }];
     if (f === 2) {
-      fila[COLUMNA_DE_LA_LETRA] = [{ texto: letra, alineacion: "START", negritas: true }];
+      fila[COLUMNA_DE_LA_LETRA] = [{ texto: letra, alineacion: "START" }];
     }
     return fila;
   });
@@ -336,7 +364,13 @@ const inicioDeCeldaVacia = (inicioFila: number, columna: number): number =>
 // ── El armado ─────────────────────────────────────────────────────────────────
 
 export interface TablaArmada {
+  /** Todas, en el orden en que van al lote. */
   solicitudes: Solicitud[];
+  /**
+   * Las mismas, en el mismo orden, con la parte a la que pertenece cada una:
+   * la tabla, los totales, la letra o alguno de sus formatos. Ver `lote.ts`.
+   */
+  tramos: Tramo[];
   avisos: string[];
   /** Cuántas filas quedó midiendo la tabla, encabezado incluido. */
   filas: number;
@@ -357,6 +391,7 @@ export function solicitudesDeTabla(
   if (!ubicada) {
     return {
       solicitudes: [],
+      tramos: [],
       avisos: [
         "La plantilla no trae la tabla de partidas (ninguna tabla empieza con " +
           "«Partida»): el documento va a salir sin el cuadro.",
@@ -372,6 +407,7 @@ export function solicitudesDeTabla(
   if (filasEnPlantilla < 2) {
     return {
       solicitudes: [],
+      tramos: [],
       avisos: [
         "La tabla de partidas de la plantilla no trae un renglón de ejemplo debajo " +
           "del encabezado: sin él no hay de dónde copiar el formato.",
@@ -380,7 +416,8 @@ export function solicitudesDeTabla(
     };
   }
 
-  const solicitudes: Solicitud[] = [];
+  const tramos: Tramo[] = [];
+  const poner = (parte: Parte, ...s: Solicitud[]) => agregar(tramos, parte, s);
   const tabla = { index: ubicada.startIndex };
   const celda = (rowIndex: number, columnIndex: number): UbicacionCelda => ({
     tableStartLocation: tabla,
@@ -388,15 +425,25 @@ export function solicitudesDeTabla(
     columnIndex,
   });
 
+  // De qué parte es cada celda, para nombrarla si Google la rechaza. `k` es
+  // el renglón dentro de `cuerpo`, desde 0.
+  const primerTotal = cuerpo.length - FILAS_DE_TOTALES;
+  const parteDeCelda = (k: number, c: number): Parte =>
+    k < primerTotal
+      ? PARTES.tabla
+      : k === cuerpo.length - 1 && c === COLUMNA_DE_LA_LETRA
+        ? PARTES.letra
+        : PARTES.totales;
+
   // ── 1. Las filas ────────────────────────────────────────────────────────────
   // Se conserva la 1, que es el molde: trae los bordes, los anchos y la letra
   // del cuadro hecho a mano. Las demás se borran y se vuelven a crear como
   // copias suyas, igual que el original (`COT_05:962-966`).
   for (let f = filasEnPlantilla - 1; f >= 2; f--) {
-    solicitudes.push({ deleteTableRow: { tableCellLocation: celda(f, 0) } });
+    poner(PARTES.tabla, { deleteTableRow: { tableCellLocation: celda(f, 0) } });
   }
   for (let i = 0; i < cuerpo.length - 1; i++) {
-    solicitudes.push({ insertTableRow: { tableCellLocation: celda(1, 0), insertBelow: true } });
+    poner(PARTES.tabla, { insertTableRow: { tableCellLocation: celda(1, 0), insertBelow: true } });
   }
 
   // ── 2. Los textos, de la última celda a la primera ──────────────────────────
@@ -409,7 +456,7 @@ export function solicitudesDeTabla(
     for (let c = COLUMNAS - 1; c >= 0; c--) {
       const texto = textoDeCelda(fila[c]);
       if (!texto) continue;
-      solicitudes.push({
+      poner(parteDeCelda(k - 1, c), {
         insertText: { location: { index: inicioDeCeldaVacia(inicioDeFilaVacia(k), c) }, text: texto },
       });
     }
@@ -430,7 +477,7 @@ export function solicitudesDeTabla(
   // en el que se inserta: sin esto, el título de la primera partida saldría
   // con viñeta y sus viñetas saldrían con dos guiones. No cambia longitudes,
   // así que va con los estilos.
-  solicitudes.push({
+  poner(PARTES.tabla, {
     deleteParagraphBullets: {
       range: { startIndex: ubicada.tabla.tableRows![1].startIndex!, endIndex: cursor },
     },
@@ -438,7 +485,10 @@ export function solicitudesDeTabla(
 
   // Arial 8 negro en todo el cuerpo de la tabla, marcas de párrafo incluidas:
   // es lo que le da color y tamaño al guion de las viñetas (`COT_05:1657`).
-  solicitudes.push({
+  //
+  // Es contenido y no formato, aunque sea un estilo: sin él la tabla sale con
+  // la letra y el tamaño del molde, y lo que se insertó, en rojo.
+  poner(PARTES.tabla, {
     updateTextStyle: {
       range: { startIndex: ubicada.tabla.tableRows![1].startIndex!, endIndex: cursor },
       textStyle: {
@@ -453,11 +503,12 @@ export function solicitudesDeTabla(
 
   cuerpo.forEach((fila, k) => {
     fila.forEach((celdaPlana, c) => {
+      const parte = parteDeCelda(k, c);
       let i = inicioDeCelda(inicioFinal[k], fila, c);
       for (const p of celdaPlana) {
         const rango: Rango = { startIndex: i, endIndex: i + p.texto.length + 1 };
         if (p.alineacion || p.sangria) {
-          solicitudes.push({
+          poner(parte, {
             updateParagraphStyle: {
               range: rango,
               paragraphStyle: {
@@ -473,7 +524,7 @@ export function solicitudesDeTabla(
         }
         // Las negritas van después del barrido de arriba, que las apaga todas.
         if (p.negritas && p.texto) {
-          solicitudes.push({
+          poner(parte, {
             updateTextStyle: {
               range: { startIndex: i, endIndex: i + p.texto.length },
               textStyle: { bold: true },
@@ -486,14 +537,26 @@ export function solicitudesDeTabla(
     });
   });
 
-  // ── 4. Unir la celda de la letra y quitar las líneas de más ─────────────────
-  solicitudes.push(...bordesDeLaTabla(tabla.index, cuerpo.length - FILAS_DE_TOTALES));
+  // De aquí abajo todo es formato: si Google lo rechaza, el documento sale sin
+  // esto y con un aviso (`lote.ts`). Ninguna de estas solicitudes mueve
+  // índices, así que quitarlas no descuadra lo de arriba.
+
+  // ── 4. Encabezado que se repite y filas que no se parten ────────────────────
+  for (const s of filasDeLaTabla(tabla.index)) {
+    poner("pinTableHeaderRows" in s ? PARTES.encabezadoFijo : PARTES.filasEnteras, s);
+  }
+
+  // ── 5. Quitar las líneas de más y unir la celda de la letra ─────────────────
+  // Unir se queda al final del todo: después de unir, las columnas de esas
+  // filas ya no son las mismas.
+  poner(PARTES.bordes, ...lineasDeLaTabla(tabla.index, primerTotal));
+  poner(PARTES.celdaUnida, ...celdaDeLaLetra(tabla.index, primerTotal));
 
   if (datos.partidas.length === 0) {
     avisos.push("La cotización no tiene partidas: el cuadro sale solo con los totales.");
   }
 
-  return { solicitudes, avisos, filas: cuerpo.length + 1 };
+  return { solicitudes: todas(tramos), tramos, avisos, filas: cuerpo.length + 1 };
 }
 
 // ── Bordes y celdas unidas ────────────────────────────────────────────────────
@@ -523,16 +586,28 @@ export function bordesDeLaTabla(
   inicioTabla: number,
   filasDePartidas: number,
 ): Array<SolicitudUnirCeldas | SolicitudEstiloCelda> {
-  const fuera: Array<SolicitudUnirCeldas | SolicitudEstiloCelda> = [];
-  const rango = (fila: number, columna: number, filas: number, columnas: number) => ({
+  return [
+    ...lineasDeLaTabla(inicioTabla, filasDePartidas),
+    ...celdaDeLaLetra(inicioTabla, filasDePartidas),
+  ];
+}
+
+/** Un bloque de celdas de la tabla que empieza en `inicioTabla`. */
+const rangoDe =
+  (inicioTabla: number) => (fila: number, columna: number, filas: number, columnas: number) => ({
     tableCellLocation: { tableStartLocation: { index: inicioTabla }, rowIndex: fila, columnIndex: columna },
     rowSpan: filas,
     columnSpan: columnas,
   });
 
-  // La primera fila de partidas es la 1; la 0 es el encabezado.
-  const primera = 1;
-  const finPartidas = primera + filasDePartidas; // primera fila que ya no es partida
+/** La primera fila de partidas es la 1; la 0 es el encabezado. */
+const PRIMERA_PARTIDA = 1;
+
+/** Las dos primeras cosas de `bordesDeLaTabla`: las líneas que se quitan. */
+function lineasDeLaTabla(inicioTabla: number, filasDePartidas: number): SolicitudEstiloCelda[] {
+  const fuera: SolicitudEstiloCelda[] = [];
+  const rango = rangoDe(inicioTabla);
+  const primera = PRIMERA_PARTIDA;
 
   if (filasDePartidas > 1) {
     fuera.push({
@@ -568,18 +643,92 @@ export function bordesDeLaTabla(
     });
   }
 
-  // Unir va al final: después de unir, las columnas de esas filas ya no son
-  // las mismas y cualquier otro rango sobre ellas apuntaría a otra cosa.
+  return fuera;
+}
+
+/**
+ * La tercera de `bordesDeLaTabla`: la celda de la letra, unida y sin recuadro.
+ *
+ * Va al final: después de unir, las columnas de esas filas ya no son las
+ * mismas y cualquier otro rango sobre ellas apuntaría a otra cosa.
+ */
+function celdaDeLaLetra(
+  inicioTabla: number,
+  filasDePartidas: number,
+): Array<SolicitudUnirCeldas | SolicitudEstiloCelda> {
+  const rango = rangoDe(inicioTabla);
+  const finPartidas = PRIMERA_PARTIDA + filasDePartidas; // primera fila que ya no es partida
+
+  const fuera: Array<SolicitudUnirCeldas | SolicitudEstiloCelda> = [];
   fuera.push({
     mergeTableCells: { tableRange: rango(finPartidas, 0, FILAS_DE_TOTALES, 3) },
   });
   fuera.push({
     updateTableCellStyle: {
       tableRange: rango(finPartidas, 0, FILAS_DE_TOTALES, 3),
-      tableCellStyle: { borderLeft: SIN_LINEA, borderBottom: SIN_LINEA },
-      fields: "borderLeft,borderBottom",
+      // Abajo, no en medio: así la letra queda a la altura del renglón del
+      // Total y no flotando entre Subtotal e IVA, que es como sale en los
+      // documentos reales.
+      tableCellStyle: {
+        borderLeft: SIN_LINEA,
+        borderBottom: SIN_LINEA,
+        contentAlignment: "BOTTOM",
+      },
+      fields: "borderLeft,borderBottom,contentAlignment",
     },
   });
 
   return fuera;
+}
+
+/**
+ * Que la tabla se siga leyendo cuando pasa de hoja.
+ *
+ * Dos cosas, y ninguna habla de índices de carácter: las dos se refieren a la
+ * tabla por su `tableStartLocation` y a sus filas por número.
+ *
+ * 1. `preventOverflow` en todas las filas: una partida con quince viñetas
+ *    salta entera a la hoja siguiente en vez de cortarse por la mitad.
+ * 2. `pinTableHeaderRows` sobre la fila 0: el encabezado —PARTIDA, CONCEPTO,
+ *    CANTIDAD…— se repite arriba de cada hoja en la que la tabla siga.
+ *
+ * ── Por qué el encabezado estaba sin hacer ──
+ *
+ * Se intentó como `tableHeader` **dentro de `updateTableRowStyle`**, y la API
+ * contesta `Unallowed field: tableHeader` y tumba el lote entero. De ahí la
+ * conclusión equivocada de que no se podía y había que marcarlo a mano en la
+ * plantilla.
+ *
+ * Sí se puede: es una **solicitud aparte**. Así lo hace el ERP viejo desde el
+ * 3 de noviembre de 2026 (`COT_05_Documento.gs:1581`,
+ * `ajustesFinalesConDocsApi_`), que por el mismo motivo tiene que bajar de
+ * `DocumentApp` a la API de Docs.
+ *
+ * ── Si la API los rechaza ──
+ *
+ * Allá los dos ajustes van en **dos llamadas distintas** y el error del
+ * fijado se traga: si falla, el documento sale sin encabezado repetido y
+ * nadie se entera. Aquí van en el lote del documento, marcados como
+ * **formato** (`lote.ts`): si Google rechaza el lote, se reintenta sin el
+ * formato y el documento sale con un aviso que dice qué le falta. Ni se
+ * pierde la cotización por un detalle, ni sale incompleta sin decirlo.
+ */
+export function filasDeLaTabla(
+  inicioTabla: number,
+): Array<SolicitudEstiloFila | SolicitudFijarEncabezado> {
+  const tableStartLocation = { index: inicioTabla };
+  return [
+    {
+      // Sin `rowIndices` se aplica a todas las filas.
+      updateTableRowStyle: {
+        tableStartLocation,
+        tableRowStyle: { preventOverflow: true },
+        fields: "preventOverflow",
+      },
+    },
+    {
+      // La 0 es el encabezado; la 1 es el molde que se clona.
+      pinTableHeaderRows: { tableStartLocation, pinnedHeaderRowsCount: 1 },
+    },
+  ];
 }

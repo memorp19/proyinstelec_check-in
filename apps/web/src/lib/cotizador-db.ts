@@ -9,7 +9,7 @@
  * guardado usa dos pasos y el primero sirve de candado; está explicado en
  * `guardarArmado`.
  */
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import {
   catServicios,
@@ -65,6 +65,15 @@ export interface ArmadoCompleto {
    * empresa, y decir "encontrado en el catálogo" entonces sería mentir.
    */
   contactoDelCatalogo: boolean;
+  /**
+   * Los ids del documento y del PDF que generó el ERP para esta versión.
+   *
+   * `null` mientras nadie le haya dado a "Ver cotización". Son los que hay
+   * que apartar cuando se regenera, y los que el envío al cliente prefiere
+   * sobre buscar el PDF por nombre.
+   */
+  docDriveId: string | null;
+  pdfDriveId: string | null;
   /** El congelado, si esta versión ya pasó a revisión. */
   congelado: { total: string; letra: string; congeladoAt: string } | null;
   /**
@@ -200,6 +209,9 @@ export async function getArmado(
       avisos: [],
       llenadoAutomatico: llenados,
       contactoDelCatalogo: machote.encontrado,
+      // Sin encabezado no hay fila donde guardarlos: nunca se generó nada.
+      docDriveId: null,
+      pdfDriveId: null,
       congelado: null,
       actualizadoEn: null,
     };
@@ -304,6 +316,8 @@ export async function getArmado(
     cotizacion,
     armado,
     resultado,
+    docDriveId: encabezado.docDriveId ?? null,
+    pdfDriveId: encabezado.pdfDriveId ?? null,
     desfases: detectarDesfases(lineas, catalogo),
     avisos,
     llenadoAutomatico: llenados,
@@ -535,4 +549,54 @@ export async function actualizarPrecios(params: {
   if (cambios.length === 0) return { actualizados: 0 };
   await db.batch([cambios[0], ...cambios.slice(1)]);
   return { actualizados: cambios.length };
+}
+
+// ── Los ids del documento generado ────────────────────────────────────────────
+
+/**
+ * Guarda dónde quedaron el Doc y el PDF de una versión.
+ *
+ * Una sola sentencia, como todo lo que escribe aquí: el driver HTTP de Neon
+ * no tiene transacciones interactivas, y las tres columnas tienen que moverse
+ * juntas o no moverse.
+ *
+ * `fecha` solo se manda la **primera vez**, cuando el documento la fijó. Si se
+ * reescribiera en cada regeneración, una cotización rehecha una semana después
+ * cambiaría la fecha que el cliente ya tiene impresa.
+ */
+export async function guardarIdsDeDocumento(params: {
+  numero: number;
+  anio: number;
+  version: number;
+  docDriveId: string;
+  pdfDriveId: string;
+  /** `aaaa-mm-dd`, solo si el documento acaba de fijarla. */
+  fecha?: string;
+}): Promise<void> {
+  const db = getDb();
+  const clave = and(
+    eq(cotArmado.numero, params.numero),
+    eq(cotArmado.anio, params.anio),
+    eq(cotArmado.version, params.version),
+  );
+
+  if (!params.fecha) {
+    await db
+      .update(cotArmado)
+      .set({ docDriveId: params.docDriveId, pdfDriveId: params.pdfDriveId, updatedAt: new Date() })
+      .where(clave);
+    return;
+  }
+
+  // La fecha vive dentro del bloque `documento`, así que se mezcla ahí sin
+  // releerlo: `jsonb_set` lo hace en la misma sentencia que los dos ids.
+  await db
+    .update(cotArmado)
+    .set({
+      docDriveId: params.docDriveId,
+      pdfDriveId: params.pdfDriveId,
+      documento: sql`jsonb_set(coalesce(${cotArmado.documento}, '{}'::jsonb), '{fecha}', to_jsonb(${params.fecha}::text), true)`,
+      updatedAt: new Date(),
+    })
+    .where(clave);
 }

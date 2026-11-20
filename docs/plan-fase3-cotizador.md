@@ -866,6 +866,33 @@ Los términos y condiciones empiezan en hoja nueva con `pageBreakBefore`
 con la API de Docs. Por eso la API de Docs es un requisito y no una comodidad —
 sin ella el documento sale, pero con los términos pegados a la tabla.
 
+### 4.3b 🟡 Secciones técnicas de los estudios — decisión pendiente
+
+La **290** (Estudio de Arco Eléctrico) trae tres secciones que ninguna otra
+cotización tiene: *Generalidades de los Estudios de Cortocircuito y
+Coordinación de Protecciones*, *Alcance del Suministro* y *Criterios de
+Diseño*, cada una con su propia lista de viñetas.
+
+**No las genera Apps Script: se agregaron a mano en el Doc.** Por eso no hay
+regla que copiar, y por eso no entran con el PR 6b.
+
+Lo que hay que decidir es **dónde se capturan**. Hoy el modelo no tiene sitio
+para "texto técnico largo por tipo de estudio": `documento.objeto` y
+`documento.alcance` son dos párrafos sueltos, y la descripción de una partida
+es del alcance de esa partida, no de la propuesta.
+
+Las opciones, sin elegir:
+
+- **Bloques libres en `documento`**, como los de la descripción de partida:
+  título + viñetas, cuantos haga falta. Flexible y sin catálogo que mantener;
+  cada quien los escribe otra vez.
+- **Un catálogo de secciones por tipo de servicio**, que se proponen solas
+  como las normas. Consistente entre cotizaciones, pero hay que darle de alta
+  y mantener los textos.
+
+Cuando se decida, el generador las inserta **antes de "Documentos Aplicables
+y/o Referencias."**, que es donde están en la 290.
+
 ### 4.4 Nombre, carpeta y cómo se encuentra
 
 **Nombre: `<folio> <titulo>`**, con espacio, siempre. Es lo que ya produce

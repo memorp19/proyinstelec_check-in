@@ -143,22 +143,69 @@ describe("normasEnPlantilla", () => {
 });
 
 describe("quitarNormas", () => {
-  it("borra las que no se eligieron y deja las que sí", () => {
-    const elegidas = ["CFE-SOM-3531", "GEN-INSTRUCTIVOS"];
-    const r = quitarNormas(plantillaFalsa(), elegidas);
-    expect(r.solicitudes).toHaveLength(21);
+  const borrados = (r: ReturnType<typeof quitarNormas>) =>
+    r.solicitudes.filter((s) => "deleteContentRange" in s);
+  const insertados = (r: ReturnType<typeof quitarNormas>) =>
+    r.solicitudes.flatMap((s) => ("insertText" in s ? [s.insertText.text] : []));
+  /** El índice en el que opera cada solicitud, sea del tipo que sea. */
+  const inicios = (r: ReturnType<typeof quitarNormas>) =>
+    r.solicitudes.map((s) =>
+      "deleteContentRange" in s ? s.deleteContentRange.range.startIndex : s.insertText.location.index,
+    );
+
+  it("borra las que no se eligieron", () => {
+    const r = quitarNormas(plantillaFalsa(), ["CFE-SOM-3531", "GEN-INSTRUCTIVOS"]);
+    expect(borrados(r)).toHaveLength(
+      // Las 21 que sobran, más el texto de la elegida que hay que reescribir.
+      21 + 1,
+    );
   });
 
-  it("sin nada que quitar no emite solicitudes", () => {
-    const todas = NORMAS.map((n) => n.id);
-    expect(quitarNormas(plantillaFalsa(), todas).solicitudes).toEqual([]);
+  /**
+   * Lo que de verdad importa de este módulo: el texto que sale es el del
+   * catálogo, no el de la plantilla. La plantilla imprime `IEEC` por `IEEE`,
+   * no cierra la comilla y deja espacios de más; Apps Script no hereda nada
+   * de eso porque escribe los suyos, y ningún documento real lo trae.
+   */
+  it("reescribe con el texto del catálogo lo que la plantilla trae mal", () => {
+    const r = quitarNormas(plantillaFalsa(), ["IEEE-C57.12.90"]);
+    const bueno = NORMAS.find((n) => n.id === "IEEE-C57.12.90")!.texto;
+
+    expect(insertados(r)).toContain(bueno);
+    expect(bueno).toContain("IEEE C57.12.90-1999");
+    expect(insertados(r).join(" ")).not.toContain("IEEC");
   });
 
-  /** `deleteContentRange` corre los índices posteriores y la API aplica en orden. */
+  it("la que ya dice lo mismo que el catálogo no se toca", () => {
+    // "Instructivos del fabricante" está igual en la plantilla y en el catálogo.
+    const r = quitarNormas(plantillaFalsa(), NORMAS.map((n) => n.id));
+    expect(insertados(r)).not.toContain("Instructivos del fabricante");
+  });
+
+  it("eligiéndolas todas no se borra ningún párrafo, solo se reescribe", () => {
+    const r = quitarNormas(plantillaFalsa(), NORMAS.map((n) => n.id));
+    // Un borrado por cada reescritura, y ninguno que se lleve el párrafo entero.
+    expect(borrados(r)).toHaveLength(insertados(r).length);
+    for (const texto of insertados(r)) {
+      expect(NORMAS.map((n) => n.texto)).toContain(texto);
+    }
+  });
+
+  /** Todo lo que cambia longitudes corre los índices posteriores. */
   it("emite los rangos de atrás hacia adelante", () => {
     const r = quitarNormas(plantillaFalsa(), ["CFE-SOM-3531"]);
-    const inicios = r.solicitudes.map((s) => s.deleteContentRange.range.startIndex);
-    expect(inicios).toEqual([...inicios].sort((a, b) => b - a));
+    expect(inicios(r)).toEqual([...inicios(r)].sort((a, b) => b - a));
+  });
+
+  /**
+   * Dentro del mismo párrafo, borrar va antes que insertar: al revés, el
+   * borrado se llevaría por delante el texto recién escrito.
+   */
+  it("en el párrafo que se reescribe, primero borra y después inserta", () => {
+    const r = quitarNormas(plantillaFalsa(), ["IEEE-C57.12.90"]);
+    const i = r.solicitudes.findIndex((s) => "insertText" in s);
+    expect(i).toBeGreaterThan(0);
+    expect(r.solicitudes[i - 1]).toHaveProperty("deleteContentRange");
   });
 
   it("elegir una norma que la plantilla no imprime avisa", () => {

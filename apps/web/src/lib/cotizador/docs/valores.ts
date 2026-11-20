@@ -121,7 +121,8 @@ export function valoresDeMarcadores(d: DatosParaMarcadores): Valores {
   const direccion1 = c.direccion1.trim() || auto1;
   const direccion2 = c.direccion2.trim() || (c.direccion1.trim() ? "" : auto2);
 
-  const titulo = tituloParaDocumento(d.titulo);
+  // Con la razón social: en el documento el título se lee "<título> - <cliente>".
+  const titulo = tituloParaDocumento(d.titulo, d.cliente);
   const lugar = fraseDeLugar(d.condiciones.lugar);
 
   const valores: Record<Marcador, string> = {

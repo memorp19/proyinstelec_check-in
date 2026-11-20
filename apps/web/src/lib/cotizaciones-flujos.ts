@@ -9,6 +9,7 @@ import {
   getVersion,
   getVigente,
   marcarNoAsignadas,
+  pdfGeneradoDe,
   puedeEnviarseAlCliente,
   registrarAprobacion,
   updateCotizacion,
@@ -233,6 +234,7 @@ export async function enviarARevision(params: {
       const { pdf, nombresEnCarpeta } = await buscarPdfCotizacion({
         folderId: cotizacion.drive_folder_id,
         folio,
+        pdfDriveId: await pdfGeneradoDe(cotizacion),
       });
       if (pdf) {
         adjuntos = [{ filename: pdf.filename, mimeType: "application/pdf", contenido: pdf.contenido }];
@@ -428,6 +430,7 @@ export async function datosParaEnvio(params: {
           await buscarPdfCotizacion({
             folderId: cotizacion.drive_folder_id,
             folio: folioEsperado(cotizacion),
+            pdfDriveId: await pdfGeneradoDe(cotizacion),
           })
         ).pdf != null;
     } catch {
@@ -488,6 +491,7 @@ export async function enviarAlCliente(params: {
   const { pdf, nombresEnCarpeta } = await buscarPdfCotizacion({
     folderId: cotizacion.drive_folder_id,
     folio: esperado,
+    pdfDriveId: await pdfGeneradoDe(cotizacion),
   });
   if (!pdf) {
     throw new Error(

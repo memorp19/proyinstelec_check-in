@@ -16,6 +16,7 @@ import type {
   Tabla,
 } from "@/src/lib/cotizador/docs/tipos";
 import type { ArchivoExportado, Documentos } from "@/src/lib/documentos-google";
+import { LoteRechazado } from "@/src/lib/cotizador/docs/lote";
 
 // ── Construir un documento de prueba ──────────────────────────────────────────
 
@@ -26,6 +27,9 @@ import type { ArchivoExportado, Documentos } from "@/src/lib/documentos-google";
  * escriba a mano se equivoca y además no se entiende. Aquí se calculan como
  * los calcula Docs: cada carácter ocupa uno, y un párrafo termina con `\n`.
  */
+/** El rojo con el que la plantilla marca lo que hay que llenar. */
+const ROJO = { color: { rgbColor: { red: 1, green: 0, blue: 0 } } };
+
 export class ArmaDocumento {
   private indice = 1; // Docs empieza en 1: el 0 no existe.
   private contenido: ElementoEstructural[] = [];
@@ -44,6 +48,24 @@ export class ArmaDocumento {
     const el = this.nuevoParrafo(texto);
     el.paragraph!.bullet = { listId, nestingLevel: nivel };
     this.contenido.push(el);
+    return this;
+  }
+
+  /**
+   * Un párrafo en rojo, como los que la plantilla usa para marcar lo que hay
+   * que llenar. Es lo que el generador tiene que dejar en negro.
+   */
+  parrafoRojo(texto: string): this {
+    const el = this.nuevoParrafo(texto);
+    el.paragraph!.elements![0].textRun!.textStyle = { foregroundColor: ROJO };
+    this.contenido.push(el);
+    return this;
+  }
+
+  /** Una viñeta cuyo **glifo** está en rojo, aunque su texto no lo esté. */
+  vinetaRoja(texto: string, listId = "lista-1"): this {
+    this.vineta(texto, listId);
+    this.contenido.at(-1)!.paragraph!.bullet!.textStyle = { foregroundColor: ROJO };
     return this;
   }
 
@@ -128,19 +150,34 @@ export interface LlamadaAplicar {
 export interface DocumentosFalso extends Documentos {
   /** Siembra el documento que devolverá `leerDocumento` para ese id. */
   sembrar(id: string, doc: DocumentoDocs): void;
-  /** Todo lo que se le mandó a `aplicarCambios`, en orden. */
+  /** Los lotes que **entraron**, en orden. */
   readonly aplicadas: LlamadaAplicar[];
+  /** Todo lo que se le mandó a `aplicarCambios`, haya entrado o no. */
+  readonly intentos: LlamadaAplicar[];
   readonly copiados: Array<{ plantillaId: string; nombre: string; carpetaId: string; id: string }>;
   readonly exportados: string[];
   readonly papelera: string[];
 }
 
+export interface OpcionesDelFalso {
+  /** Lo que lanza cualquier `aplicarCambios`: un fallo que no es un rechazo. */
+  fallaAlAplicar?: Error;
+  fallaAlApartar?: string;
+  /**
+   * Hace de la API de Docs: rechaza el lote que traiga una solicitud así y
+   * contesta como Google, con el número de la primera que encuentre:
+   * «Invalid requests[N].<tipo>: <motivo>».
+   */
+  rechaza?: { si: (s: Solicitud) => boolean; motivo: string };
+}
+
 export function documentosFalso(
   plantilla?: DocumentoDocs,
-  opciones: { fallaAlAplicar?: Error; fallaAlApartar?: string } = {},
+  opciones: OpcionesDelFalso = {},
 ): DocumentosFalso {
   const docs = new Map<string, DocumentoDocs>();
   const aplicadas: LlamadaAplicar[] = [];
+  const intentos: LlamadaAplicar[] = [];
   const copiados: DocumentosFalso["copiados"] = [];
   const exportados: string[] = [];
   const papelera: string[] = [];
@@ -150,6 +187,7 @@ export function documentosFalso(
 
   return {
     aplicadas,
+    intentos,
     copiados,
     exportados,
     papelera,
@@ -175,8 +213,17 @@ export function documentosFalso(
     },
 
     async aplicarCambios(id, solicitudes) {
+      intentos.push({ id, solicitudes });
       if (opciones.fallaAlAplicar) throw opciones.fallaAlAplicar;
       if (!docs.has(id)) throw new Error(`No hay documento con id ${id}`);
+      if (opciones.rechaza) {
+        const { si, motivo } = opciones.rechaza;
+        const n = solicitudes.findIndex(si);
+        if (n >= 0) {
+          const tipo = Object.keys(solicitudes[n])[0];
+          throw new LoteRechazado(`Invalid requests[${n}].${tipo}: ${motivo}`);
+        }
+      }
       aplicadas.push({ id, solicitudes });
     },
 

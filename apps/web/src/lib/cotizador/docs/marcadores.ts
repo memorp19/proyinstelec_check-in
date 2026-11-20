@@ -105,11 +105,18 @@ export function sustituciones(
       continue;
     }
     encontrados.push(marcador);
-    for (const forma of formas) {
+    const valor = valores[marcador] ?? "";
+    // Si el valor ya termina en punto y la plantilla pone otro detrás, se
+    // sustituyen los dos de una vez. Es el "S.A. de C.V.." que sale en todos
+    // los documentos del sistema viejo: ahí nadie lo arregló, y copiar una
+    // errata a propósito no tiene defensa. Primero la forma con punto, que es
+    // la más larga; si se hiciera al revés, la corta ya no la dejaría ver.
+    const conPunto = /\.$/.test(valor) ? formas.map((f) => `${f}.`) : [];
+    for (const forma of [...conPunto, ...formas]) {
       solicitudes.push({
         replaceAllText: {
           containsText: { text: forma, matchCase: true },
-          replaceText: valores[marcador] ?? "",
+          replaceText: valor,
         },
       });
     }

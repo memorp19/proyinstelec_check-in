@@ -109,16 +109,61 @@ export function textoDelReporte(modo: ModoReporte, propio: string): string {
 
 // ── Los textos sugeridos de "Actividades Generales" ───────────────────────────
 
-/** Título para leerse: el guion bajo del folio se lee como " - ". */
-export function tituloParaDocumento(titulo: string | null | undefined): string {
-  return String(titulo ?? "").replace(/\s*_\s*/g, " - ").replace(/\s+/g, " ").trim();
+/**
+ * Para comparar dos nombres escritos por personas distintas: sin acentos, sin
+ * puntuación y sin espacios. "S.A. de C.V." y "SA de CV" son lo mismo.
+ *
+ * No se reutiliza `normalizarRazonSocial` de `clientes.ts` —que además quita
+ * los sufijos legales— porque ese módulo consulta la base, y éste acaba en el
+ * bundle del navegador a través de las pantallas del cotizador. Aquí no hace
+ * falta tanto: se compara la razón social **consigo misma**, escrita de otra
+ * manera, no dos empresas parecidas.
+ */
+const paraComparar = (texto: string) =>
+  texto
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+
+/**
+ * El título como se lee en el documento: **título + " - " + razón social**.
+ *
+ * Los documentos reales llevan el cliente al final del título —"Estudio de
+ * Arco Eléctrico - Stellantis Motores - SC INGENIERIA, S.A. de C.V."— y hay
+ * dos caminos para llegar ahí, según de dónde venga la cotización:
+ *
+ * - **Con `_`**: el título ya trae el cliente pegado, que es como lo guarda
+ *   el sistema viejo y como llegaron las 331 importadas de 2026. Se convierte
+ *   el `_` en " - " y no se añade nada: el cliente ya está.
+ * - **Sin `_`**: la dio de alta el ERP, que guarda el título a secas. Se le
+ *   pega la razón social, que es el dato que le falta para leerse igual.
+ *
+ * No se duplica si el título ya termina con la razón social: pasa en cuanto
+ * alguien la escribe a mano al teclear el título.
+ */
+export function tituloParaDocumento(
+  titulo: string | null | undefined,
+  cliente?: string | null,
+): string {
+  const crudo = String(titulo ?? "");
+  const leible = crudo.replace(/\s*_\s*/g, " - ").replace(/\s+/g, " ").trim();
+
+  if (crudo.includes("_")) return leible;
+
+  const razon = String(cliente ?? "").trim();
+  if (!leible || !razon) return leible;
+  if (paraComparar(leible).endsWith(paraComparar(razon))) return leible;
+
+  return `${leible} - ${razon}`;
 }
 
 /** El servicio que se cotiza, sacado del título. */
 function servicioDelTitulo(titulo: string | null | undefined): string {
   let t = tituloParaDocumento(titulo);
-  // Lo que va después del guion suele ser el sitio, no el servicio.
-  t = t.split(/\s+-\s+/)[0].trim();
+  // Lo que va después del guion suele ser el sitio, no el servicio. El guion
+  // largo cuenta: los títulos se escriben a mano y Word lo pone solo.
+  t = t.split(/\s+[-–]\s+/)[0].trim();
   return t.replace(/^servicio\s+de\s+/i, "");
 }
 
@@ -156,14 +201,19 @@ export function textosSugeridos(
   const servicio = servicioDelTitulo(titulo);
   const servicioMin =
     !servicio || /^mantenimiento\s+preventivo/i.test(servicio) ? "mantenimiento preventivo" : servicio;
-  const sitio = sitioDelProyecto(tituloParaDocumento(titulo), cliente);
+  // El mismo título que va a salir impreso, para que el sitio del párrafo y
+  // el del documento no puedan discrepar.
+  const sitio = sitioDelProyecto(tituloParaDocumento(titulo, cliente), cliente);
+  // Sin punto si el sitio ya trae el suyo: casi todas las razones sociales
+  // terminan en "S.A. de C.V." y el legacy imprime "C.V.." en todas.
+  const sitioConPunto = /\.$/.test(sitio.trim()) ? sitio.trim() : `${sitio.trim()}.`;
 
   return {
     objeto:
       "El objeto de la presente propuesta técnica que ofrecemos consiste en contratar la " +
       `prestación del servicio de ${servicioMin}, así como la asesoría en diagnósticos ` +
       "requerida, con el fin de mantener el buen estado operativo de la(s) Subestación(es) " +
-      `Eléctrica(s) propiedad del ${sitio}.`,
+      `Eléctrica(s) propiedad del ${sitioConPunto}`,
     alcance:
       `El alcance principal del servicio de ${servicioMin} que se solicita contratar ` +
       "considera el logro del mejor rendimiento, disponibilidad y confiabilidad de los " +

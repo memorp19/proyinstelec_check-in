@@ -31,6 +31,12 @@ export interface EstiloTexto {
 export interface EstiloParrafo {
   namedStyleType?: string;
   alignment?: string;
+  /**
+   * Empezar en hoja nueva. No existe en `DocumentApp`, que es la razón de que
+   * el legacy tenga que llamar a la API de Docs después de guardar
+   * (`COT_05:1418`): sin esto, los términos salen pegados al cuadro.
+   */
+  pageBreakBefore?: boolean;
   indentStart?: { magnitude: number; unit: string };
   indentFirstLine?: { magnitude: number; unit: string };
   spaceAbove?: { magnitude: number; unit: string };
@@ -141,7 +147,9 @@ export type Solicitud =
   | SolicitudVinetas
   | SolicitudQuitarVinetas
   | SolicitudUnirCeldas
-  | SolicitudEstiloCelda;
+  | SolicitudEstiloCelda
+  | SolicitudEstiloFila
+  | SolicitudFijarEncabezado;
 
 export interface SolicitudReemplazarTexto {
   replaceAllText: {
@@ -205,6 +213,51 @@ export interface SolicitudEstiloCelda {
     tableRange: RangoTabla;
     tableCellStyle: EstiloCelda;
     fields: string;
+  };
+}
+
+/** Lo que distingue una fila: si se puede partir entre dos hojas. */
+export interface EstiloFila {
+  /**
+   * Impide que el contenido de la fila se parta entre dos páginas.
+   *
+   * Es lo que hace que una partida con quince viñetas salga entera en la hoja
+   * siguiente en vez de cortada por la mitad. Los tres documentos reales lo
+   * traen en **todas** sus filas.
+   */
+  preventOverflow?: boolean;
+  minRowHeight?: { magnitude: number; unit: string };
+}
+
+/**
+ * Habla en **números de fila**, no en índices de carácter, así que sobrevive a
+ * todo lo que cambie de longitud dentro de la tabla. Sin `rowIndices` se
+ * aplica a todas.
+ */
+export interface SolicitudEstiloFila {
+  updateTableRowStyle: {
+    tableStartLocation: { index: number };
+    rowIndices?: number[];
+    tableRowStyle: EstiloFila;
+    fields: string;
+  };
+}
+
+/**
+ * Repite las primeras filas de la tabla arriba de cada hoja en la que siga.
+ *
+ * Es una **solicitud propia**, no un campo de `tableRowStyle`. Pedirlo como
+ * `tableHeader` dentro de `updateTableRowStyle` es lo que contesta
+ * `Unallowed field: tableHeader` y tumba el lote entero.
+ *
+ * Tampoco existe en `DocumentApp`: el ERP viejo también tiene que bajar a la
+ * API de Docs para ponerlo (`COT_05:1581`).
+ */
+export interface SolicitudFijarEncabezado {
+  pinTableHeaderRows: {
+    tableStartLocation: { index: number };
+    /** Cuántas filas desde la 0. En la tabla de partidas, una. */
+    pinnedHeaderRowsCount: number;
   };
 }
 
