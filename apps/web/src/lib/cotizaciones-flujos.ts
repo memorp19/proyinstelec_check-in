@@ -16,7 +16,13 @@ import {
   type Cotizacion,
 } from "./cotizaciones";
 import { contactosParaEnvio, type ClienteEmpresa, type Contacto } from "./clientes";
-import { enviarCorreo, plantillaCorreo, type Adjunto, type ResultadoCorreo } from "./correo";
+import {
+  enviarCorreo,
+  escaparHtml,
+  plantillaCorreo,
+  type Adjunto,
+  type ResultadoCorreo,
+} from "./correo";
 import {
   buscarPdfCotizacion,
   ensureCarpetaOT,
@@ -24,9 +30,11 @@ import {
   subirArchivoErp,
 } from "./drive-erp";
 import { folioCotizacion, folioOT } from "./folios";
+import { notaParaRevisor } from "./nota-revision";
 import { createOT, agregarResponsable, setCarpetaDriveOT } from "./ot";
 import { permisosEfectivos } from "./permisos";
-import { listUsers, type UserProfile } from "./users";
+import { conPuntoFinal } from "./texto";
+import { getUserByEmail, listUsers, type UserProfile } from "./users";
 
 /**
  * Flujos de negocio de cotizaciones (revisión → aprobación → envío → OC → OT),
@@ -86,9 +94,32 @@ export async function correoDeElaborador(elaboro: string): Promise<string | null
   return porNombre?.email ?? null;
 }
 
+/**
+ * Cómo se le nombra a alguien en un correo: su nombre del catálogo, y el
+ * correo **solo** si no hay nombre.
+ *
+ * Un recuadro firmado "NOTA DE SUPERADMIN@PROYINSTELEC.MX" no dice quién
+ * escribió el recado; dice qué cuenta se usó. El revisor necesita lo primero.
+ */
+export async function nombreDeUsuario(email: string): Promise<string> {
+  const usuario = await getUserByEmail(email);
+  return usuario?.nombre.trim() || email;
+}
+
 const urlSistema = () => process.env.NEXTAUTH_URL ?? "";
+/**
+ * Un renglón de las tablas de los correos.
+ *
+ * **Escapa los dos lados.** Casi todo lo que entra aquí lo tecleó alguien —la
+ * razón social, el título, las iniciales, el número de orden de compra— y lo
+ * que alguien teclea no es marcado: un cliente llamado `Aceros & Cía <MX>`
+ * tiene que leerse así, no romper la tabla a media fila.
+ *
+ * Va en el helper y no en cada llamada a propósito: así no hay forma de
+ * agregar un renglón nuevo y olvidarse del escape.
+ */
 const filaTabla = (etiqueta: string, valor: string) =>
-  `<tr><td style="padding:4px 12px 4px 0;color:#6b7280;font-size:13px;">${etiqueta}</td><td style="padding:4px 0;color:#111827;font-size:13px;font-weight:bold;">${valor}</td></tr>`;
+  `<tr><td style="padding:4px 12px 4px 0;color:#6b7280;font-size:13px;">${escaparHtml(etiqueta)}</td><td style="padding:4px 0;color:#111827;font-size:13px;font-weight:bold;">${escaparHtml(valor)}</td></tr>`;
 
 /** Importe con separadores de miles: "1234.5" → "1,234.50". */
 export function formatearMonto(monto: string, moneda: "MXN" | "USD"): string {
@@ -196,6 +227,29 @@ export async function crearNuevaVersionCompleta(params: {
 // ── 1. Enviar a revisión ──────────────────────────────────────────────────────
 
 /**
+ * El recuadro de la nota dentro del correo.
+ *
+ * El aviso de que **no sale en la cotización** va dentro del recuadro, no en
+ * la documentación: quien la escribe ve el correo que la lleva, y así nadie
+ * usa la nota para decirle algo al cliente.
+ *
+ * `quien` es el **nombre** de quien la escribió, no su correo (ver
+ * `nombreDeUsuario`), y la etiqueta ya no va en `text-transform:uppercase`:
+ * lleva dentro un nombre, y un nombre en mayúsculas deja de ser el nombre de
+ * nadie —"McAllen" pasa a "MCALLEN"—. De paso, Outlook de escritorio ni
+ * siquiera aplica esa regla, así que el mismo correo se veía de dos formas
+ * según quién lo abriera.
+ */
+function recuadroDeNota(nota: string, quien: string): string {
+  if (!nota) return "";
+  return `<div style="margin:16px 0 0;padding:12px 16px;background:#f3f4f6;border-left:3px solid #1d4ed8;border-radius:6px;">
+      <p style="margin:0 0 6px;color:#6b7280;font-size:11px;font-weight:bold;">Nota de ${escaparHtml(quien)}</p>
+      <p style="margin:0;color:#111827;font-size:13px;white-space:pre-wrap;">${escaparHtml(nota)}</p>
+      <p style="margin:8px 0 0;color:#9ca3af;font-size:11px;">Solo va en este correo: no aparece en la cotización.</p>
+    </div>`;
+}
+
+/**
  * Manda a revisión **la versión que se indica**, no la vigente.
  *
  * `version` es obligatoria a propósito. Crear una versión nueva no exige
@@ -210,8 +264,11 @@ export async function enviarARevision(params: {
   anio: number;
   version: number;
   usuario: string;
+  /** Recado para quien revisa. Opcional, y nunca llega al documento. */
+  nota?: string;
 }): Promise<{ cotizacion: Cotizacion; avisos: string[] }> {
   const avisos: string[] = [];
+  const nota = notaParaRevisor(params.nota);
   const cotizacion = await cambiarEstatus(
     params.numero,
     params.anio,
@@ -226,6 +283,21 @@ export async function enviarARevision(params: {
     referencia: cotPk(cotizacion.numero, cotizacion.anio),
     detalle: folio,
   });
+
+  // La nota queda registrada aunque el correo falle: es lo que alguien dijo al
+  // mandarla, y el correo es solo por dónde viaja.
+  if (nota) {
+    await registrarBitacora({
+      accion: "COTIZACION_NOTA_REVISION",
+      usuario: params.usuario,
+      referencia: cotPk(cotizacion.numero, cotizacion.anio),
+      detalle: `${folio} · ${nota}`,
+    });
+  }
+
+  // Quién firma el recuadro. Se busca solo si hay nota: sin ella nadie firma
+  // nada y el catálogo no tiene por qué consultarse.
+  const firmaNota = nota ? await nombreDeUsuario(params.usuario) : "";
 
   // PDF adjunto si ya existe en la carpeta (opcional en esta etapa)
   let adjuntos: Adjunto[] | undefined;
@@ -259,6 +331,7 @@ export async function enviarARevision(params: {
       html: plantillaCorreo({
         titulo: "Cotización lista para revisión",
         cuerpoHtml: `<table>${filaTabla("Folio", folio)}${filaTabla("Cliente", cotizacion.cliente)}${filaTabla("Título", cotizacion.titulo)}${filaTabla("Elaboró", cotizacion.elaboro)}</table>
+          ${recuadroDeNota(nota, firmaNota)}
           <p style="margin:16px 0 0;"><a href="${urlSistema()}/erp/revision" style="display:inline-block;background:#1d4ed8;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-size:13px;font-weight:bold;">Revisar en el sistema</a></p>
           <p style="color:#6b7280;font-size:12px;margin-top:12px;">Desde ahí puedes aprobarla o solicitar una corrección.</p>`,
       }),
@@ -276,7 +349,9 @@ export async function enviarARevision(params: {
       asunto: `Enviada a revisión · ${folio}`,
       html: plantillaCorreo({
         titulo: "Tu cotización fue enviada a revisión",
-        cuerpoHtml: `<p style="font-size:13px;color:#111827;">${folio} · ${cotizacion.cliente}. Te avisaremos cuando el revisor la apruebe o pida una corrección.</p>`,
+        cuerpoHtml:
+          `<p style="font-size:13px;color:#111827;">${folio} · ${escaparHtml(conPuntoFinal(cotizacion.cliente))} Te avisaremos cuando el revisor la apruebe o pida una corrección.</p>` +
+          recuadroDeNota(nota, firmaNota),
       }),
       registradoPor: params.usuario,
       referencia: cotPk(cotizacion.numero, cotizacion.anio),
@@ -320,7 +395,7 @@ export async function aprobarCotizacion(params: {
       asunto: `Aprobada · ${folio}`,
       html: plantillaCorreo({
         titulo: "Cotización aprobada",
-        cuerpoHtml: `<p style="font-size:13px;color:#111827;">${folio} · ${vigente.cliente} fue aprobada. Ya puedes enviarla al cliente desde el sistema.</p>`,
+        cuerpoHtml: `<p style="font-size:13px;color:#111827;">${folio} · ${escaparHtml(vigente.cliente)} fue aprobada. Ya puedes enviarla al cliente desde el sistema.</p>`,
       }),
       registradoPor: params.aprobadoPor,
       referencia: cotPk(vigente.numero, vigente.anio),
@@ -371,7 +446,7 @@ export async function solicitarCorreccion(params: {
         titulo: "Se solicitó una corrección",
         cuerpoHtml: `<table>${filaTabla("Folio", folio)}${filaTabla("Cliente", cotizacion.cliente)}</table>
           <p style="font-size:13px;color:#111827;margin-top:12px;">La cotización regresó a PROCESO. Comentarios del revisor:</p>
-          <blockquote style="border-left:3px solid #d1d5db;margin:8px 0;padding:4px 12px;color:#374151;font-size:13px;">${params.comentario.trim()}</blockquote>`,
+          <blockquote style="border-left:3px solid #d1d5db;margin:8px 0;padding:4px 12px;color:#374151;font-size:13px;">${escaparHtml(params.comentario.trim())}</blockquote>`,
       }),
       registradoPor: params.usuario,
       referencia: cotPk(cotizacion.numero, cotizacion.anio),
@@ -505,12 +580,15 @@ export async function enviarAlCliente(params: {
   const asunto =
     params.asunto?.trim() ||
     `Cotización PCOTOP-${String(cotizacion.numero).padStart(3, "0")} - ${cotizacion.cliente}`;
+  // `mensajeHtml` es marcado **a propósito**: lo compone quien envía, y por eso
+  // no se escapa. El cuerpo por omisión es otra cosa: lo arma el ERP con datos
+  // tecleados, y ahí cada uno va escapado. Este correo sale de la empresa.
   const cuerpo =
     params.mensajeHtml?.trim() ||
-    `<p style="font-size:13px;color:#111827;">Estimado(a) ${cotizacion.dirigida_a}:</p>
-     <p style="font-size:13px;color:#111827;">Por este medio le hacemos llegar nuestra propuesta económica del proyecto <b>${cotizacion.titulo}</b>, adjunta en PDF.</p>
+    `<p style="font-size:13px;color:#111827;">Estimado(a) ${escaparHtml(cotizacion.dirigida_a)}:</p>
+     <p style="font-size:13px;color:#111827;">Por este medio le hacemos llegar nuestra propuesta económica del proyecto <b>${escaparHtml(cotizacion.titulo)}</b>, adjunta en PDF.</p>
      <p style="font-size:13px;color:#111827;">Quedamos atentos a sus comentarios.</p>
-     <p style="font-size:13px;color:#111827;margin-top:16px;">${params.remitente.nombre}<br/>${params.telefonoFirma ?? ""}<br/>${params.remitente.email}</p>`;
+     <p style="font-size:13px;color:#111827;margin-top:16px;">${escaparHtml(params.remitente.nombre)}<br/>${escaparHtml(params.telefonoFirma ?? "")}<br/>${escaparHtml(params.remitente.email)}</p>`;
 
   const resultado = await enviarCorreo({
     para: params.destinatarios,

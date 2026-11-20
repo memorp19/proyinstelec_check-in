@@ -1,5 +1,6 @@
 /**
- * Las secciones de prosa de la plantilla: Actividades Generales y Términos.
+ * Las secciones de prosa de la plantilla: Actividades Generales, los Términos
+ * y el renglón de la moneda.
  *
  * Son párrafos que la plantilla trae **escritos**, no marcadores. Hasta ahora
  * salían tal cual, de modo que lo que alguien escribía en la pantalla para
@@ -11,10 +12,13 @@
  * que nada fallara.
  */
 import type { DatosDocumento } from "../documento";
+import type { Moneda } from "../tipos";
 import { parrafos, type ParrafoUbicado } from "./recorrido";
 import { segmentos } from "./recorrido";
 import type {
   DocumentoDocs,
+  EstiloTexto,
+  Parrafo,
   Rango,
   Solicitud,
   SolicitudBorrarRango,
@@ -26,6 +30,7 @@ export const INICIO_DE = {
   objeto: "El objeto de la presente",
   alcance: "El alcance principal",
   terminos: "Términos y Condiciones Comerciales",
+  precios: "Nuestros precios son firmes en",
 } as const;
 
 export interface Ajuste {
@@ -174,5 +179,105 @@ export function saltoAntesDeTerminos(doc: DocumentoDocs): Ajuste {
       },
     ],
     avisos,
+  };
+}
+
+// ── La moneda de los Términos ─────────────────────────────────────────────────
+
+/** Cómo se llama cada moneda en "Nuestros precios son firmes en …". */
+export const NOMBRE_DE_MONEDA: Record<Moneda, string> = {
+  MXN: "Moneda Nacional",
+  USD: "Dólares Americanos",
+};
+
+/** Lo que hay que conservar del texto que se sustituye. Negritas, sobre todo. */
+const COPIABLES = ["bold", "italic", "fontSize", "weightedFontFamily"] as const;
+
+/**
+ * El estilo de la corrida que contiene ese índice, con lo que vale copiar.
+ *
+ * Hace falta porque `insertText` **no hereda el estilo del texto que se
+ * borró**, sino el del carácter que queda delante — que aquí es el "en " sin
+ * negritas. Sin esto, "Dólares Americanos" saldría en redonda mientras
+ * "Moneda Nacional" iba en negritas.
+ */
+function estiloEn(p: Parrafo, indice: number): EstiloTexto {
+  const corrida = (p.elements ?? []).find(
+    (e) =>
+      e.textRun !== undefined &&
+      (e.startIndex ?? 0) <= indice &&
+      indice < (e.endIndex ?? 0),
+  );
+  const estilo = corrida?.textRun?.textStyle ?? {};
+  const copia: EstiloTexto = {};
+  for (const campo of COPIABLES) {
+    if (estilo[campo] !== undefined) Object.assign(copia, { [campo]: estilo[campo] });
+  }
+  return copia;
+}
+
+/**
+ * «Nuestros precios son firmes en **Moneda Nacional**» cuando la cotización
+ * va en dólares.
+ *
+ * La plantilla está escrita en pesos, que es el caso normal; en dólares ese
+ * renglón de los Términos afirma una moneda distinta de la del cuadro y de la
+ * del importe en letra. El legacy no lo cambiaba y había que corregirlo a
+ * mano en el Doc cada vez.
+ *
+ * Se sustituye **solo el nombre de la moneda**, no el párrafo entero: el resto
+ * del renglón es texto legal que nadie ha pedido tocar.
+ */
+export function ajustarMoneda(doc: DocumentoDocs, moneda: Moneda): Ajuste {
+  // La plantilla ya viene en pesos: en MXN no se emite ni una solicitud.
+  if (moneda === "MXN") return { solicitudes: [], avisos: [] };
+
+  const parrafo = buscar(prosa(doc), INICIO_DE.precios);
+  if (!parrafo) {
+    return {
+      solicitudes: [],
+      avisos: [
+        `No encontré el renglón "${INICIO_DE.precios}…": los Términos van a ` +
+          `seguir diciendo "${NOMBRE_DE_MONEDA.MXN}" en una cotización en ${moneda}.`,
+      ],
+    };
+  }
+
+  const viejo = NOMBRE_DE_MONEDA.MXN;
+  const posicion = parrafo.texto.indexOf(viejo);
+  if (posicion < 0) {
+    return {
+      solicitudes: [],
+      avisos: [
+        `El renglón de los precios ya no dice "${viejo}": lo dejo como está en ` +
+          "vez de reescribir un texto que no reconozco.",
+      ],
+    };
+  }
+
+  const nuevo = NOMBRE_DE_MONEDA[moneda];
+  const inicio = parrafo.startIndex + posicion;
+  const estilo = estiloEn(parrafo.parrafo, inicio);
+  const campos = Object.keys(estilo);
+
+  return {
+    solicitudes: [
+      { deleteContentRange: { range: { startIndex: inicio, endIndex: inicio + viejo.length } } },
+      { insertText: { location: { index: inicio }, text: nuevo } },
+      // Después de borrar e insertar: para entonces el rango ya es el del
+      // texto nuevo, que es justo lo que hay que volver a poner en negritas.
+      ...(campos.length > 0
+        ? [
+            {
+              updateTextStyle: {
+                range: { startIndex: inicio, endIndex: inicio + nuevo.length },
+                textStyle: estilo,
+                fields: campos.join(","),
+              },
+            } as Solicitud,
+          ]
+        : []),
+    ],
+    avisos: [],
   };
 }

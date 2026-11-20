@@ -10,6 +10,8 @@
  * es IEEE, y la comilla que no cerraba en la C57.12.90.
  */
 
+import { conPuntoFinal } from "../texto";
+
 export type GrupoNorma = "CFE" | "NOM" | "NMX" | "IEEE" | "GEN";
 
 export interface Norma {
@@ -206,7 +208,7 @@ export function textosSugeridos(
   const sitio = sitioDelProyecto(tituloParaDocumento(titulo, cliente), cliente);
   // Sin punto si el sitio ya trae el suyo: casi todas las razones sociales
   // terminan en "S.A. de C.V." y el legacy imprime "C.V.." en todas.
-  const sitioConPunto = /\.$/.test(sitio.trim()) ? sitio.trim() : `${sitio.trim()}.`;
+  const sitioConPunto = conPuntoFinal(sitio);
 
   return {
     objeto:

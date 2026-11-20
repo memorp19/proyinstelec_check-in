@@ -31,7 +31,7 @@ import { solicitudesDeNegro } from "./colores";
 import { sustituciones, type Marcador } from "./marcadores";
 import { quitarNormas } from "./normas-plantilla";
 import { ocultarRenglones } from "./ocultar";
-import { ajustarActividades, saltoAntesDeTerminos } from "./secciones";
+import { ajustarActividades, ajustarMoneda, saltoAntesDeTerminos } from "./secciones";
 import { solicitudesDeTabla, tablaDeCotizacion } from "./tabla";
 import { fechaFija, valoresDeMarcadores } from "./valores";
 
@@ -95,12 +95,14 @@ export interface DocumentoGenerado {
  *    primero: después del primer borrado ya no lo serían. Y como el negro se
  *    aplica antes que las inserciones, lo que se inserte luego lo hereda de
  *    lo que tiene al lado, que para entonces ya es negro.
- * 2. La **tabla de partidas**, que está al final (índice ~3000).
- * 3. Las **normas**: se quitan las que no se eligieron y se reescriben las
+ * 2. El **nombre de la moneda** en los Términos (~3950), que es lo más abajo
+ *    que se toca.
+ * 3. La **tabla de partidas**, que está antes (índice ~3000).
+ * 4. Las **normas**: se quitan las que no se eligieron y se reescriben las
  *    que se quedan (~2000).
- * 4. Los **párrafos de Actividades Generales** (~1800).
- * 5. Los **renglones del destinatario** que no salen (~300).
- * 6. Las **sustituciones**, que no usan índices: `replaceAllText` compara
+ * 5. Los **párrafos de Actividades Generales** (~1800).
+ * 6. Los **renglones del destinatario** que no salen (~300).
+ * 7. Las **sustituciones**, que no usan índices: `replaceAllText` compara
  *    texto. Van al final porque cambian longitudes en todo el documento.
  *
  * Al revés, el primer borrado invalidaría todos los índices de abajo.
@@ -128,6 +130,10 @@ export function solicitudesDelDocumento(
   const negro = solicitudesDeNegro(plantilla);
   const salto = saltoAntesDeTerminos(plantilla);
 
+  // En dólares, el renglón de los Términos. Va antes que el cuadro porque
+  // está más abajo en la hoja; en pesos no emite nada.
+  const moneda = ajustarMoneda(plantilla, d.armado.moneda);
+
   const cuadro = solicitudesDeTabla(plantilla, tablaDeCotizacion(d.armado, d.calculo));
 
   const elegidas = normasElegidas(d.documento.normas, d.titulo).map((n) => n.id);
@@ -147,6 +153,7 @@ export function solicitudesDelDocumento(
   const tramos: Tramo[] = [];
   agregar(tramos, PARTES.negro, negro);
   agregar(tramos, PARTES.salto, salto.solicitudes);
+  agregar(tramos, PARTES.moneda, moneda.solicitudes);
   for (const t of cuadro.tramos) agregar(tramos, t.parte, t.solicitudes);
   agregar(tramos, PARTES.normas, normas.solicitudes);
   agregar(tramos, PARTES.actividades, actividades.solicitudes);
@@ -159,6 +166,7 @@ export function solicitudesDelDocumento(
     avisos: [
       ...avisos,
       ...salto.avisos,
+      ...moneda.avisos,
       ...cuadro.avisos,
       ...normas.avisos,
       ...actividades.avisos,

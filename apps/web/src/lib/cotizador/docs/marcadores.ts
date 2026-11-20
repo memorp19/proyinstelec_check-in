@@ -16,6 +16,7 @@
  * plantilla" deja de ser una comprobación aparte: es lo que no encontró el
  * mismo barrido.
  */
+import { terminaEnPunto } from "../../texto";
 import type { DocumentoDocs, SolicitudReemplazarTexto } from "./tipos";
 import { textoDelDocumento } from "./recorrido";
 
@@ -111,7 +112,7 @@ export function sustituciones(
     // los documentos del sistema viejo: ahí nadie lo arregló, y copiar una
     // errata a propósito no tiene defensa. Primero la forma con punto, que es
     // la más larga; si se hiciera al revés, la corta ya no la dejaría ver.
-    const conPunto = /\.$/.test(valor) ? formas.map((f) => `${f}.`) : [];
+    const conPunto = terminaEnPunto(valor) ? formas.map((f) => `${f}.`) : [];
     for (const forma of [...conPunto, ...formas]) {
       solicitudes.push({
         replaceAllText: {

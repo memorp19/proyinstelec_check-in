@@ -511,3 +511,71 @@ describe("generarDocumento", () => {
     expect(documentos.papelera).toEqual([]);
   });
 });
+
+
+// ── La moneda, dentro del lote entero ─────────────────────────────────────────
+
+describe("la moneda de los Términos", () => {
+  /** Como la plantilla real: los Términos van DESPUÉS del cuadro. */
+  const conTerminos = () =>
+    new ArmaDocumento()
+      .parrafo("{{CLIENTE}}")
+      .parrafo("{{CONTACTO}}")
+      .tabla(cuadroDePartidas())
+      .parrafo("Términos y Condiciones Comerciales")
+      .corridas([
+        { texto: "Nuestros precios son firmes en " },
+        { texto: "Moneda Nacional", negrita: true },
+      ])
+      .construir();
+
+  const enMoneda = (moneda: "MXN" | "USD") =>
+    solicitudesDelDocumento(
+      conTerminos(),
+      datos({ armado: { ...armadoCon(1), moneda } as Armado }),
+      "2026-10-05",
+    ).solicitudes;
+
+  it("en pesos el renglón no se toca", () => {
+    expect(enMoneda("MXN").some((s) => "insertText" in s && s.insertText.text === "Dólares Americanos")).toBe(false);
+  });
+
+  it("en dólares, sí", () => {
+    expect(enMoneda("USD").some((s) => "insertText" in s && s.insertText.text === "Dólares Americanos")).toBe(true);
+  });
+
+  /**
+   * Todo lo que mueve índices se emite de abajo hacia arriba, y los Términos
+   * son lo más abajo que se toca: su borrado tiene que ser el PRIMERO del
+   * lote que corre un índice. Al revés, el cuadro movería el renglón de la
+   * moneda y se borrarían quince caracteres de otro sitio.
+   */
+  it("va antes que todo lo que mueve índices, porque está más abajo", () => {
+    const solicitudes = enMoneda("USD");
+    const mueve = (s: (typeof solicitudes)[number]) =>
+      "insertText" in s || "deleteContentRange" in s;
+    const primero = solicitudes.findIndex(mueve);
+    expect(solicitudes[primero]).toHaveProperty("deleteContentRange");
+    expect(solicitudes[primero + 1]).toMatchObject({ insertText: { text: "Dólares Americanos" } });
+  });
+
+  /**
+   * Las tres solicitudes son contenido, negritas incluidas: si Google rechaza
+   * el formato, el reintento sigue diciendo dólares, y en negritas.
+   */
+  it("es contenido entera: el reintento sin formato también la cambia", () => {
+    const { tramos } = solicitudesDelDocumento(
+      conTerminos(),
+      datos({ armado: { ...armadoCon(1), moneda: "USD" } as Armado }),
+      "2026-10-05",
+    );
+    const deMoneda = tramos.filter((t) => t.parte === PARTES.moneda);
+
+    expect(PARTES.moneda.grupo).toBe("contenido");
+    expect(deMoneda.flatMap((t) => t.solicitudes).map((s) => Object.keys(s)[0])).toEqual([
+      "deleteContentRange",
+      "insertText",
+      "updateTextStyle",
+    ]);
+  });
+});

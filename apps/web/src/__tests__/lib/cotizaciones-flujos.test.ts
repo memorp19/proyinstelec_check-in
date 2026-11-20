@@ -6,6 +6,15 @@ vi.mock("@/src/lib/bitacora", () => ({ registrarBitacora: vi.fn().mockResolvedVa
 vi.mock("@/src/lib/correo", () => ({
   enviarCorreo: vi.fn().mockResolvedValue({ enviado: true }),
   plantillaCorreo: vi.fn((p: { cuerpoHtml: string }) => p.cuerpoHtml),
+  // Fiel al de verdad, que tiene su propia prueba en correo.test.ts: aquí hace
+  // falta para poder afirmar que la nota sale escapada.
+  escaparHtml: (t: string) =>
+    String(t ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;"),
 }));
 vi.mock("@/src/lib/cotizaciones", () => ({
   cotPk: (numero: number, anio: number) => `COT#${String(numero).padStart(3, "0")}-${anio}`,
@@ -36,7 +45,7 @@ vi.mock("@/src/lib/ot", () => ({
   agregarResponsable: vi.fn().mockResolvedValue({}),
   setCarpetaDriveOT: vi.fn().mockResolvedValue(undefined),
 }));
-vi.mock("@/src/lib/users", () => ({ listUsers: vi.fn() }));
+vi.mock("@/src/lib/users", () => ({ listUsers: vi.fn(), getUserByEmail: vi.fn() }));
 vi.mock("@/src/lib/config-erp", () => ({ getConfigErp: vi.fn() }));
 
 import {
@@ -52,7 +61,7 @@ import { registrarBitacora } from "@/src/lib/bitacora";
 import { buscarPdfCotizacion } from "@/src/lib/drive-erp";
 import { enviarCorreo, plantillaCorreo } from "@/src/lib/correo";
 import { createOT } from "@/src/lib/ot";
-import { listUsers } from "@/src/lib/users";
+import { getUserByEmail, listUsers } from "@/src/lib/users";
 import { getConfigErp } from "@/src/lib/config-erp";
 import {
   enviarARevision,
@@ -74,11 +83,18 @@ const usuarios = [
   { email: "eduardo@proyinstelec.mx", nombre: "Eduardo", iniciales: "EAOL", rol: "campo", permisos: ["cotizaciones.aprobar", "cotizaciones.enviar"] },
   { email: "maria@proyinstelec.mx", nombre: "María", iniciales: "MNAA", rol: "campo", permisos: ["cotizaciones.enviar"] },
   { email: "sinini@proyinstelec.mx", nombre: "Sin Iniciales", rol: "campo", permisos: [] },
+  // Un nombre que la etiqueta en mayúsculas deformaría, con acentos y una
+  // mayúscula a media palabra. Sin permisos: no cambia a quién le llega nada.
+  { email: "angeles@proyinstelec.mx", nombre: "María de los Ángeles McAllen", iniciales: "MALM", rol: "campo", permisos: [] },
 ];
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(listUsers).mockResolvedValue(usuarios as any);
+  // Fiel al de verdad: busca por correo, sin distinguir mayúsculas.
+  vi.mocked(getUserByEmail).mockImplementation(async (email: string) =>
+    (usuarios.find((u) => u.email === email.trim().toLowerCase()) ?? null) as any,
+  );
   vi.mocked(getConfigErp).mockResolvedValue({
     areas_ot: [
       { clave: "PROTECCIONES", nombre: "Protecciones", correo: "protecciones@proyinstelec.mx" },
@@ -166,6 +182,146 @@ describe("enviarARevision", () => {
     expect(registrarBitacora).toHaveBeenCalledWith(
       expect.objectContaining({ accion: "COTIZACION_A_REVISION", detalle: "PCOTOP-001-2026-1" }),
     );
+  });
+
+  // ── La nota para el revisor ────────────────────────────────────────────────
+
+  describe("la nota para el revisor", () => {
+    const mandarCon = (nota?: string, usuario = "ana@proyinstelec.mx") => {
+      dosEnProceso();
+      return enviarARevision({ numero: 1, anio: 2026, version: 0, usuario, nota });
+    };
+    const correos = () => vi.mocked(enviarCorreo).mock.calls.map(([c]) => c);
+
+    it("va en el correo al revisor y en la confirmación a quien elaboró", async () => {
+      await mandarCon("Sin viáticos: el cliente los paga aparte.");
+      const html = correos().map((c) => c.html);
+      expect(html).toHaveLength(2);
+      for (const h of html) expect(h).toContain("Sin viáticos: el cliente los paga aparte.");
+    });
+
+    /**
+     * Es la regla entera: el recado es para el revisor, no para el cliente.
+     * El aviso va DENTRO del correo porque es ahí donde lo lee quien lo
+     * escribió, y no en un manual que nadie abre.
+     */
+    it("el correo dice que no aparece en la cotización", async () => {
+      await mandarCon("Revísame la partida 2.");
+      for (const c of correos()) {
+        expect(c.html).toContain("Solo va en este correo: no aparece en la cotización.");
+      }
+    });
+
+    /**
+     * "NOTA DE SUPERADMIN@PROYINSTELEC.MX" no dice quién escribió el recado:
+     * dice qué cuenta se usó. El revisor necesita lo primero.
+     */
+    it("la firma el nombre de quien la mandó, no su correo", async () => {
+      await mandarCon("Revísame la partida 2.", "angeles@proyinstelec.mx");
+      const html = correos()[0].html;
+      expect(html).toContain("Nota de María de los Ángeles McAllen");
+      expect(html).not.toContain("angeles@proyinstelec.mx");
+    });
+
+    // El correo es el último recurso, no el primero: sirve para no dejar la
+    // nota sin firma cuando la cuenta no está en el catálogo.
+    it("si no hay nombre, entonces sí el correo", async () => {
+      await mandarCon("Revísame la partida 2.", "ana@proyinstelec.mx");
+      expect(correos()[0].html).toContain("Nota de ana@proyinstelec.mx");
+    });
+
+    /**
+     * La etiqueta era `text-transform:uppercase`, y un nombre en mayúsculas
+     * deja de ser el nombre de nadie: "McAllen" pasa a "MCALLEN". Como el
+     * nombre va dentro de la etiqueta, la regla tuvo que salir.
+     */
+    it("la etiqueta no pone el nombre en mayúsculas", async () => {
+      await mandarCon("Revísame la partida 2.", "angeles@proyinstelec.mx");
+      const renglon = /<p[^>]*>Nota de [^<]*<\/p>/.exec(correos()[0].html)?.[0] ?? "";
+      expect(renglon).toContain("McAllen");
+      expect(renglon).not.toContain("text-transform");
+    });
+
+    // Lo que alguien teclea no es marcado: un <b> tiene que verse, no aplicarse.
+    it("la nota sale escapada", async () => {
+      await mandarCon('Ojo con <b>esto</b> & "lo otro".');
+      const html = correos()[0].html;
+      expect(html).toContain("&lt;b&gt;esto&lt;/b&gt;");
+      expect(html).toContain("&amp;");
+      expect(html).not.toContain("<b>esto</b>");
+    });
+
+    it("se recorta a 1,500 caracteres", async () => {
+      await mandarCon("x".repeat(2000));
+      expect(correos()[0].html).toContain("x".repeat(1500));
+      expect(correos()[0].html).not.toContain("x".repeat(1501));
+    });
+
+    // Queda registrada aunque el correo falle: es lo que alguien dijo al
+    // mandarla, y el correo es solo por dónde viaja.
+    it("queda en la bitácora con su propia acción", async () => {
+      await mandarCon("Urge para el viernes.");
+      expect(registrarBitacora).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accion: "COTIZACION_NOTA_REVISION",
+          usuario: "ana@proyinstelec.mx",
+          detalle: "PCOTOP-001-2026 · Urge para el viernes.",
+        }),
+      );
+    });
+
+    it("sin nota, todo sale como antes", async () => {
+      await mandarCon();
+      for (const c of correos()) expect(c.html).not.toContain("Nota de");
+      expect(registrarBitacora).not.toHaveBeenCalledWith(
+        expect.objectContaining({ accion: "COTIZACION_NOTA_REVISION" }),
+      );
+    });
+
+    it("una nota en blanco es como no mandar ninguna", async () => {
+      await mandarCon("    ");
+      for (const c of correos()) expect(c.html).not.toContain("Nota de");
+      expect(registrarBitacora).not.toHaveBeenCalledWith(
+        expect.objectContaining({ accion: "COTIZACION_NOTA_REVISION" }),
+      );
+    });
+  });
+
+  // ── El punto final de la razón social ──────────────────────────────────────
+
+  /**
+   * Casi todas las razones sociales terminan en "S.A. de C.V.", y la
+   * confirmación salía con "IGSA S.A.P.I de C.V.. Te avisaremos". Es la misma
+   * errata que el sistema viejo imprime en todos sus documentos, y es la misma
+   * regla que ya aplica el generador: si ya hay punto, no se pone otro.
+   */
+  describe("el punto final de la razón social", () => {
+    const mandarConCliente = (cliente: string) => {
+      vi.mocked(cambiarEstatus).mockResolvedValue({
+        ...vigente,
+        version: 0,
+        estatus: "REVISION",
+        cliente,
+      } as any);
+      return enviarARevision({
+        numero: 1, anio: 2026, version: 0, usuario: "ana@proyinstelec.mx",
+      });
+    };
+    /** El segundo correo es la confirmación a quien elaboró. */
+    const confirmacion = () => vi.mocked(enviarCorreo).mock.calls.map(([c]) => c)[1].html;
+
+    it("no le agrega un segundo punto a la que ya lo trae", async () => {
+      await mandarConCliente("IGSA S.A.P.I de C.V.");
+
+      expect(confirmacion()).toContain("IGSA S.A.P.I de C.V. Te avisaremos");
+      expect(confirmacion()).not.toContain("C.V.. Te");
+    });
+
+    it("y se lo pone a la que no", async () => {
+      await mandarConCliente("Aceros del Norte");
+
+      expect(confirmacion()).toContain("Aceros del Norte. Te avisaremos");
+    });
   });
 });
 
@@ -637,5 +793,107 @@ describe("ingresarOrdenCompra — elegir versión", () => {
     const r = await ingresarOrdenCompra({ ...alta, version: 0 });
 
     expect(r.avisos.join(" ")).not.toContain("NO ASIGNADA");
+  });
+});
+
+// ── Lo que alguien teclea no es marcado ───────────────────────────────────────
+
+/**
+ * Los correos se arman concatenando texto de la base, y casi todo ese texto lo
+ * tecleó una persona: la razón social, el título, las iniciales, el comentario
+ * del revisor. Un cliente llamado `Aceros & Cía <MX>` no puede romper la tabla
+ * del correo, y menos el que sale de la empresa.
+ */
+describe("el texto tecleado va escapado en los correos", () => {
+  const FEO = 'Aceros & Cía <script>alert(1)</script> "SA"';
+  const sucia = { ...vigente, cliente: FEO, titulo: "Subestación <b>Norte</b>" };
+
+  it("la razón social y el título, en la tabla del correo al revisor", async () => {
+    vi.mocked(cambiarEstatus).mockResolvedValue({ ...sucia, estatus: "REVISION" } as any);
+
+    await enviarARevision({ numero: 1, anio: 2026, version: 0, usuario: "ana@proyinstelec.mx" });
+
+    const [alRevisor] = vi.mocked(enviarCorreo).mock.calls.map(([c]) => c);
+    expect(alRevisor.html).toContain("Aceros &amp; Cía &lt;script&gt;");
+    expect(alRevisor.html).toContain("Subestación &lt;b&gt;Norte&lt;/b&gt;");
+    expect(alRevisor.html).not.toContain("<script>");
+  });
+
+  it("y en la confirmación a quien elaboró", async () => {
+    vi.mocked(cambiarEstatus).mockResolvedValue({ ...sucia, estatus: "REVISION" } as any);
+
+    await enviarARevision({ numero: 1, anio: 2026, version: 0, usuario: "ana@proyinstelec.mx" });
+
+    const correos = vi.mocked(enviarCorreo).mock.calls.map(([c]) => c);
+    expect(correos[1].html).not.toContain("<script>");
+    expect(correos[1].html).toContain("Aceros &amp; Cía");
+  });
+
+  /**
+   * El asunto **no** es HTML: escaparlo haría que el revisor leyera
+   * «Aceros &amp;amp; Cía» en su bandeja.
+   */
+  it("el asunto no se escapa, porque no es HTML", async () => {
+    vi.mocked(cambiarEstatus).mockResolvedValue({ ...sucia, estatus: "REVISION" } as any);
+
+    await enviarARevision({ numero: 1, anio: 2026, version: 0, usuario: "ana@proyinstelec.mx" });
+
+    expect(vi.mocked(enviarCorreo).mock.calls[0][0].asunto).toContain("Aceros & Cía");
+  });
+
+  // Lo teclea el revisor, y va en el correo de vuelta a quien cotizó.
+  it("el comentario del revisor, al pedir una corrección", async () => {
+    vi.mocked(getVigente).mockResolvedValue(vigente as any);
+    vi.mocked(cambiarEstatus).mockResolvedValue({ ...vigente, estatus: "PROCESO" } as any);
+
+    await solicitarCorreccion({
+      numero: 1, anio: 2026,
+      comentario: 'Revisa el <b>precio</b> & la vigencia',
+      usuario: "eduardo@proyinstelec.mx",
+    });
+
+    const html = vi.mocked(enviarCorreo).mock.calls[0][0].html;
+    expect(html).toContain("Revisa el &lt;b&gt;precio&lt;/b&gt; &amp; la vigencia");
+    expect(html).not.toContain("<b>precio</b>");
+  });
+
+  describe("el correo al cliente", () => {
+    beforeEach(() => {
+      vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({ puede: true, cotizacion: sucia as any });
+      vi.mocked(buscarPdfCotizacion).mockResolvedValue({
+        pdf: { filename: "c.pdf", contenido: Buffer.from("PDF") },
+        nombresEnCarpeta: [],
+      } as any);
+      vi.mocked(listUsers).mockResolvedValue([] as any);
+      vi.mocked(cambiarEstatus).mockResolvedValue({ ...sucia, estatus: "ENVIADA" } as any);
+    });
+
+    // Este sale de la empresa: es el que más importa de todos.
+    it("escapa el título y a quién va dirigida en el cuerpo por omisión", async () => {
+      await enviarAlCliente({
+        numero: 1, anio: 2026, destinatarios: ["cliente@empresa.com"],
+        remitente: { email: "maria@proyinstelec.mx", nombre: 'María <"Tere">' },
+      });
+
+      const html = vi.mocked(enviarCorreo).mock.calls[0][0].html;
+      expect(html).toContain("Subestación &lt;b&gt;Norte&lt;/b&gt;");
+      expect(html).toContain("María &lt;&quot;Tere&quot;&gt;");
+      expect(html).not.toContain("<b>Norte</b>");
+    });
+
+    /**
+     * La excepción, y es deliberada: `mensajeHtml` lo compone quien envía
+     * **como marcado**. Escaparlo convertiría su párrafo en código a la vista.
+     */
+    it("pero no toca el mensaje que escribió quien envía", async () => {
+      await enviarAlCliente({
+        numero: 1, anio: 2026, destinatarios: ["cliente@empresa.com"],
+        remitente: { email: "maria@proyinstelec.mx", nombre: "María" },
+        mensajeHtml: "<p>Estimado cliente, va la <b>propuesta</b>.</p>",
+      });
+
+      const html = vi.mocked(enviarCorreo).mock.calls[0][0].html;
+      expect(html).toContain("<b>propuesta</b>");
+    });
   });
 });

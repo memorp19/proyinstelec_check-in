@@ -9,6 +9,7 @@ import {
   type ResultadoCotizacion,
   type ServicioCatalogo,
 } from "@/src/lib/cotizador";
+import { faltantesDelDocumento } from "@/src/lib/cotizador/docs/valores";
 import { Partidas } from "./secciones/Partidas";
 import { Gastos } from "./secciones/Gastos";
 import { MonedaYAsesoria } from "./secciones/MonedaYAsesoria";
@@ -90,6 +91,11 @@ export function ArmadoClient({
   const [documento, setDocumento] = useState<DocumentoGenerado | null>(null);
   const [errorDocumento, setErrorDocumento] = useState<string | null>(null);
   const [verPrevia, setVerPrevia] = useState(abrirVistaPrevia);
+  /**
+   * El recado para quien revisa. Vive solo aquí, en el estado de la pantalla:
+   * no se autoguarda ni entra al armado, porque no es parte de la cotización.
+   */
+  const [nota, setNota] = useState("");
 
   /**
    * La marca de tiempo del último guardado aceptado. Va en una ref y no en el
@@ -132,6 +138,31 @@ export function ArmadoClient({
   const resultado: ResultadoCotizacion | null = useMemo(
     () => (armado ? calcularCotizacion(entradaDeArmado(armado)) : null),
     [armado],
+  );
+
+  /**
+   * Los datos que saldrían como `⟨falta⟩` en el documento.
+   *
+   * Se calculan aquí, con la misma función pura que usa el generador, y no
+   * pidiéndoselos al servidor: así el aviso aparece mientras se escribe, y no
+   * al dar al botón. Quien bloquea de verdad es la ruta — esto solo evita el
+   * viaje y dice dónde se captura cada cosa.
+   *
+   * Las que no pasaron por el cotizador no tienen documento que generar, así
+   * que tampoco tienen nada que les falte.
+   */
+  const faltantes = useMemo(
+    () =>
+      armado && datos && armado.partidas.length > 0
+        ? faltantesDelDocumento({
+            cliente: datos.cotizacion.cliente,
+            titulo: datos.cotizacion.titulo,
+            folio: datos.cotizacion.folio,
+            documento: armado.documento,
+            condiciones: armado.condiciones,
+          })
+        : [],
+    [armado, datos],
   );
 
   // ── Autoguardado ────────────────────────────────────────────────────────────
@@ -226,6 +257,9 @@ export function ArmadoClient({
    */
   const mandarARevision = useCallback(async () => {
     if (!armado) return;
+    // Sin forma de saltarlo: el botón está apagado, y si alguien llegara aquí
+    // igual, la ruta responde 422.
+    if (faltantes.length > 0) return;
     setEnviando(true);
     setError(null);
     try {
@@ -239,12 +273,15 @@ export function ArmadoClient({
       const r = await fetch(ruta, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ version }),
+        body: JSON.stringify({ version, nota }),
       });
       const cuerpo = await r.json();
       if (!r.ok) throw new Error(cuerpo.error ?? "No se pudo mandar a revisión");
 
       setVerPrevia(false);
+      // Ya viajó en el correo: dejarla escrita haría que la siguiente versión
+      // saliera con el recado de la anterior.
+      setNota("");
       setResultadoEnvio({
         total: cuerpo.total ?? 0,
         letra: cuerpo.letra ?? "",
@@ -256,7 +293,7 @@ export function ArmadoClient({
     } finally {
       setEnviando(false);
     }
-  }, [armado, cargar, cotKey, guardarYa, version]);
+  }, [armado, cargar, cotKey, faltantes, guardarYa, nota, version]);
 
   // ── Dibujo ──────────────────────────────────────────────────────────────────
   if (cargando) {
@@ -445,6 +482,9 @@ export function ArmadoClient({
             titulo={cotizacion.titulo}
             folio={cotizacion.folio}
             sinArmado={armado.partidas.length === 0}
+            faltantes={faltantes}
+            nota={nota}
+            onNota={setNota}
             enviando={enviando}
             error={error}
             onCerrar={() => setVerPrevia(false)}

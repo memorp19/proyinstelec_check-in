@@ -3,8 +3,10 @@ import { auth } from "@/src/auth";
 import { exigirPermiso } from "@/src/lib/permisos";
 import { parseCotKey } from "@/src/lib/cotizaciones";
 import { enviarARevision } from "@/src/lib/cotizaciones-flujos";
+import { notaParaRevisor } from "@/src/lib/nota-revision";
 import { accesoAlArmado } from "@/src/lib/cotizador-permisos";
 import { congelarVersion, getArmado } from "@/src/lib/cotizador-db";
+import { faltantesDelDocumento } from "@/src/lib/cotizador/docs/valores";
 
 /**
  * Congela los importes y manda la versión a revisión.
@@ -13,6 +15,13 @@ import { congelarVersion, getArmado } from "@/src/lib/cotizador-db";
  * congelado fallara, el revisor estaría viendo una cotización que todavía se
  * recalcula sola — que es justo lo que este cambio viene a quitar. Al revés, un
  * congelado sin cambio de estatus se arregla volviendo a dar al botón.
+ *
+ * ── Y antes de todo eso, lo que falta ──
+ *
+ * Lo que saldría como `⟨falta⟩` en el documento no pasa de aquí. La pantalla
+ * ya lo dice y deja el botón apagado, pero esta ruta se puede llamar sin la
+ * pantalla: la comprobación que vale es esta. Va **antes del congelado** para
+ * no dejar una versión congelada de algo que no se mandó.
  */
 export async function POST(req: NextRequest, { params }: { params: { key: string } }) {
   const session = await auth();
@@ -23,11 +32,15 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
   if (!key) return NextResponse.json({ error: "Llave inválida" }, { status: 400 });
 
   let version = 0;
+  // La nota para el revisor viaja aquí y no se guarda en la cotización: va al
+  // correo y a la bitácora. `enviarARevision` la recorta y la escapa.
+  let nota = "";
   try {
-    const cuerpo = (await req.json()) as { version?: number };
+    const cuerpo = (await req.json()) as { version?: number; nota?: unknown };
     if (Number.isInteger(cuerpo.version) && cuerpo.version! >= 0) version = cuerpo.version!;
+    nota = notaParaRevisor(cuerpo.nota);
   } catch {
-    // Sin cuerpo: la v0.
+    // Sin cuerpo: la v0 y sin nota.
   }
 
   const completo = await getArmado(key.numero, key.anio, version);
@@ -45,6 +58,29 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
     );
   }
 
+  // La misma función que decide qué sale impreso, sin llamar a Google: lo que
+  // aquí falta es exactamente lo que el PDF marcaría con ⟨falta⟩. Un renglón
+  // apagado a propósito no cuenta.
+  const faltantes = faltantesDelDocumento({
+    cliente: completo.cotizacion.cliente,
+    titulo: completo.cotizacion.titulo,
+    folio: completo.cotizacion.folio,
+    documento: completo.armado.documento,
+    condiciones: completo.armado.condiciones,
+  });
+  if (faltantes.length > 0) {
+    const lista = faltantes.map((f) => `${f.que} (${f.donde})`).join("; ");
+    return NextResponse.json(
+      {
+        error:
+          `El documento saldría con ${faltantes.length === 1 ? "un hueco" : "huecos"} a la vista. ` +
+          `Falta: ${lista}.`,
+        faltantes,
+      },
+      { status: 422 },
+    );
+  }
+
   const usuario = session!.user.email ?? "";
   try {
     const congelado = await congelarVersion({ numero: key.numero, anio: key.anio, version, usuario });
@@ -53,6 +89,7 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
       anio: key.anio,
       version,
       usuario,
+      nota,
     });
 
     return NextResponse.json({
