@@ -1098,31 +1098,52 @@ cambian con el negocio y no deberían necesitar un despliegue. El catálogo pued
 además traer su propio `base_nodos` por código: el de la configuración es el
 punto de partida, no un techo.
 
-### 6.9 🟡 Eliminar es más estrecho que en el legacy
+### 6.9 ⏳ Eliminar: el número queda libre, y quién puede no cambia — *decidido, pendiente de implementar*
 
-**Decidido, pendiente de confirmar con el equipo antes del corte.**
+**Decidido por Eduardo el 13 nov 2026**, al leer `COT_34_Eliminacion.gs` del
+código que corre hoy en producción. Cierra la pregunta que esta sección tenía
+abierta.
 
-El chequeo previo de Apps Script lo dice así:
+#### Lo que cambia respecto de lo que estaba escrito aquí
 
-> Eliminar: directo, la elimina quien ve el módulo (solo antes de enviarla).
-> **No necesita permiso.**
+Decía esta sección que «el número no se reutiliza en ninguno de los dos casos».
+**Eso era falso del legacy**: `COT_34` libera el número a propósito, y el alta
+lo vuelve a ofrecer. La regla que adoptamos es la suya.
 
-En el ERP hay tres candados en vez de uno: la elimina **quien la dio de alta**
-—o el gerente de operaciones con `cotizaciones.armar.todas`—, solo si está en
-`PROCESO` sin envío, sin OT y sin OC, y hay que **teclear el folio**.
+> **El número de una cotización eliminada queda libre para reutilizarse.**
 
-La razón de cada uno: una cotización que el cliente ya tiene es parte del
-historial aunque haya sido un error —para esas está `CANCELADA`, que deja
-constancia— y un «¿estás seguro?» se contesta que sí sin leerlo, mientras que
-copiar el folio obliga a mirar cuál se está borrando.
+Una cotización que nunca salió de la empresa no dejó rastro fuera: su número no
+significa nada para nadie, y dejarlo como hueco solo hace que la numeración
+salte sin explicación. El riesgo que nos preocupaba —que un folio signifique dos
+cosas en dos PDF distintos— no existe aquí, porque la condición para eliminar es
+justamente que **no haya salido ningún PDF**.
 
-**Lo que hay que confirmar no es la regla, es el hábito.** Si hoy el equipo se
-borra cotizaciones ajenas sin fricción y eso resuelve algo que no estamos
-viendo, el candado de «quién» va a aparecer el primer día como un estorbo. Si
-nadie lo hace, no se va a notar. Es una pregunta de media hora con quien cotiza,
-y conviene hacerla **antes** del corte y no después.
+El alta propone el número libre **solo si está por debajo del consecutivo**. Un
+número eliminado por arriba —una prueba en el 450 cuando el consecutivo va en
+el 300— no se ofrece: brincaría la numeración.
 
-El número no se reutiliza en ninguno de los dos casos: el hueco se queda.
+#### Lo que NO cambia
+
+**Quién puede eliminar.** Apps Script dejó que lo hiciera cualquiera que vea el
+módulo, sin permiso (decisión del 20 oct 2026). Aquí sigue siendo **quien la dio
+de alta**, o quien tenga `cotizaciones.armar.todas`. Tampoco cambian los
+estados: solo `PROCESO`, sin envío, sin OT y sin OC.
+
+#### Lo que hay que agregar: el rastro
+
+Hoy borramos la fila y dejamos una línea de bitácora. Falta lo que el legacy sí
+guarda, y que es mejor que lo nuestro:
+
+1. **Motivo**, de una lista cerrada, y **comentario** libre.
+2. **Copia de la fila** antes de borrarla, para poder contestar «¿qué era la
+   271?» dentro de un año.
+3. **La carpeta de Drive se renombra** a `NNN - AAAA · ELIMINADA dd-mm-aaaa`
+   en vez de quedar huérfana. De Drive no se borra nada, y el alta siguiente
+   crea una carpeta nueva.
+
+Todo esto va en **su propio PR, «eliminación auditada»**, más adelante: no entra
+en el PR de validaciones ni en el del documento. El detalle de la comparación
+está en `docs/erp-legacy/brecha-2026-11-13.md`, punto 12.
 
 ### 6.10 🟡 Qué se hace con `Cat_Servicios_Cambios`
 
