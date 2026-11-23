@@ -25,15 +25,16 @@ reconocerlo.
 |  | ✅ | ⏳ | — |
 |---|---|---|---|
 | **Altos (A1–A12)** | 8 | 4 | 0 |
-| **Medios (M1–M13)** | 5 | 7 | 1 |
+| **Medios (M1–M13)** | 6 | 6 | 1 |
 | **Bajos (B1–B12)** | 6 | 6 | 0 |
 
-Los ⏳ caen en seis PR. Tres ya estaban previstos, dos salen de este mapa y
-uno es la propuesta del folio:
+Los ⏳ caen en cinco PR. Tres ya estaban previstos, uno sale de este mapa y
+otro es la propuesta del folio. El primero que salió del mapa, «Enviar al
+cliente», ya entró:
 
 | PR | Qué cierra | Por qué en ese orden |
 |---|---|---|
-| **Enviar al cliente** *(nuevo, chico)* | M7: destinatarios libres y el «Mensaje» como HTML | Es lo único que **sale de la empresa** hoy. |
+| ✅ **Enviar al cliente** | M7: destinatarios libres y el «Mensaje» como HTML; el doble envío del M11 (§3.2) | Era lo único que **salía de la empresa**. |
 | **Autoaprobación** | A4, y que «Elaboró» decida quién arma (§3.1) | Ya estaba en la brecha (punto 7). |
 | **Endurecimiento** *(nuevo, chico)* | M11 (transiciones en una sentencia), B11 (iframe), la foto del check-in (§3.4), la bitácora del encabezado (§3.7) | Cambios cortos. La pantalla solo cambia para avisar «alguien más la cambió». |
 | **Eliminación auditada** | M9: cotizaciones y contactos | Ya estaba en el plan (§6.9). |
@@ -211,28 +212,34 @@ Siete cosas, ninguna grave, pero cinco repiten en chico un hallazgo del legacy.
   - prueba: alguien con solo `modulo.cotizaciones` cambia el título de una
     cotización ajena (200) pero no su `elaboro` (403).
 
-### 3.2 «Enviar al cliente» manda a cualquiera, y el mensaje va como HTML (el M7, igual)
+### 3.2 «Enviar al cliente» mandaba a cualquiera, y el mensaje iba como HTML (el M7, igual) — ✅ cerrado
 
-- **(a) Destinatarios:** `enviarAlCliente`
-  (`src/lib/cotizaciones-flujos.ts:545`) solo revisa que haya al menos uno.
-  La pantalla ofrece los contactos del cliente, pero el servidor acepta
-  cualquier correo. La cotización queda ENVIADA aunque no le haya llegado
-  al cliente.
-- **(b) Mensaje:** la pantalla arma
-  `` `<p …>${mensaje}</p>` `` **sin escapar**
-  (`app/erp/cotizaciones/CotizacionesClient.tsx:1210`), y el servidor lo
-  manda tal cual (`cotizaciones-flujos.ts:587`). Lo que se teclea en
-  «Mensaje» viaja como marcado en un correo que sale de la empresa. La
-  descripción del #32 lo llamó «marcado que compone quien envía», pero en
-  realidad es texto tecleado envuelto en un `<p>`.
-- **⏳ PR «Enviar al cliente»,** con las decisiones del 18 nov:
-  - solo contactos activos con correo del cliente, más correos de la empresa;
-  - al menos uno tiene que ser del cliente;
-  - si uno no cuadra, no sale nada;
-  - el mensaje llega como **texto**, y el servidor lo escapa conservando los
-    saltos de línea.
-  - **Al cerrarlo:** se quita la excepción `mensaje` de
-    `html-sin-escapar.test.ts`.
+Lo que había:
+- **(a) Destinatarios:** `enviarAlCliente` solo revisaba que hubiera al menos
+  uno. La pantalla ofrecía los contactos del cliente, pero el servidor
+  aceptaba cualquier correo. La cotización quedaba ENVIADA aunque no le
+  hubiera llegado al cliente.
+- **(b) Mensaje:** la pantalla armaba `` `<p …>${mensaje}</p>` `` **sin
+  escapar**, y el servidor lo mandaba tal cual. Lo que se tecleaba en
+  «Mensaje» viajaba como marcado en un correo que sale de la empresa.
+
+**✅ PR «Enviar al cliente»,** con las decisiones del 18 nov:
+- **Destinatarios:** solo contactos del cliente dados de alta, más correos
+  del dominio de la empresa, y al menos un contacto del cliente. Si uno no
+  cuadra, no sale nada, y la pantalla dice que primero se dé de alta como
+  contacto. La regla es una función pura (`src/lib/destinatarios.ts`), y la
+  aplican igual el servidor y la pantalla. La lista es la de
+  `contactosParaEnvio`, por `cliente_id` cuando la cotización lo tiene.
+  - Hoy todo contacto que está en la tabla está activo, porque quitarlo lo
+    borra (§3.5). Cuando la eliminación auditada permita inactivarlos, el
+    filtro va en `contactosParaEnvio`.
+- **Mensaje:** llega como texto y el servidor lo escapa con `textoAHtml`,
+  conservando los saltos de línea. La ruta rechaza el `mensajeHtml` de antes.
+- **Sin doble envío:** ver §3.3.
+- **Pruebas:** `lib/destinatarios.test.ts`, `lib/cotizaciones-flujos.test.ts`
+  («enviarAlCliente — destinatarios», «sin doble envío», «el mensaje que
+  escribió quien envía va escapado»), `api/cotizaciones-enviar.test.ts`. La
+  excepción `mensaje` salió de `html-sin-escapar.test.ts`.
 
 ### 3.3 Las transiciones de estatus miran y luego escriben (el M11)
 
@@ -244,14 +251,21 @@ Siete cosas, ninguna grave, pero cinco repiten en chico un hallazgo del legacy.
 - **Ejemplos de lo que deja pasar:**
   - un revisor aprueba mientras otro pide corrección, y la versión queda en
     PROCESO con una aprobación registrada;
-  - un doble clic en «Enviar al cliente» le manda el correo **dos veces**
-    al cliente: los dos pasan la revisión antes de que el primero marque
-    ENVIADA.
-- **⏳ PR de endurecimiento:** el patrón que ya usa el autoguardado
-  (`src/lib/cotizador-db.ts:345-358`), un `UPDATE … WHERE estatus =
-  <el leído> RETURNING`. Si no regresa renglón, «cambió mientras tanto, no
-  se hizo nada». En el envío al cliente, la cotización se marca primero y
-  el correo sale después.
+  - un doble clic en «Enviar al cliente» le mandaba el correo **dos veces**
+    al cliente: los dos pasaban la revisión antes de que el primero marcara
+    ENVIADA. **✅ Cerrado en el PR «Enviar al cliente»:**
+    - `apartarEnvio` (`src/lib/cotizaciones.ts`) marca el envío **antes**
+      del correo, con un solo `UPDATE … WHERE <lo que vio la pantalla>`:
+      versión, estatus y `fecha_envio`;
+    - el segundo clic recibe 409, «ya se envió», y no manda nada;
+    - un reenvío a propósito sí sale, porque la pantalla ya vio el primero;
+    - si el correo no sale, `devolverEnvio` regresa la fila a como estaba,
+      sin borrar la aprobación.
+- **⏳ PR de endurecimiento,** para lo demás (`cambiarEstatus`, aprobar,
+  corregir): el patrón que ya usan el autoguardado
+  (`src/lib/cotizador-db.ts:345-358`) y el envío, un `UPDATE … WHERE
+  estatus = <el leído> RETURNING`. Si no regresa renglón, «cambió mientras
+  tanto, no se hizo nada».
 - **Lo que ya está bien:** eliminar
   (`cotizaciones.ts:827`, la condición va dentro del `DELETE`), descartar
   versiones (`marcarNoAsignadas`) y registrar la OC posterior (`WHERE estatus
@@ -387,7 +401,7 @@ Es el equivalente del A5 y el M10.
   que lleve una etiqueta HTML, cada `${…}` tiene que cumplir una de tres:
   - pasar por `escaparHtml`;
   - ser una función que ya devuelve HTML escapado (`filaTabla`,
-    `plantillaCorreo`…), cuyo cuerpo revisa la misma prueba;
+    `plantillaCorreo`, `textoAHtml`…), cuyo cuerpo revisa la misma prueba;
   - estar en una lista de permitidas, con su porqué.
 - **Cómo lee el código:** con el compilador de TypeScript, no con
   expresiones regulares. Por eso sabe qué es un `${…}` y qué función se
@@ -397,9 +411,10 @@ Es el equivalente del A5 y el M10.
   - `urlSistema()` y `url`: salen de la configuración;
   - `carpetaUrl`: la devuelve Drive;
   - `params.cuerpoHtml`: es HTML por contrato, y su armado se revisa aparte;
-  - dos de `excel.ts`, que no arman HTML sino que leen el XML de un `.xlsx`;
-  - `mensaje`, marcada PENDIENTE (§3.2).
-  - Si una permitida deja de hacer falta, la prueba falla.
+  - dos de `excel.ts`, que no arman HTML sino que leen el XML de un `.xlsx`.
+  - Si una permitida deja de hacer falta, la prueba falla. Así salió
+    `mensaje`, que estaba marcada PENDIENTE hasta el PR «Enviar al cliente»
+    (§3.2).
 - **Se comprobó que falla:** quitando el `escaparHtml` del título en el
   correo al cliente, devolviendo el título de `plantillaCorreo` a como estaba
   y agregando un `dangerouslySetInnerHTML`.
@@ -435,11 +450,11 @@ Es el equivalente del A5 y el M10.
 | M4 | Todo el personal veía los importes de las OC y la facturación | 2 · importes de OC y cobranza, solo `gastos.costos` (§2.2) | ✅ Por diseño | La OT no lleva un solo importe. Cuando entre la cobranza, con la regla de §2.2 |
 | M5 | El enlace al contrato del personal externo le llegaba a cualquiera | 8 · contratos en carpeta restringida (§2.2) | ⏳ Migración de OT y compras | — |
 | M6 | Un parámetro del navegador saltaba el candado de una versión aprobada | 4 · lo editable lo decide el servidor | ✅ Por diseño | `accesoAlArmado` (`src/lib/cotizador-permisos.ts`); `api/cotizador-armado.test.ts` («en revisión no se guarda ni siendo quien la elaboró»), `api/cotizador-documento.test.ts` («una versión ya mandada a revisión, 403») |
-| M7 | El envío al cliente aceptaba cualquier destinatario y el mensaje como HTML | 5 · solo contactos; el mensaje es texto | ⏳ Enviar al cliente | §3.2 |
+| M7 | El envío al cliente aceptaba cualquier destinatario y el mensaje como HTML | 5 · solo contactos; el mensaje es texto | ✅ PR «Enviar al cliente» | §3.2; `lib/destinatarios.test.ts`, `api/cotizaciones-enviar.test.ts` y los de `enviarAlCliente` en `lib/cotizaciones-flujos.test.ts` |
 | M8 | Firmar el acta del Histórico pedía solo «ver», y la captura de montos pisaba la de la OC | 1 y 6 | — No existe aquí | Si se migra el Histórico: firmar con su permiso, y los montos de OC solo por su flujo |
 | M9 | Eliminar un cliente borraba el renglón, sin rastro | 7 · inactivar con motivo | ⏳ Eliminación auditada | Cotizaciones: solo PROCESO, condición dentro del `DELETE` (`cotizaciones.ts:827`), con bitácora. Contactos: se borran (§3.5) |
 | M10 | Un escape de HTML usado dentro de `onclick`, que el navegador deshace | 5 · React no usa JS en texto | ✅ Por diseño | Los manejadores son funciones, no cadenas; `html-sin-escapar.test.ts` |
-| M11 | Rechazar, cancelar o pagar sin releer el estado; IDs y PD repetidos | 6 · `UPDATE … WHERE <estado leído>` | ⏳ Endurecimiento | IDs: los da la base. Responsables de OT: índice único y reintento (`ot.test.ts`, «si otro proceso gana el slot (23505)…»). Falta: las transiciones de cotización (§3.3) |
+| M11 | Rechazar, cancelar o pagar sin releer el estado; IDs y PD repetidos | 6 · `UPDATE … WHERE <estado leído>` | ⏳ Endurecimiento | IDs: los da la base. Responsables de OT: índice único y reintento (`ot.test.ts`, «si otro proceso gana el slot (23505)…»). El envío al cliente ya aparta en una sentencia (`apartarEnvio`, PR «Enviar al cliente»). Falta: las demás transiciones de cotización (§3.3) |
 | M12 | Un solo candado para todo el sistema, y el cotizador lo ocupaba mucho | 6 · cada sentencia es atómica | ✅ Por diseño | Postgres bloquea por renglón; el documento y el PDF se hacen sin candado |
 | M13 | Funciones del núcleo mandaban correos o creaban activadores sin permiso | 1 y 10 | ✅ Por diseño | No hay crons (no hay `vercel.json`); el correo solo sale de flujos detrás de un permiso. `rutas-protegidas.test.ts` dobla `enviarCorreo` y marca a quien lo llame antes de revisar |
 
