@@ -19,6 +19,8 @@
  * envía es el mismo texto que la regla que lo rechaza.
  */
 
+import { conPuntoFinal } from "./texto";
+
 /** El dominio de Google Workspace de la empresa. Solo en el servidor. */
 export function dominioEmpresa(): string {
   return (process.env.GOOGLE_WORKSPACE_DOMAIN ?? "proyinstelec.mx").trim().toLowerCase();
@@ -60,7 +62,7 @@ export function validarDestinatarios(params: {
   const para = [...new Set(params.destinatarios.map(normalizarCorreo).filter(Boolean))];
 
   if (para.length === 0) {
-    return { ok: false, noCuadran: [], error: `Selecciona al menos un contacto de ${params.cliente}.` };
+    return { ok: false, noCuadran: [], error: conPuntoFinal(`Selecciona al menos un contacto de ${params.cliente}`) };
   }
 
   const malEscritos = para.filter((c) => !UNA_DIRECCION.test(c));
@@ -94,7 +96,7 @@ export function validarDestinatarios(params: {
     return {
       ok: false,
       noCuadran: [],
-      error: `No se envió nada: falta al menos un contacto de ${params.cliente}. Si la persona no aparece en la lista, primero dala de alta como contacto del cliente en Clientes.`,
+      error: `${conPuntoFinal(`No se envió nada: falta al menos un contacto de ${params.cliente}`)} Si la persona no aparece en la lista, primero dala de alta como contacto del cliente en Clientes.`,
     };
   }
 

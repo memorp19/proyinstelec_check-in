@@ -76,6 +76,32 @@ describe("validarDestinatarios", () => {
     });
   });
 
+  // Casi todas las razones sociales acaban en «C.V.»: el aviso no le pone otro punto.
+  describe("una razón social que ya termina en punto", () => {
+    const conPunto = (destinatarios: string[]) =>
+      validarDestinatarios({
+        destinatarios,
+        correosDelCliente: CONTACTOS,
+        dominio: "empresa.test",
+        cliente: "Aceros del Norte S.A. de C.V.",
+      });
+
+    it("falta un contacto: sin doble punto", () => {
+      const r = conPunto(["gerencia@empresa.test"]);
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.error).toContain("falta al menos un contacto de Aceros del Norte S.A. de C.V. Si la persona");
+        expect(r.error).not.toContain("C.V..");
+      }
+    });
+
+    it("nadie: tampoco", () => {
+      const r = conPunto([]);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error).toBe("Selecciona al menos un contacto de Aceros del Norte S.A. de C.V.");
+    });
+  });
+
   describe("el dominio de la empresa es exactamente ese", () => {
     it.each([
       ["un subdominio", "alguien@correo.empresa.test"],
