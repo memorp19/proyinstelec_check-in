@@ -1,6 +1,7 @@
 import { eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { proyectoUsuarios, users } from "../db/schema";
+import { dominioEmpresa } from "./destinatarios";
 
 /**
  * Perfiles de usuario.
@@ -244,8 +245,7 @@ export async function upsertUserSembrado(data: {
 
 /** Clasifica un correo como personal de planta o trabajador temporal. */
 export function classifyEmail(email: string): "planta" | "temporal" {
-  const dominio = process.env.GOOGLE_WORKSPACE_DOMAIN ?? "proyinstelec.mx";
-  return email.toLowerCase().endsWith(`@${dominio}`) ? "planta" : "temporal";
+  return email.toLowerCase().endsWith(`@${dominioEmpresa()}`) ? "planta" : "temporal";
 }
 
 /** Total de usuarios — usado por diagnósticos y por la siembra. */

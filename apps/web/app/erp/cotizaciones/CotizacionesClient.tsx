@@ -13,6 +13,7 @@ import {
   IconoRama,
   IconoReloj,
 } from "./Iconos";
+import { validarDestinatarios } from "@/src/lib/destinatarios";
 
 // ── Tipos (espejo de la API) ──────────────────────────────────────────────────
 
@@ -1155,11 +1156,14 @@ function EliminarForm({ cot, onDone }: { cot: Cot; onDone: (msg: string) => void
 interface DatosEnvio {
   puede: boolean;
   motivo?: string;
+  /** Lo que se vio al abrir: el servidor solo envía si sigue así. */
+  cotizacion: { version: number; estatus: string; cliente: string; fecha_envio?: string } | null;
   contactos: Array<{ contacto_id: string; nombre: string; puesto?: string; correo?: string }>;
   sugeridoId: string | null;
   asuntoSugerido: string;
   ccEquipo: string[];
   pdfDisponible: boolean;
+  dominioEmpresa: string;
 }
 
 function EnviarForm({ cot, onDone }: { cot: Cot; onDone: (msg: string) => void }) {
@@ -1197,7 +1201,21 @@ function EnviarForm({ cot, onDone }: { cot: Cot; onDone: (msg: string) => void }
   }
 
   async function enviar() {
+    if (!datos?.cotizacion) return;
     const destinatarios = [...seleccion, ...manual.split(",").map((s) => s.trim()).filter(Boolean)];
+    // La misma regla que aplica el servidor, para decirlo antes de intentar:
+    // solo contactos del cliente y correos de la empresa, con al menos un
+    // contacto del cliente. El servidor la vuelve a aplicar.
+    const revision = validarDestinatarios({
+      destinatarios,
+      correosDelCliente: datos.contactos.map((c) => c.correo ?? ""),
+      dominio: datos.dominioEmpresa,
+      cliente: datos.cotizacion.cliente,
+    });
+    if (!revision.ok) {
+      setError(revision.error);
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -1205,10 +1223,16 @@ function EnviarForm({ cot, onDone }: { cot: Cot; onDone: (msg: string) => void }
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          destinatarios,
+          destinatarios: revision.para,
           asunto,
-          mensajeHtml: mensaje ? `<p style="font-size:13px;color:#111827;white-space:pre-wrap;">${mensaje}</p>` : undefined,
+          // Texto, tal como se tecleó: el servidor lo escapa y respeta los saltos de línea
+          mensaje: mensaje.trim() || undefined,
           telefonoFirma: telefono || undefined,
+          visto: {
+            version: datos.cotizacion.version,
+            estatus: datos.cotizacion.estatus,
+            fechaEnvio: datos.cotizacion.fecha_envio ?? null,
+          },
         }),
       });
       const data = await res.json();
@@ -1252,9 +1276,20 @@ function EnviarForm({ cot, onDone }: { cot: Cot; onDone: (msg: string) => void }
             ))}
           </div>
         ) : (
-          <p className="font-mono text-[10px] text-white/40">Sin contactos con correo para esta empresa; escribe los correos abajo.</p>
+          <p className="font-mono text-[10px] text-amber">
+            Este cliente no tiene contactos con correo. Primero da de alta el contacto en{" "}
+            <a href="/erp/clientes" className="underline">Clientes</a> y vuelve a abrir el envío.
+          </p>
         )}
-        <input className={`${input} mt-2`} placeholder="Otros correos (separados por coma)" value={manual} onChange={(e) => setManual(e.target.value)} />
+        <input
+          className={`${input} mt-2`}
+          placeholder={`Además, correos de la empresa (@${datos?.dominioEmpresa ?? ""}), separados por coma`}
+          value={manual}
+          onChange={(e) => setManual(e.target.value)}
+        />
+        <p className="font-mono text-[9px] text-white/30 mt-1">
+          Al cliente solo se le envía a sus contactos dados de alta. Si falta alguien, primero dalo de alta en Clientes.
+        </p>
       </div>
 
       <input className={input} placeholder="Asunto" value={asunto} onChange={(e) => setAsunto(e.target.value)} />

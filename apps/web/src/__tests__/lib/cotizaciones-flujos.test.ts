@@ -1,23 +1,29 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // ── Mocks de todas las dependencias del módulo de flujos ──────────────────────
 
 vi.mock("@/src/lib/bitacora", () => ({ registrarBitacora: vi.fn().mockResolvedValue(undefined) }));
-vi.mock("@/src/lib/correo", () => ({
-  enviarCorreo: vi.fn().mockResolvedValue({ enviado: true }),
-  plantillaCorreo: vi.fn((p: { cuerpoHtml: string }) => p.cuerpoHtml),
-  // Fiel al de verdad, que tiene su propia prueba en correo.test.ts: aquí hace
-  // falta para poder afirmar que la nota sale escapada.
-  escaparHtml: (t: string) =>
+vi.mock("@/src/lib/correo", () => {
+  // Fieles a los de verdad, que tienen su propia prueba en correo.test.ts:
+  // aquí hacen falta para poder afirmar que lo tecleado sale escapado.
+  const escaparHtml = (t: string) =>
     String(t ?? "")
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;"),
-}));
+      .replace(/'/g, "&#39;");
+  return {
+    enviarCorreo: vi.fn().mockResolvedValue({ enviado: true }),
+    plantillaCorreo: vi.fn((p: { cuerpoHtml: string }) => p.cuerpoHtml),
+    escaparHtml,
+    textoAHtml: (t: string) => escaparHtml(String(t ?? "").trim()).replace(/\r\n|\r|\n/g, "<br/>"),
+  };
+});
 vi.mock("@/src/lib/cotizaciones", () => ({
   cotPk: (numero: number, anio: number) => `COT#${String(numero).padStart(3, "0")}-${anio}`,
+  apartarEnvio: vi.fn(),
+  devolverEnvio: vi.fn(),
   cambiarEstatus: vi.fn(),
   getVigente: vi.fn(),
   getVersion: vi.fn(),
@@ -49,7 +55,9 @@ vi.mock("@/src/lib/users", () => ({ listUsers: vi.fn(), getUserByEmail: vi.fn() 
 vi.mock("@/src/lib/config-erp", () => ({ getConfigErp: vi.fn() }));
 
 import {
+  apartarEnvio,
   cambiarEstatus,
+  devolverEnvio,
   getVigente,
   getVersion,
   marcarNoAsignadas,
@@ -57,6 +65,7 @@ import {
   registrarAprobacion,
   updateCotizacion,
 } from "@/src/lib/cotizaciones";
+import { contactosParaEnvio } from "@/src/lib/clientes";
 import { registrarBitacora } from "@/src/lib/bitacora";
 import { buscarPdfCotizacion } from "@/src/lib/drive-erp";
 import { enviarCorreo, plantillaCorreo } from "@/src/lib/correo";
@@ -70,6 +79,9 @@ import {
   enviarAlCliente,
   ingresarOrdenCompra,
   generarOTSinOrdenCompra,
+  DestinatariosNoValidos,
+  EnvioDesactualizado,
+  EnvioNoPermitido,
 } from "@/src/lib/cotizaciones-flujos";
 
 const vigente = {
@@ -88,8 +100,20 @@ const usuarios = [
   { email: "angeles@proyinstelec.mx", nombre: "María de los Ángeles McAllen", iniciales: "MALM", rol: "campo", permisos: [] },
 ];
 
+/** El único contacto con correo del cliente, en todas las pruebas del envío. */
+const CONTACTO = "compras@cliente.test";
+
 beforeEach(() => {
   vi.clearAllMocks();
+  // El dominio de la empresa, para la regla de destinatarios
+  vi.stubEnv("GOOGLE_WORKSPACE_DOMAIN", "empresa.test");
+  vi.mocked(contactosParaEnvio).mockResolvedValue({
+    empresa: { cliente_id: "e1", razon_social: "Aceros del Norte" } as never,
+    contactos: [{ contacto_id: "c1", nombre: "Compras", correo: CONTACTO }] as never,
+    sugeridoId: "c1",
+  });
+  vi.mocked(apartarEnvio).mockResolvedValue(true);
+  vi.mocked(devolverEnvio).mockResolvedValue(true);
   vi.mocked(listUsers).mockResolvedValue(usuarios as any);
   // Fiel al de verdad: busca por correo, sin distinguir mayúsculas.
   vi.mocked(getUserByEmail).mockImplementation(async (email: string) =>
@@ -103,6 +127,10 @@ beforeEach(() => {
     cc_aviso_ot: ["gerencia@proyinstelec.mx"],
     cotizador: { ASESORIA_PCT_DEFAULT: 10, BASE_NODOS_ESTUDIO: 10, HORAS_DIA_ESTUDIO: 8 },
   });
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("enviarARevision", () => {
@@ -385,30 +413,43 @@ describe("solicitarCorreccion", () => {
 });
 
 describe("enviarAlCliente", () => {
+  /** Lo que vio la pantalla al abrir el envío de `vigente`: en REVISION, nunca enviada. */
+  const VISTO = { version: 0, estatus: "REVISION" as const, fechaEnvio: null };
+
+  const pedido = (extra: Partial<Parameters<typeof enviarAlCliente>[0]> = {}) => ({
+    numero: 1,
+    anio: 2026,
+    destinatarios: [CONTACTO],
+    visto: VISTO,
+    remitente: { email: "maria@proyinstelec.mx", nombre: "María" },
+    ...extra,
+  });
+
+  function conPdf(cotizacion: Record<string, unknown> = vigente) {
+    vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({ puede: true, cotizacion: cotizacion as never });
+    vi.mocked(buscarPdfCotizacion).mockResolvedValue({
+      pdf: { filename: "PCOTOP-001-2026.pdf", contenido: Buffer.from("pdf") },
+      nombresEnCarpeta: ["PCOTOP-001-2026.pdf"],
+    });
+  }
+
   it("bloquea sin aprobación (motivo del validador)", async () => {
     vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({
-      puede: false, motivo: "Esperando aprobación del revisor", cotizacion: vigente as any,
+      puede: false, motivo: "Esperando aprobación del revisor", cotizacion: vigente as never,
     });
-    await expect(
-      enviarAlCliente({
-        numero: 1, anio: 2026, destinatarios: ["a@x.mx"],
-        remitente: { email: "maria@proyinstelec.mx", nombre: "María" },
-      }),
-    ).rejects.toThrow("Esperando aprobación");
+    const enviar = enviarAlCliente(pedido());
+    await expect(enviar).rejects.toThrow("Esperando aprobación");
+    await expect(enviar).rejects.toBeInstanceOf(EnvioNoPermitido);
   });
 
   it("el PDF es obligatorio", async () => {
-    vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({ puede: true, cotizacion: vigente as any });
+    vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({ puede: true, cotizacion: vigente as never });
     vi.mocked(buscarPdfCotizacion).mockResolvedValue({
       pdf: null,
       nombresEnCarpeta: ["otra-cosa.pdf"],
     });
-    await expect(
-      enviarAlCliente({
-        numero: 1, anio: 2026, destinatarios: ["a@x.mx"],
-        remitente: { email: "maria@proyinstelec.mx", nombre: "María" },
-      }),
-    ).rejects.toThrow("PDF");
+    await expect(enviarAlCliente(pedido())).rejects.toThrow("PDF");
+    expect(apartarEnvio).not.toHaveBeenCalled();
   });
 
   // El mensaje es una instrucción: le dice al equipo con qué nombre generar el
@@ -418,17 +459,14 @@ describe("enviarAlCliente", () => {
     const conFolioMalo = { ...vigente, version: 1, folio: "PCOTOP-001-2026-v1" };
     vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({
       puede: true,
-      cotizacion: conFolioMalo as any,
+      cotizacion: conFolioMalo as never,
     });
     vi.mocked(buscarPdfCotizacion).mockResolvedValue({
       pdf: null,
       nombresEnCarpeta: ["PCOTOP-001-2026-1 Subestación.pdf"],
     });
 
-    const enviar = enviarAlCliente({
-      numero: 1, anio: 2026, destinatarios: ["a@x.mx"],
-      remitente: { email: "maria@proyinstelec.mx", nombre: "María" },
-    });
+    const enviar = enviarAlCliente(pedido({ visto: { ...VISTO, version: 1 } }));
 
     await expect(enviar).rejects.toThrow('"PCOTOP-001-2026-1 …"');
     await expect(enviar).rejects.not.toThrow("-v1");
@@ -437,41 +475,44 @@ describe("enviarAlCliente", () => {
   });
 
   it("el error dice qué PDF sí había en la carpeta", async () => {
-    vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({ puede: true, cotizacion: vigente as any });
+    vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({ puede: true, cotizacion: vigente as never });
     vi.mocked(buscarPdfCotizacion).mockResolvedValue({
       pdf: null,
       nombresEnCarpeta: ["PCOTOP-001-2026_Subestación.pdf"],
     });
 
-    await expect(
-      enviarAlCliente({
-        numero: 1, anio: 2026, destinatarios: ["a@x.mx"],
-        remitente: { email: "maria@proyinstelec.mx", nombre: "María" },
-      }),
-    ).rejects.toThrow("PCOTOP-001-2026_Subestación.pdf");
+    await expect(enviarAlCliente(pedido())).rejects.toThrow("PCOTOP-001-2026_Subestación.pdf");
   });
 
-  it("envía con PDF adjunto, CC al resto del equipo y pasa a ENVIADA", async () => {
-    vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({ puede: true, cotizacion: vigente as any });
-    vi.mocked(buscarPdfCotizacion).mockResolvedValue({
-      pdf: { filename: "PCOTOP-001-2026.pdf", contenido: Buffer.from("pdf") },
-      nombresEnCarpeta: ["PCOTOP-001-2026.pdf"],
-    });
-    vi.mocked(getVigente).mockResolvedValue({ ...vigente, estatus: "ENVIADA" } as any);
-    vi.mocked(cambiarEstatus).mockResolvedValue({ ...vigente, estatus: "ENVIADA" } as any);
+  it("envía con PDF adjunto, CC al resto del equipo y aparta el envío", async () => {
+    conPdf();
+    vi.mocked(getVersion).mockResolvedValue({ ...vigente, estatus: "ENVIADA" } as never);
 
-    await enviarAlCliente({
-      numero: 1, anio: 2026, destinatarios: ["cliente@aceros.mx"],
-      remitente: { email: "maria@proyinstelec.mx", nombre: "María" },
-    });
+    await enviarAlCliente(pedido());
 
     const llamada = vi.mocked(enviarCorreo).mock.calls[0][0];
-    expect(llamada.para).toEqual(["cliente@aceros.mx"]);
+    expect(llamada.para).toEqual([CONTACTO]);
     expect(llamada.cc).toEqual(["eduardo@proyinstelec.mx"]); // el equipo menos la remitente
     expect(llamada.adjuntos?.[0].filename).toBe("PCOTOP-001-2026.pdf");
-    // Sobre la versión cuya aprobación se verificó: la aprobación es por
-    // versión exacta, y ENVIADA no puede caer en otra.
-    expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "ENVIADA", 0);
+    // Sobre la versión cuya aprobación se verificó, y con lo que vio la
+    // pantalla: es lo que impide un segundo correo.
+    expect(apartarEnvio).toHaveBeenCalledWith({
+      numero: 1, anio: 2026, visto: VISTO, ahora: expect.any(Date),
+    });
+    // Ya no por `cambiarEstatus`, que mira y luego escribe
+    expect(cambiarEstatus).not.toHaveBeenCalled();
+    expect(updateCotizacion).not.toHaveBeenCalled();
+    expect(devolverEnvio).not.toHaveBeenCalled();
+  });
+
+  it("aparta el envío ANTES de mandar el correo", async () => {
+    conPdf();
+
+    await enviarAlCliente(pedido());
+
+    const apartado = vi.mocked(apartarEnvio).mock.invocationCallOrder[0];
+    const correo = vi.mocked(enviarCorreo).mock.invocationCallOrder[0];
+    expect(apartado).toBeLessThan(correo);
   });
 
   // Este correo sale al CLIENTE, y el folio que lleva es el que va a citar en
@@ -479,78 +520,227 @@ describe("enviarAlCliente", () => {
   // reduce al cuerpo: por eso se mira la llamada y no el html.
   it("el correo al cliente lleva el folio canónico, no el de la columna", async () => {
     const importada = { ...vigente, version: 1, folio: "PCOTOP-001-2026-v1" };
-    vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({ puede: true, cotizacion: importada as any });
+    vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({ puede: true, cotizacion: importada as never });
     vi.mocked(buscarPdfCotizacion).mockResolvedValue({
       pdf: { filename: "PCOTOP-001-2026-1.pdf", contenido: Buffer.from("pdf") },
       nombresEnCarpeta: ["PCOTOP-001-2026-1.pdf"],
     });
-    vi.mocked(cambiarEstatus).mockResolvedValue({ ...importada, estatus: "ENVIADA" } as any);
 
-    await enviarAlCliente({
-      numero: 1, anio: 2026, destinatarios: ["cliente@aceros.mx"],
-      remitente: { email: "maria@proyinstelec.mx", nombre: "María" },
-    });
+    await enviarAlCliente(pedido({ visto: { ...VISTO, version: 1 } }));
 
     expect(vi.mocked(plantillaCorreo).mock.calls[0][0].titulo).toBe(
       "Cotización PCOTOP-001-2026-1",
     );
-    // Y el estatus cae en la versión aprobada, no en la vigente
-    expect(cambiarEstatus).toHaveBeenCalledWith(1, 2026, "ENVIADA", 1);
+    // Y el envío se aparta en la versión aprobada, no en la vigente
+    expect(vi.mocked(apartarEnvio).mock.calls[0][0].visto.version).toBe(1);
   });
 
   // El estatus ENVIADA afirma que el cliente recibió la cotización. Si el correo
-  // no salió, la afirmación es falsa: el flujo tiene que abortar antes de tocar
-  // el estatus y la fecha de envío, no degradar en silencio.
-  describe("si el correo no salió, la cotización no se marca como enviada", () => {
-    beforeEach(() => {
-      vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({ puede: true, cotizacion: vigente as any });
-      vi.mocked(buscarPdfCotizacion).mockResolvedValue({
-        pdf: { filename: "PCOTOP-001-2026.pdf", contenido: Buffer.from("pdf") },
-        nombresEnCarpeta: ["PCOTOP-001-2026.pdf"],
-      });
-    });
+  // no salió, la afirmación es falsa: lo apartado se devuelve, y la cotización
+  // queda como estaba.
+  describe("si el correo no salió, se devuelve lo apartado", () => {
+    beforeEach(() => conPdf());
 
-    const enviar = () =>
-      enviarAlCliente({
-        numero: 1, anio: 2026, destinatarios: ["cliente@aceros.mx"],
-        remitente: { email: "maria@proyinstelec.mx", nombre: "María" },
-      });
+    const enviar = () => enviarAlCliente(pedido());
 
-    it("CORREO_DESHABILITADO=true: nombra la variable y no cambia nada", async () => {
+    /** Lo que se devolvió es exactamente lo que se apartó. */
+    function seDevolvioLoApartado() {
+      expect(apartarEnvio).toHaveBeenCalledTimes(1);
+      expect(devolverEnvio).toHaveBeenCalledWith(vi.mocked(apartarEnvio).mock.calls[0][0]);
+      expect(cambiarEstatus).not.toHaveBeenCalled();
+    }
+
+    it("CORREO_DESHABILITADO=true: nombra la variable y no queda enviada", async () => {
       vi.mocked(enviarCorreo).mockResolvedValueOnce({ enviado: false, motivo: "deshabilitado" });
 
       await expect(enviar()).rejects.toThrow("CORREO_DESHABILITADO");
-
-      expect(cambiarEstatus).not.toHaveBeenCalled();
-      expect(updateCotizacion).not.toHaveBeenCalled();
+      seDevolvioLoApartado();
     });
 
-    it("modo demo: tampoco sella el envío", async () => {
+    it("modo demo: tampoco", async () => {
       vi.mocked(enviarCorreo).mockResolvedValueOnce({ enviado: false, motivo: "demo" });
 
       await expect(enviar()).rejects.toThrow("demo");
-
-      expect(cambiarEstatus).not.toHaveBeenCalled();
-      expect(updateCotizacion).not.toHaveBeenCalled();
-    });
-
-    it("sin destinatarios válidos: aborta", async () => {
-      vi.mocked(enviarCorreo).mockResolvedValueOnce({ enviado: false, motivo: "sin_destinatarios" });
-
-      await expect(enviar()).rejects.toThrow("destinatario");
-
-      expect(cambiarEstatus).not.toHaveBeenCalled();
-      expect(updateCotizacion).not.toHaveBeenCalled();
+      seDevolvioLoApartado();
     });
 
     it("error del proveedor de correo: sigue abortando", async () => {
       vi.mocked(enviarCorreo).mockResolvedValueOnce({ enviado: false, motivo: "error" });
 
       await expect(enviar()).rejects.toThrow("bitácora");
-
-      expect(cambiarEstatus).not.toHaveBeenCalled();
-      expect(updateCotizacion).not.toHaveBeenCalled();
+      seDevolvioLoApartado();
     });
+
+    it("si el envío lanza en vez de contestar, también", async () => {
+      vi.mocked(enviarCorreo).mockRejectedValueOnce(new Error("Gmail se cayó"));
+      const consola = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await expect(enviar()).rejects.toThrow("NO se marcó como enviada");
+      seDevolvioLoApartado();
+      expect(consola).toHaveBeenCalled();
+      consola.mockRestore();
+    });
+
+    it("si alguien la movió mientras tanto, no la pisa y lo dice", async () => {
+      vi.mocked(enviarCorreo).mockResolvedValueOnce({ enviado: false, motivo: "error" });
+      vi.mocked(devolverEnvio).mockResolvedValueOnce(false);
+
+      await expect(enviar()).rejects.toThrow("no se pudo regresar");
+      expect(registrarBitacora).toHaveBeenCalledWith(
+        expect.objectContaining({ accion: "COTIZACION_ENVIO_NO_DESHECHO" }),
+      );
+    });
+  });
+});
+
+/**
+ * A quién se le puede mandar (el M7 de la revisión del 17 nov): solo
+ * contactos del cliente y correos de la empresa, con al menos un contacto del
+ * cliente. Si uno no cuadra, no sale nada: ni se busca el PDF ni se aparta.
+ */
+describe("enviarAlCliente — destinatarios", () => {
+  const VISTO = { version: 0, estatus: "REVISION" as const, fechaEnvio: null };
+  const enviarA = (destinatarios: string[]) =>
+    enviarAlCliente({
+      numero: 1, anio: 2026, destinatarios, visto: VISTO,
+      remitente: { email: "alguien@empresa.test", nombre: "Alguien" },
+    });
+
+  beforeEach(() => {
+    vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({ puede: true, cotizacion: vigente as never });
+    vi.mocked(buscarPdfCotizacion).mockResolvedValue({
+      pdf: { filename: "c.pdf", contenido: Buffer.from("pdf") },
+      nombresEnCarpeta: [],
+    });
+  });
+
+  function noSalioNada() {
+    expect(buscarPdfCotizacion).not.toHaveBeenCalled();
+    expect(apartarEnvio).not.toHaveBeenCalled();
+    expect(enviarCorreo).not.toHaveBeenCalled();
+  }
+
+  it("un correo que no es contacto del cliente: no sale nada, y dice que se dé de alta", async () => {
+    const enviar = enviarA(["alguien@otra.test"]);
+
+    await expect(enviar).rejects.toBeInstanceOf(DestinatariosNoValidos);
+    await expect(enviar).rejects.toThrow(/alguien@otra\.test no es contacto de Aceros del Norte/);
+    await expect(enviar).rejects.toThrow("dalo de alta como contacto del cliente en Clientes");
+    noSalioNada();
+  });
+
+  it("uno bueno y uno ajeno: tampoco sale el bueno", async () => {
+    await expect(enviarA([CONTACTO, "alguien@otra.test"])).rejects.toThrow("No se envió nada");
+    noSalioNada();
+  });
+
+  it("solo gente de la empresa: falta un contacto del cliente", async () => {
+    await expect(enviarA(["alguien@empresa.test"])).rejects.toThrow(
+      "falta al menos un contacto de Aceros del Norte",
+    );
+    noSalioNada();
+  });
+
+  it("un contacto más gente de la empresa: sale, a los dos", async () => {
+    await enviarA([CONTACTO, "gerencia@empresa.test"]);
+
+    expect(vi.mocked(enviarCorreo).mock.calls[0][0].para).toEqual([CONTACTO, "gerencia@empresa.test"]);
+  });
+
+  it("manda las direcciones como están en el catálogo, sin repetir", async () => {
+    await enviarA([" Compras@Cliente.TEST ", CONTACTO]);
+
+    expect(vi.mocked(enviarCorreo).mock.calls[0][0].para).toEqual([CONTACTO]);
+  });
+
+  // Los destinatarios van tal cual en la cabecera `To:` del correo.
+  it("un salto de línea no abre otra cabecera", async () => {
+    await expect(enviarA([`${CONTACTO}\r\nBcc: alguien@otra.test`])).rejects.toThrow("No se envió nada");
+    noSalioNada();
+  });
+
+  it("la lista es la del cliente de la cotización (su cliente_id), la misma que ve la pantalla", async () => {
+    vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({
+      puede: true, cotizacion: { ...vigente, cliente_id: "e9" } as never,
+    });
+
+    await enviarA([CONTACTO]);
+
+    expect(contactosParaEnvio).toHaveBeenCalledWith({
+      razonSocial: "Aceros del Norte", dirigidaA: "Juan", clienteId: "e9",
+    });
+  });
+});
+
+/**
+ * Sin doble envío: un segundo clic, otra pestaña u otra persona no mandan un
+ * segundo correo. Lo que decide es lo que vio la pantalla al abrir el envío.
+ */
+describe("enviarAlCliente — sin doble envío", () => {
+  const VISTO = { version: 0, estatus: "REVISION" as const, fechaEnvio: null };
+  const PRIMER_ENVIO = "2026-11-20T18:03:05.123Z";
+  const enviar = (visto: typeof VISTO | { version: number; estatus: "ENVIADA"; fechaEnvio: string } = VISTO) =>
+    enviarAlCliente({
+      numero: 1, anio: 2026, destinatarios: [CONTACTO], visto,
+      remitente: { email: "alguien@empresa.test", nombre: "Alguien" },
+    });
+
+  beforeEach(() => {
+    vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({ puede: true, cotizacion: vigente as never });
+    vi.mocked(buscarPdfCotizacion).mockResolvedValue({
+      pdf: { filename: "c.pdf", contenido: Buffer.from("pdf") },
+      nombresEnCarpeta: [],
+    });
+  });
+
+  it("si otro clic apartó primero: «ya se envió», y no sale correo", async () => {
+    vi.mocked(apartarEnvio).mockResolvedValueOnce(false);
+    vi.mocked(getVigente).mockResolvedValue({ ...vigente, estatus: "ENVIADA", fecha_envio: PRIMER_ENVIO } as never);
+
+    const intento = enviar();
+
+    await expect(intento).rejects.toBeInstanceOf(EnvioDesactualizado);
+    await expect(intento).rejects.toThrow("Ya se envió: no se mandó otro correo");
+    expect(enviarCorreo).not.toHaveBeenCalled();
+    expect(devolverEnvio).not.toHaveBeenCalled();
+  });
+
+  // El caso que una revisión «¿se puede enviar?» deja pasar: ENVIADA se puede
+  // reenviar. Lo detiene que la pantalla la vio sin enviar.
+  it("si el primer clic ya terminó: «ya se envió», sin buscar el PDF ni apartar", async () => {
+    vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({
+      puede: true, cotizacion: { ...vigente, estatus: "ENVIADA", fecha_envio: PRIMER_ENVIO } as never,
+    });
+
+    await expect(enviar()).rejects.toThrow("Ya se envió");
+    expect(buscarPdfCotizacion).not.toHaveBeenCalled();
+    expect(apartarEnvio).not.toHaveBeenCalled();
+    expect(enviarCorreo).not.toHaveBeenCalled();
+  });
+
+  it("un reenvío a propósito sí sale: la pantalla ya vio el primer envío", async () => {
+    const enviada = { ...vigente, estatus: "ENVIADA", fecha_envio: PRIMER_ENVIO };
+    vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({ puede: true, cotizacion: enviada as never });
+    const visto = { version: 0, estatus: "ENVIADA" as const, fechaEnvio: PRIMER_ENVIO };
+
+    await enviar(visto);
+
+    expect(apartarEnvio).toHaveBeenCalledWith(expect.objectContaining({ visto }));
+    expect(enviarCorreo).toHaveBeenCalledTimes(1);
+  });
+
+  it("si la cancelaron mientras tanto, lo dice así, sin «ya se envió»", async () => {
+    vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({
+      puede: false,
+      motivo: "La cotización está en CANCELADA; debe pasar por revisión",
+      cotizacion: { ...vigente, estatus: "CANCELADA" } as never,
+    });
+
+    const intento = enviar();
+
+    await expect(intento).rejects.toThrow("cambió mientras tanto (ahora está en CANCELADA)");
+    await expect(intento).rejects.not.toThrow("Ya se envió");
+    expect(enviarCorreo).not.toHaveBeenCalled();
   });
 });
 
@@ -865,35 +1055,52 @@ describe("el texto tecleado va escapado en los correos", () => {
         nombresEnCarpeta: [],
       } as any);
       vi.mocked(listUsers).mockResolvedValue([] as any);
-      vi.mocked(cambiarEstatus).mockResolvedValue({ ...sucia, estatus: "ENVIADA" } as any);
     });
+
+    const VISTO = { version: 0, estatus: "REVISION" as const, fechaEnvio: null };
 
     // Este sale de la empresa: es el que más importa de todos.
     it("escapa el título y a quién va dirigida en el cuerpo por omisión", async () => {
       await enviarAlCliente({
-        numero: 1, anio: 2026, destinatarios: ["cliente@empresa.com"],
-        remitente: { email: "maria@proyinstelec.mx", nombre: 'María <"Tere">' },
+        numero: 1, anio: 2026, destinatarios: [CONTACTO], visto: VISTO,
+        remitente: { email: "alguien@empresa.test", nombre: 'Alguien <"Tere">' },
       });
 
       const html = vi.mocked(enviarCorreo).mock.calls[0][0].html;
       expect(html).toContain("Subestación &lt;b&gt;Norte&lt;/b&gt;");
-      expect(html).toContain("María &lt;&quot;Tere&quot;&gt;");
+      expect(html).toContain("Alguien &lt;&quot;Tere&quot;&gt;");
       expect(html).not.toContain("<b>Norte</b>");
     });
 
     /**
-     * La excepción, y es deliberada: `mensajeHtml` lo compone quien envía
-     * **como marcado**. Escaparlo convertiría su párrafo en código a la vista.
+     * El «Mensaje» es texto tecleado como cualquier otro (el M7 de la revisión
+     * del 17 nov). Antes la pantalla lo envolvía en un `<p>` sin escapar y el
+     * servidor lo mandaba tal cual: lo que se tecleaba llegaba como marcado al
+     * cliente. Ahora se escapa, y los saltos de línea se conservan.
      */
-    it("pero no toca el mensaje que escribió quien envía", async () => {
+    it("el mensaje que escribió quien envía va escapado, con sus saltos de línea", async () => {
       await enviarAlCliente({
-        numero: 1, anio: 2026, destinatarios: ["cliente@empresa.com"],
-        remitente: { email: "maria@proyinstelec.mx", nombre: "María" },
-        mensajeHtml: "<p>Estimado cliente, va la <b>propuesta</b>.</p>",
+        numero: 1, anio: 2026, destinatarios: [CONTACTO], visto: VISTO,
+        remitente: { email: "alguien@empresa.test", nombre: "Alguien" },
+        mensaje: 'Estimado <b>cliente</b>:\r\nva la propuesta & el <a href="x">PDF</a>.\n\nSaludos',
       });
 
       const html = vi.mocked(enviarCorreo).mock.calls[0][0].html;
-      expect(html).toContain("<b>propuesta</b>");
+      expect(html).toContain(
+        "Estimado &lt;b&gt;cliente&lt;/b&gt;:<br/>va la propuesta &amp; el &lt;a href=&quot;x&quot;&gt;PDF&lt;/a&gt;.<br/><br/>Saludos",
+      );
+      expect(html).not.toContain("<b>cliente</b>");
+      expect(html).not.toContain('<a href="x">');
+    });
+
+    it("un mensaje en blanco deja el cuerpo por omisión", async () => {
+      await enviarAlCliente({
+        numero: 1, anio: 2026, destinatarios: [CONTACTO], visto: VISTO,
+        remitente: { email: "alguien@empresa.test", nombre: "Alguien" },
+        mensaje: "   \n  ",
+      });
+
+      expect(vi.mocked(enviarCorreo).mock.calls[0][0].html).toContain("Quedamos atentos");
     });
   });
 });

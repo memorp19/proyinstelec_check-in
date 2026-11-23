@@ -4,8 +4,10 @@ import { cotizaciones, ordenesTrabajo } from "../db/schema";
 import { registrarBitacora } from "./bitacora";
 import { getConfigErp } from "./config-erp";
 import {
+  apartarEnvio,
   cambiarEstatus,
   cotPk,
+  devolverEnvio,
   getVersion,
   getVigente,
   marcarNoAsignadas,
@@ -14,15 +16,18 @@ import {
   registrarAprobacion,
   updateCotizacion,
   type Cotizacion,
+  type EnvioVisto,
 } from "./cotizaciones";
 import { contactosParaEnvio, type ClienteEmpresa, type Contacto } from "./clientes";
 import {
   enviarCorreo,
   escaparHtml,
   plantillaCorreo,
+  textoAHtml,
   type Adjunto,
   type ResultadoCorreo,
 } from "./correo";
+import { dominioEmpresa, validarDestinatarios } from "./destinatarios";
 import {
   buscarPdfCotizacion,
   ensureCarpetaOT,
@@ -468,6 +473,8 @@ export interface DatosEnvio {
   asuntoSugerido: string;
   ccEquipo: string[];
   pdfDisponible: boolean;
+  /** Para que la pantalla diga qué correos, además de los contactos, se aceptan. */
+  dominioEmpresa: string;
 }
 
 export async function datosParaEnvio(params: {
@@ -486,12 +493,16 @@ export async function datosParaEnvio(params: {
     asuntoSugerido: "",
     ccEquipo: [],
     pdfDisponible: false,
+    dominioEmpresa: dominioEmpresa(),
   };
   if (!cotizacion) return base;
 
+  // La misma llamada que hace `enviarAlCliente` para validar: lo que se ofrece
+  // aquí es exactamente lo que el envío acepta.
   const { empresa, contactos, sugeridoId } = await contactosParaEnvio({
     razonSocial: cotizacion.cliente,
     dirigidaA: cotizacion.dirigida_a,
+    clienteId: cotizacion.cliente_id,
   });
 
   const equipo = await equipoRemitentes();
@@ -542,21 +553,111 @@ function motivoNoEnviado(motivo: ResultadoCorreo["motivo"]): string {
   }
 }
 
+/** La cotización no se puede enviar todavía: sin aprobación, en PROCESO… */
+export class EnvioNoPermitido extends Error {
+  constructor(mensaje: string) {
+    super(mensaje);
+    this.name = "EnvioNoPermitido";
+  }
+}
+
+/** Un destinatario no es contacto del cliente ni de la empresa (`validarDestinatarios`). */
+export class DestinatariosNoValidos extends Error {
+  constructor(mensaje: string) {
+    super(mensaje);
+    this.name = "DestinatariosNoValidos";
+  }
+}
+
+/**
+ * La cotización ya no está como la vio la pantalla: alguien más la envió (o
+ * el mismo, con un segundo clic), o cambió. No se mandó nada.
+ */
+export class EnvioDesactualizado extends Error {
+  constructor(mensaje: string) {
+    super(mensaje);
+    this.name = "EnvioDesactualizado";
+  }
+}
+
+function mismaFecha(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return !a && !b;
+  return new Date(a).getTime() === new Date(b).getTime();
+}
+
+function sigueComoSeVio(c: Cotizacion, visto: EnvioVisto): boolean {
+  return (
+    c.version === visto.version &&
+    c.estatus === visto.estatus &&
+    mismaFecha(c.fecha_envio, visto.fechaEnvio)
+  );
+}
+
+/** Por qué no se envió, dicho desde lo que hay ahora. */
+function porQueYaNo(actual: Cotizacion | null, visto: EnvioVisto): string {
+  if (
+    actual &&
+    actual.version === visto.version &&
+    actual.fecha_envio &&
+    !mismaFecha(actual.fecha_envio, visto.fechaEnvio)
+  ) {
+    return "Ya se envió: no se mandó otro correo. Si quieres reenviarla, cierra y vuelve a abrir el envío.";
+  }
+  const ahora = actual
+    ? ` (ahora está en ${actual.estatus}${actual.version !== visto.version ? `, versión ${actual.version}` : ""})`
+    : "";
+  return `La cotización cambió mientras tanto${ahora}: no se mandó nada. Cierra y vuelve a abrir el envío.`;
+}
+
+/**
+ * Manda la cotización al cliente, con el PDF adjunto.
+ *
+ * El orden importa, y cada paso detiene todo sin haber mandado nada:
+ *
+ * 1. Que se pueda enviar (aprobada, o un reenvío) y que siga como la vio la
+ *    pantalla.
+ * 2. A quién: solo contactos del cliente y correos de la empresa, con al
+ *    menos un contacto del cliente (`validarDestinatarios`).
+ * 3. El PDF, obligatorio.
+ * 4. **Apartar el envío** en una sola sentencia (`apartarEnvio`). Si otro
+ *    clic llegó antes, aquí se acaba: «ya se envió».
+ * 5. El correo. Si no sale, se devuelve lo apartado (`devolverEnvio`).
+ *
+ * El mensaje llega como **texto** y se escapa aquí, conservando los saltos de
+ * línea. Este correo sale de la empresa: nada de lo que se teclea en la
+ * pantalla viaja como marcado.
+ */
 export async function enviarAlCliente(params: {
   numero: number;
   anio: number;
   destinatarios: string[];
   asunto?: string;
-  mensajeHtml?: string;
+  /** Como se tecleó. Vacío: el cuerpo por omisión, con la firma. */
+  mensaje?: string;
   telefonoFirma?: string;
+  /** Lo que vio la pantalla al abrir el envío. */
+  visto: EnvioVisto;
   remitente: { email: string; nombre: string };
 }): Promise<{ cotizacion: Cotizacion }> {
   const { puede, motivo, cotizacion } = await puedeEnviarseAlCliente(params.numero, params.anio);
   if (!cotizacion) throw new Error("Cotización no encontrada");
-  if (!puede) throw new Error(motivo ?? "La cotización no puede enviarse todavía");
-  if (params.destinatarios.filter(Boolean).length === 0) {
-    throw new Error("Selecciona al menos un contacto con correo");
+  if (!sigueComoSeVio(cotizacion, params.visto)) {
+    throw new EnvioDesactualizado(porQueYaNo(cotizacion, params.visto));
   }
+  if (!puede) throw new EnvioNoPermitido(motivo ?? "La cotización no puede enviarse todavía");
+
+  const { contactos } = await contactosParaEnvio({
+    razonSocial: cotizacion.cliente,
+    dirigidaA: cotizacion.dirigida_a,
+    clienteId: cotizacion.cliente_id,
+  });
+  const revision = validarDestinatarios({
+    destinatarios: params.destinatarios,
+    correosDelCliente: contactos.map((c) => c.correo ?? ""),
+    dominio: dominioEmpresa(),
+    cliente: cotizacion.cliente,
+  });
+  if (!revision.ok) throw new DestinatariosNoValidos(revision.error);
 
   // PDF obligatorio (regla dura del legacy)
   if (!cotizacion.drive_folder_id) {
@@ -580,53 +681,65 @@ export async function enviarAlCliente(params: {
   const asunto =
     params.asunto?.trim() ||
     `Cotización PCOTOP-${String(cotizacion.numero).padStart(3, "0")} - ${cotizacion.cliente}`;
-  // `mensajeHtml` es marcado **a propósito**: lo compone quien envía, y por eso
-  // no se escapa. El cuerpo por omisión es otra cosa: lo arma el ERP con datos
-  // tecleados, y ahí cada uno va escapado. Este correo sale de la empresa.
-  const cuerpo =
-    params.mensajeHtml?.trim() ||
-    `<p style="font-size:13px;color:#111827;">Estimado(a) ${escaparHtml(cotizacion.dirigida_a)}:</p>
+  // El mensaje es texto tecleado, como todo lo demás: va escapado, y sus
+  // saltos de línea, como `<br/>`. Este correo sale de la empresa.
+  const cuerpo = params.mensaje?.trim()
+    ? `<p style="font-size:13px;color:#111827;">${textoAHtml(params.mensaje)}</p>`
+    : `<p style="font-size:13px;color:#111827;">Estimado(a) ${escaparHtml(cotizacion.dirigida_a)}:</p>
      <p style="font-size:13px;color:#111827;">Por este medio le hacemos llegar nuestra propuesta económica del proyecto <b>${escaparHtml(cotizacion.titulo)}</b>, adjunta en PDF.</p>
      <p style="font-size:13px;color:#111827;">Quedamos atentos a sus comentarios.</p>
      <p style="font-size:13px;color:#111827;margin-top:16px;">${escaparHtml(params.remitente.nombre)}<br/>${escaparHtml(params.telefonoFirma ?? "")}<br/>${escaparHtml(params.remitente.email)}</p>`;
 
-  const resultado = await enviarCorreo({
-    para: params.destinatarios,
-    cc,
-    asunto,
-    html: plantillaCorreo({ titulo: `Cotización ${esperado}`, cuerpoHtml: cuerpo }),
-    adjuntos: [{ filename: pdf.filename, mimeType: "application/pdf", contenido: pdf.contenido }],
-    registradoPor: params.remitente.email,
-    referencia: cotPk(cotizacion.numero, cotizacion.anio),
-  });
-  // El correo que llega al cliente es el hecho que justifica el estatus ENVIADA.
-  // Antes solo se abortaba con motivo "error", así que con CORREO_DESHABILITADO=true
-  // la cotización quedaba ENVIADA y con fecha_envio sellada sin que nadie recibiera
-  // nada: la app afirmaba algo falso. Cualquier motivo de no-envío detiene el flujo.
-  if (!resultado.enviado) {
-    throw new Error(motivoNoEnviado(resultado.motivo));
+  // Apartar el envío ANTES del correo, y en una sola sentencia: es lo que
+  // impide que un segundo clic mande otro. Va sobre la versión cuya aprobación
+  // se verificó (la aprobación es por versión exacta, regla del legacy):
+  // marcar otra sellaría como enviada una versión que nadie aprobó.
+  const ahora = new Date();
+  const apartado = { numero: params.numero, anio: params.anio, visto: params.visto, ahora };
+  if (!(await apartarEnvio(apartado))) {
+    throw new EnvioDesactualizado(porQueYaNo(await getVigente(params.numero, params.anio), params.visto));
   }
 
-  // Estatus → ENVIADA (si venía de REVISION) y fecha de envío, sobre la
-  // versión cuya aprobación se verificó. La aprobación se guarda por
-  // versión exacta (regla del legacy): escribir ENVIADA en otra sellaría como
-  // enviada una versión que nadie aprobó, y con el PDF de esta.
-  const ahora = new Date().toISOString();
-  if (cotizacion.estatus === "REVISION") {
-    await cambiarEstatus(params.numero, params.anio, "ENVIADA", cotizacion.version);
+  // El correo que llega al cliente es el hecho que justifica el estatus
+  // ENVIADA. Si no salió, por el motivo que sea (CORREO_DESHABILITADO, demo,
+  // un error de Gmail), se devuelve lo apartado: la app no puede afirmar que
+  // el cliente la tiene.
+  let resultado: ResultadoCorreo;
+  try {
+    resultado = await enviarCorreo({
+      para: revision.para,
+      cc,
+      asunto,
+      html: plantillaCorreo({ titulo: `Cotización ${esperado}`, cuerpoHtml: cuerpo }),
+      adjuntos: [{ filename: pdf.filename, mimeType: "application/pdf", contenido: pdf.contenido }],
+      registradoPor: params.remitente.email,
+      referencia: cotPk(cotizacion.numero, cotizacion.anio),
+    });
+  } catch (err) {
+    resultado = { enviado: false, motivo: "error" };
+    console.error("[enviarAlCliente] el correo lanzó", err);
   }
-  await updateCotizacion(
-    params.numero,
-    params.anio,
-    { fechaEnvio: ahora },
-    cotizacion.version,
-  );
+  if (!resultado.enviado) {
+    if (await devolverEnvio(apartado)) throw new Error(motivoNoEnviado(resultado.motivo));
+    // Alguien la movió entre el apartado y ahora (p. ej. registró la OC). No
+    // se pisa lo suyo, pero queda dicho: puede estar ENVIADA sin que el
+    // cliente la haya recibido.
+    await registrarBitacora({
+      accion: "COTIZACION_ENVIO_NO_DESHECHO",
+      usuario: params.remitente.email,
+      referencia: cotPk(cotizacion.numero, cotizacion.anio),
+      detalle: `${esperado}: el correo no salió (${resultado.motivo ?? "error"}) y la cotización cambió mientras tanto`,
+    });
+    throw new Error(
+      "El correo al cliente no salió, y la cotización cambió mientras se enviaba, así que no se pudo regresar a como estaba. Revisa su estatus: puede decir ENVIADA sin que el cliente la haya recibido.",
+    );
+  }
 
   await registrarBitacora({
     accion: "COTIZACION_ENVIADA",
     usuario: params.remitente.email,
     referencia: cotPk(cotizacion.numero, cotizacion.anio),
-    detalle: `${esperado} → ${params.destinatarios.join(", ")}`,
+    detalle: `${esperado} → ${revision.para.join(", ")}`,
   });
 
   const actualizada = await getVersion(params.numero, params.anio, cotizacion.version);
