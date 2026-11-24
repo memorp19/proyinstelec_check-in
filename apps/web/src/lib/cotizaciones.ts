@@ -1,6 +1,6 @@
 import { and, desc, eq, ilike, isNotNull, isNull, max, ne, or, sql, type SQL } from "drizzle-orm";
 import { getDb } from "../db";
-import { aprobaciones, cotArmado, cotImportes, cotizaciones } from "../db/schema";
+import { aprobaciones, cotArmado, cotImportes, cotPartidas, cotizaciones } from "../db/schema";
 import { leerFoto, type FotoDelDocumento } from "./cotizador/foto";
 import { folioCotizacion, pad } from "./folios";
 import { registrarBitacora } from "./bitacora";
@@ -289,6 +289,48 @@ export async function pdfDeLaVersion(cotizacion: {
     pdfDriveId: armado?.pdfDefinitivoAt ? armado.pdfDriveId ?? null : null,
     foto: leerFoto(importes?.foto),
   };
+}
+
+/**
+ * Si la versión se armó en el cotizador: tiene partidas, o ya se congeló
+ * alguna vez.
+ *
+ * Esas pasan a revisión solo por la ruta del cotizador, que congela los
+ * importes y genera el PDF definitivo. Lo congelado cuenta aunque ya no le
+ * queden partidas: es una versión que regresó de una corrección, y su PDF es
+ * el que el revisor rechazó.
+ */
+export async function seArmoEnElCotizador(v: {
+  numero: number;
+  anio: number;
+  version: number;
+}): Promise<boolean> {
+  const db = getDb();
+  const [[partida], [congelado]] = await Promise.all([
+    db
+      .select({ id: cotPartidas.id })
+      .from(cotPartidas)
+      .where(
+        and(
+          eq(cotPartidas.numero, v.numero),
+          eq(cotPartidas.anio, v.anio),
+          eq(cotPartidas.version, v.version),
+        ),
+      )
+      .limit(1),
+    db
+      .select({ numero: cotImportes.numero })
+      .from(cotImportes)
+      .where(
+        and(
+          eq(cotImportes.numero, v.numero),
+          eq(cotImportes.anio, v.anio),
+          eq(cotImportes.version, v.version),
+        ),
+      )
+      .limit(1),
+  ]);
+  return partida !== undefined || congelado !== undefined;
 }
 
 /**

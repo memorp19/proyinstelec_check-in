@@ -1,7 +1,8 @@
 /**
  * Lo que el PDF definitivo guarda y lee en la base: el borrador frente al
- * definitivo, la fecha que se fija una vez, la foto de lo congelado, y el
- * enlace que enseñan la tarjeta y la pantalla del armado.
+ * definitivo, la fecha que se fija una vez, la foto de lo congelado, el
+ * enlace que enseñan la tarjeta y la pantalla del armado, y qué versiones solo
+ * van a revisión por la ruta del cotizador.
  * Todos los datos son inventados.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -16,7 +17,12 @@ import {
   guardarPdfDefinitivo,
   leerCongelado,
 } from "@/src/lib/cotizador-db";
-import { enlaceDelPdfDefinitivo, pdfDeLaVersion, pdfsDefinitivosDe } from "@/src/lib/cotizaciones";
+import {
+  enlaceDelPdfDefinitivo,
+  pdfDeLaVersion,
+  pdfsDefinitivosDe,
+  seArmoEnElCotizador,
+} from "@/src/lib/cotizaciones";
 import { documentoVacio } from "@/src/lib/cotizador";
 
 function usarDb(resultados: unknown[] = []) {
@@ -241,5 +247,36 @@ describe("pdfsDefinitivosDe (la lista)", () => {
 
     expect((await pdfsDefinitivosDe([LISTA[1]])).size).toBe(0);
     expect(db.metodos()).toEqual([]);
+  });
+});
+
+/**
+ * Qué versiones no pueden ir a revisión por la ruta de las importadas: las que
+ * se armaron en el cotizador. Las consultas van en el orden partidas, congelado.
+ */
+describe("seArmoEnElCotizador", () => {
+  const V2 = { numero: 453, anio: 2026, version: 2 };
+
+  it("con partidas: sí, y pregunta por esa versión", async () => {
+    const db = usarDb([[{ id: "p-1" }], []]);
+
+    expect(await seArmoEnElCotizador(V2)).toBe(true);
+    const wheres = db.llamadas.filter((l) => l.metodo === "where");
+    expect(wheres).toHaveLength(2);
+    for (const w of wheres) expect(parametros(w.args[0])).toEqual([453, 2026, 2]);
+  });
+
+  // Regresó de una corrección y le quitaron todas las partidas: lo congelado
+  // y su PDF siguen siendo los que el revisor rechazó.
+  it("sin partidas pero congelada alguna vez: sí", async () => {
+    usarDb([[], [{ numero: 453 }]]);
+
+    expect(await seArmoEnElCotizador(V2)).toBe(true);
+  });
+
+  it("sin partidas y sin nada congelado (importada): no", async () => {
+    usarDb([[], []]);
+
+    expect(await seArmoEnElCotizador(V2)).toBe(false);
   });
 });

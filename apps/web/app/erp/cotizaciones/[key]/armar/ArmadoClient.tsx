@@ -173,6 +173,14 @@ export function ArmadoClient({
     [armado, datos],
   );
 
+  /**
+   * Si se manda por la ruta de las importadas: sin partidas y sin nada
+   * congelado. Es la regla del servidor (`seArmoEnElCotizador`): una que se
+   * congeló alguna vez es del cotizador aunque se haya quedado sin partidas, y
+   * la ruta de las importadas la rechaza. La del cotizador dice qué falta.
+   */
+  const sinArmado = !!armado && armado.partidas.length === 0 && !datos?.congelado;
+
   // ── Autoguardado ────────────────────────────────────────────────────────────
   const guardar = useCallback(
     async (actual: Armado) => {
@@ -259,9 +267,10 @@ export function ArmadoClient({
    * Dos caminos, y el que se toma depende de si hay algo que congelar.
    *
    * Con partidas, la ruta del cotizador: calcula, congela y manda. Sin ellas
-   * —las que se cargaron del control de 2026 nunca pasaron por aquí— la ruta
-   * de siempre, que solo cambia el estatus. Congelar una cotización vacía
-   * guardaría un total de cero y lo daría por bueno.
+   * ni nada congelado (`sinArmado`) —las que se cargaron del control de 2026
+   * nunca pasaron por aquí— la ruta de siempre, que solo cambia el estatus.
+   * Congelar una cotización vacía guardaría un total de cero y lo daría por
+   * bueno.
    */
   const mandarARevision = useCallback(async () => {
     if (!armado) return;
@@ -271,7 +280,6 @@ export function ArmadoClient({
     setEnviando(true);
     setError(null);
     try {
-      const sinArmado = armado.partidas.length === 0;
       if (!sinArmado) await guardarYa();
 
       const ruta = sinArmado
@@ -302,7 +310,7 @@ export function ArmadoClient({
     } finally {
       setEnviando(false);
     }
-  }, [armado, cargar, cotKey, faltantes, guardarYa, nota, version]);
+  }, [armado, cargar, cotKey, faltantes, guardarYa, nota, sinArmado, version]);
 
   // ── Dibujo ──────────────────────────────────────────────────────────────────
   if (cargando) {
@@ -533,7 +541,7 @@ export function ArmadoClient({
             cliente={cotizacion.cliente}
             titulo={cotizacion.titulo}
             folio={cotizacion.folio}
-            sinArmado={armado.partidas.length === 0}
+            sinArmado={sinArmado}
             faltantes={faltantes}
             nota={nota}
             onNota={setNota}
