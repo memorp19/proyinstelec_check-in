@@ -175,6 +175,12 @@ flujo no se ha construido. Aquí queda cómo se van a implementar.
   a mano.
 - **Cada cambio del encabezado queda en la bitácora** con quién, qué campo,
   antes y después. Hoy no se cumple: ⏳ PR de endurecimiento (§3.7).
+- **Editar el encabezado no cambia lo aprobado** (decisión del 23 nov). Lo que
+  se imprime —cliente, título, dirigida a, el bloque del documento y las
+  direcciones— se congela con los importes al mandar a revisión
+  (`cot_importes.foto`), y el PDF definitivo sale siempre de esa foto. Si lo
+  vivo ya no coincide, el revisor y el envío lo ven como aviso. ✅ PR del PDF
+  definitivo (7a del cotizador).
 
 **El año de una cotización nueva es siempre el año en curso**
 - Sin excepción: no hay opción para dar de alta con el año anterior, ni
