@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { CONDICIONES_POR_OMISION, documentoVacio } from "@/src/lib/cotizador/documento";
 import {
   FALTA_DATO,
@@ -63,13 +63,43 @@ describe("fechaFija", () => {
     expect(fechaFija("2026-10-05")).toEqual({ fecha: "2026-10-05", esNueva: false });
   });
 
+  // Los instantes van en UTC a propósito: la prueba no puede depender de la
+  // zona horaria de la máquina que la corre.
   it("sin fecha guardada toma la de hoy y avisa que hay que guardarla", () => {
-    const r = fechaFija("", () => new Date(2026, 10, 3));
+    const r = fechaFija("", () => new Date("2026-11-03T18:00:00Z"));
     expect(r).toEqual({ fecha: "2026-11-03", esNueva: true });
   });
 
   it("una guardada con basura se trata como si no hubiera", () => {
-    expect(fechaFija("ayer", () => new Date(2026, 0, 9)).fecha).toBe("2026-01-09");
+    expect(fechaFija("ayer", () => new Date("2026-01-09T18:00:00Z")).fecha).toBe("2026-01-09");
+  });
+
+  /**
+   * Hoy es el de México, no el del servidor: en Vercel el reloj corre en UTC.
+   * Una cotización mandada a revisión a las 20:30 del 23 de noviembre no puede
+   * salir fechada el 24.
+   */
+  describe("con el reloj del servidor en UTC, como en Vercel", () => {
+    // En una máquina en México, un cálculo con la hora local pasaría estas
+    // pruebas por casualidad. Con TZ=UTC, solo pasa el que usa la de México.
+    let tzAntes: string | undefined;
+    beforeEach(() => {
+      tzAntes = process.env.TZ;
+      process.env.TZ = "UTC";
+    });
+    afterEach(() => {
+      if (tzAntes === undefined) delete process.env.TZ;
+      else process.env.TZ = tzAntes;
+    });
+
+    it("a las 20:30 del 23, hora de México, sigue siendo el 23", () => {
+      // 02:30 UTC del 24 = 20:30 del 23 en la Ciudad de México (UTC-6)
+      expect(fechaFija("", () => new Date("2026-11-24T02:30:00Z")).fecha).toBe("2026-11-23");
+    });
+
+    it("y a las 00:05 del 24, hora de México, ya es el 24", () => {
+      expect(fechaFija("", () => new Date("2026-11-24T06:05:00Z")).fecha).toBe("2026-11-24");
+    });
   });
 });
 
