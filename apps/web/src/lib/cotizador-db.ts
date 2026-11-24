@@ -43,7 +43,7 @@ import {
   type ServicioCatalogo,
 } from "./cotizador";
 import { getConfigErp } from "./config-erp";
-import { getVersion, type Cotizacion } from "./cotizaciones";
+import { enlaceDelPdfDefinitivo, getVersion, type Cotizacion } from "./cotizaciones";
 import { contactoParaCarta } from "./clientes";
 
 // ── Lectura ───────────────────────────────────────────────────────────────────
@@ -77,6 +77,11 @@ export interface ArmadoCompleto {
    */
   docDriveId: string | null;
   pdfDriveId: string | null;
+  /**
+   * El enlace al PDF definitivo, si la versión tiene uno que valga
+   * (`enlaceDelPdfDefinitivo`). La pantalla lo enseña junto a lo congelado.
+   */
+  pdfDefinitivoUrl: string | null;
   /** El congelado, si esta versión ya pasó a revisión. */
   congelado: { total: string; letra: string; congeladoAt: string } | null;
   /**
@@ -215,6 +220,7 @@ export async function getArmado(
       // Sin encabezado no hay fila donde guardarlos: nunca se generó nada.
       docDriveId: null,
       pdfDriveId: null,
+      pdfDefinitivoUrl: null,
       congelado: null,
       actualizadoEn: null,
     };
@@ -321,6 +327,11 @@ export async function getArmado(
     resultado,
     docDriveId: encabezado.docDriveId ?? null,
     pdfDriveId: encabezado.pdfDriveId ?? null,
+    pdfDefinitivoUrl: enlaceDelPdfDefinitivo({
+      estatus: cotizacion.estatus,
+      pdfDriveId: encabezado.pdfDriveId ?? null,
+      pdfDefinitivoAt: encabezado.pdfDefinitivoAt ?? null,
+    }),
     desfases: detectarDesfases(lineas, catalogo),
     avisos,
     llenadoAutomatico: llenados,

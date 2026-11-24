@@ -1,6 +1,7 @@
 /**
  * Lo que el PDF definitivo guarda y lee en la base: el borrador frente al
- * definitivo, la fecha que se fija una vez, y la foto de lo congelado.
+ * definitivo, la fecha que se fija una vez, la foto de lo congelado, y el
+ * enlace que enseñan la tarjeta y la pantalla del armado.
  * Todos los datos son inventados.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -15,7 +16,7 @@ import {
   guardarPdfDefinitivo,
   leerCongelado,
 } from "@/src/lib/cotizador-db";
-import { pdfDeLaVersion } from "@/src/lib/cotizaciones";
+import { enlaceDelPdfDefinitivo, pdfDeLaVersion, pdfsDefinitivosDe } from "@/src/lib/cotizaciones";
 import { documentoVacio } from "@/src/lib/cotizador";
 
 function usarDb(resultados: unknown[] = []) {
@@ -147,5 +148,98 @@ describe("pdfDeLaVersion", () => {
     usarDb([[], []]);
 
     expect(await pdfDeLaVersion(V)).toEqual({ delCotizador: false, pdfDriveId: null, foto: null });
+  });
+});
+
+/**
+ * El enlace que enseñan la tarjeta y la pantalla del armado: «Ver PDF» tiene
+ * que abrir lo que se revisa y se envía, y nada más.
+ */
+describe("enlaceDelPdfDefinitivo", () => {
+  const DEFINITIVO = { pdfDriveId: "pdf-d", pdfDefinitivoAt: new Date("2026-11-24T16:00:00Z") };
+
+  it.each(["REVISION", "ENVIADA", "ASIGNADA", "NO ASIGNADA"])("en %s: el enlace de Drive", (estatus) => {
+    expect(enlaceDelPdfDefinitivo({ estatus, ...DEFINITIVO })).toBe(
+      "https://drive.google.com/file/d/pdf-d/view",
+    );
+  });
+
+  // PROCESO: el revisor pidió corregirla, y su PDF es el que se rechazó.
+  // CANCELADA y las DEPENDIENTE pueden venir de ahí mismo.
+  it.each(["PROCESO", "CANCELADA", "DEPENDIENTE CLIENTE", "DEPENDIENTE PROVEEDOR"])(
+    "en %s: nada, aunque siga marcado como definitivo",
+    (estatus) => {
+      expect(enlaceDelPdfDefinitivo({ estatus, ...DEFINITIVO })).toBeNull();
+    },
+  );
+
+  it("con solo un borrador de «Ver cotización»: nada", () => {
+    expect(
+      enlaceDelPdfDefinitivo({ estatus: "REVISION", pdfDriveId: "pdf-borrador", pdfDefinitivoAt: null }),
+    ).toBeNull();
+  });
+
+  it("sin id de PDF: nada", () => {
+    expect(
+      enlaceDelPdfDefinitivo({ estatus: "REVISION", pdfDriveId: null, pdfDefinitivoAt: new Date() }),
+    ).toBeNull();
+  });
+});
+
+/** Los valores que viajan como parámetros en un `sql` de Drizzle. */
+function parametros(nodo: unknown): unknown[] {
+  const fuera: unknown[] = [];
+  const vistos = new Set<unknown>();
+  const juntar = (n: unknown) => {
+    if (!n || typeof n !== "object" || vistos.has(n)) return;
+    vistos.add(n);
+    if (n.constructor?.name === "Param") fuera.push((n as { value: unknown }).value);
+    for (const hijo of (n as { queryChunks?: unknown[] }).queryChunks ?? []) juntar(hijo);
+  };
+  juntar(nodo);
+  return fuera;
+}
+
+describe("pdfsDefinitivosDe (la lista)", () => {
+  const LISTA = [
+    { numero: 453, anio: 2026, version: 0, estatus: "REVISION" },
+    { numero: 452, anio: 2026, version: 0, estatus: "PROCESO" },
+    { numero: 451, anio: 2026, version: 1, estatus: "ENVIADA" },
+  ];
+
+  it("una sola consulta, solo por los definitivos de las que pueden tenerlo", async () => {
+    const db = usarDb([
+      [
+        { numero: 453, anio: 2026, version: 0, pdfDriveId: "pdf-453", pdfDefinitivoAt: new Date() },
+        { numero: 451, anio: 2026, version: 1, pdfDriveId: "pdf-451", pdfDefinitivoAt: new Date() },
+      ],
+    ]);
+
+    const enlaces = await pdfsDefinitivosDe(LISTA);
+
+    expect(db.metodos().filter((m) => m === "select")).toHaveLength(1);
+    const where = db.llamadas.find((l) => l.metodo === "where")!.args[0];
+    expect(textoProfundo(where)).toContain("pdf_definitivo_at");
+    expect(textoProfundo(where)).toContain("is not null");
+    // La que está en PROCESO ni se pregunta.
+    expect(parametros(where)).toEqual(expect.arrayContaining([453, 451]));
+    expect(parametros(where)).not.toContain(452);
+    expect([...enlaces]).toEqual([
+      ["PCOTOP-453-2026", "https://drive.google.com/file/d/pdf-453/view"],
+      ["PCOTOP-451-2026-1", "https://drive.google.com/file/d/pdf-451/view"],
+    ]);
+  });
+
+  it("si la base trajera una que no está en un estatus con PDF, no la enseña", async () => {
+    usarDb([[{ numero: 452, anio: 2026, version: 0, pdfDriveId: "pdf-452", pdfDefinitivoAt: new Date() }]]);
+
+    expect((await pdfsDefinitivosDe(LISTA)).size).toBe(0);
+  });
+
+  it("si ninguna puede tenerlo, no consulta", async () => {
+    const db = usarDb([]);
+
+    expect((await pdfsDefinitivosDe([LISTA[1]])).size).toBe(0);
+    expect(db.metodos()).toEqual([]);
   });
 });

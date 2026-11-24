@@ -10,6 +10,7 @@ import {
   IconoEnviar,
   IconoLapiz,
   IconoPaquete,
+  IconoPdf,
   IconoRama,
   IconoReloj,
 } from "./Iconos";
@@ -38,6 +39,8 @@ interface Cot {
   folio_ot?: string;
   drive_folder_url?: string;
   aprobada?: boolean;
+  /** El PDF definitivo, desde REVISION en adelante; `null` si no tiene. */
+  pdf_definitivo_url?: string | null;
   /** Todas las versiones de esta cotización, para las etiquetas. */
   versiones?: Array<{ version: number; folio: string; estatus: string; orden_compra?: string }>;
 }
@@ -712,6 +715,14 @@ function Tarjeta({
             <button onClick={() => onModal({ tipo: "enviar", cot: c })} className={btnIcono}>
               <IconoCorreo /> Reenviar
             </button>
+          )}
+
+          {/* Lo primero que se busca después de mandarla: el documento que se
+              revisa y se envía. El servidor decide si hay uno que valga. */}
+          {c.pdf_definitivo_url && (
+            <a href={c.pdf_definitivo_url} target="_blank" rel="noopener noreferrer" className={btnIcono}>
+              <IconoPdf /> Ver PDF
+            </a>
           )}
 
           {/* Cotizar: mientras se puede tocar se arma; después se consulta */}

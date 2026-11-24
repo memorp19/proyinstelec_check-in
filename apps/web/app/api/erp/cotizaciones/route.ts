@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/src/auth";
 import { exigirPermiso } from "@/src/lib/permisos";
+import { folioCotizacion } from "@/src/lib/folios";
 import {
   buscarCotizaciones,
+  pdfsDefinitivosDe,
   siguienteNumeroCotizacion,
   versionesDe,
   ESTATUS_COTIZACION,
@@ -42,14 +44,18 @@ export async function GET(req: NextRequest) {
       oc: q.get("oc") ?? undefined,
       sinOc: q.get("sinOc") === "1",
     });
-    // Las otras versiones van con el listado: la tarjeta dice en cuál quedó la
-    // orden de compra y qué más existe, y pedirlas una por una sería una
-    // consulta por tarjeta.
-    const hermanas = await versionesDe(resultados.map((c) => ({ numero: c.numero, anio: c.anio })));
+    // Las otras versiones y el PDF definitivo van con el listado: la tarjeta
+    // dice en cuál quedó la orden de compra, qué más existe, y abre el PDF que
+    // se revisa y se envía. Pedirlos uno por uno sería una consulta por tarjeta.
+    const [hermanas, pdfs] = await Promise.all([
+      versionesDe(resultados.map((c) => ({ numero: c.numero, anio: c.anio }))),
+      pdfsDefinitivosDe(resultados),
+    ]);
     return NextResponse.json({
       cotizaciones: resultados.map((c) => ({
         ...c,
         versiones: hermanas.get(`${String(c.numero).padStart(3, "0")}-${c.anio}`) ?? [],
+        pdf_definitivo_url: pdfs.get(folioCotizacion(c.numero, c.anio, c.version)) ?? null,
       })),
     });
   } catch (err) {

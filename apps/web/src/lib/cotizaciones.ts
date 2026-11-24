@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, isNull, max, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, ilike, isNotNull, isNull, max, ne, or, sql, type SQL } from "drizzle-orm";
 import { getDb } from "../db";
 import { aprobaciones, cotArmado, cotImportes, cotizaciones } from "../db/schema";
 import { leerFoto, type FotoDelDocumento } from "./cotizador/foto";
@@ -289,6 +289,87 @@ export async function pdfDeLaVersion(cotizacion: {
     pdfDriveId: armado?.pdfDefinitivoAt ? armado.pdfDriveId ?? null : null,
     foto: leerFoto(importes?.foto),
   };
+}
+
+/**
+ * Los estatus en los que el PDF definitivo es el de la versión.
+ *
+ * A todos se llega pasando por REVISION, que es donde se genera. PROCESO no:
+ * una versión regresa ahí cuando el revisor pide corregirla, y su PDF —el que
+ * se rechazó— sigue marcado como definitivo hasta que se vuelva a mandar.
+ * CANCELADA y las DEPENDIENTE también pueden venir de PROCESO.
+ */
+const ESTATUS_CON_PDF_DEFINITIVO: readonly string[] = ["REVISION", "ENVIADA", "ASIGNADA", "NO ASIGNADA"];
+
+/**
+ * El enlace al PDF definitivo de una versión, o `null` si no tiene uno que
+ * valga.
+ *
+ * Es lo primero que se busca después de mandarla a revisión, y la tarjeta y la
+ * pantalla del armado lo enseñan con esta misma regla. Un borrador de «Ver
+ * cotización» no cuenta: pudo salir antes del último cambio.
+ */
+export function enlaceDelPdfDefinitivo(v: {
+  estatus: string;
+  pdfDriveId: string | null;
+  pdfDefinitivoAt: Date | null;
+}): string | null {
+  if (!v.pdfDriveId || !v.pdfDefinitivoAt) return null;
+  if (!ESTATUS_CON_PDF_DEFINITIVO.includes(v.estatus)) return null;
+  return `https://drive.google.com/file/d/${encodeURIComponent(v.pdfDriveId)}/view`;
+}
+
+/**
+ * El enlace al PDF definitivo de cada versión de una lista, en una sola
+ * consulta, por folio. Las que no tienen uno que valga no aparecen.
+ *
+ * Solo pregunta por las que están en un estatus que lo puede tener: la lista
+ * entera del año sería pedir de más.
+ */
+export async function pdfsDefinitivosDe(
+  versiones: Array<{ numero: number; anio: number; version: number; estatus: string }>,
+): Promise<Map<string, string>> {
+  const fuera = new Map<string, string>();
+  const candidatas = versiones.filter((v) => ESTATUS_CON_PDF_DEFINITIVO.includes(v.estatus));
+  if (candidatas.length === 0) return fuera;
+
+  const estatusDe = new Map(
+    candidatas.map((v) => [folioCotizacion(v.numero, v.anio, v.version), v.estatus]),
+  );
+  const filas = await getDb()
+    .select({
+      numero: cotArmado.numero,
+      anio: cotArmado.anio,
+      version: cotArmado.version,
+      pdfDriveId: cotArmado.pdfDriveId,
+      pdfDefinitivoAt: cotArmado.pdfDefinitivoAt,
+    })
+    .from(cotArmado)
+    .where(
+      and(
+        isNotNull(cotArmado.pdfDefinitivoAt),
+        or(
+          ...candidatas.map((v) =>
+            and(
+              eq(cotArmado.numero, v.numero),
+              eq(cotArmado.anio, v.anio),
+              eq(cotArmado.version, v.version),
+            ),
+          ),
+        ),
+      ),
+    );
+
+  for (const f of filas) {
+    const folio = folioCotizacion(f.numero, f.anio, f.version);
+    const enlace = enlaceDelPdfDefinitivo({
+      estatus: estatusDe.get(folio) ?? "",
+      pdfDriveId: f.pdfDriveId,
+      pdfDefinitivoAt: f.pdfDefinitivoAt,
+    });
+    if (enlace) fuera.set(folio, enlace);
+  }
+  return fuera;
 }
 
 /** La versión vigente (la de mayor número de versión) o null si no existe. */
