@@ -310,7 +310,7 @@ export function plantillaCorreo(params: { titulo: string; cuerpoHtml: string; ur
       <span style="color:#ffffff;font-size:14px;font-weight:bold;letter-spacing:2px;">PROYINSTELEC · ERP</span>
     </div>
     <div style="background:#ffffff;border-radius:0 0 12px 12px;padding:24px;">
-      <h2 style="margin:0 0 16px;color:#0b1f3a;font-size:18px;">${params.titulo}</h2>
+      <h2 style="margin:0 0 16px;color:#0b1f3a;font-size:18px;">${escaparHtml(params.titulo)}</h2>
       ${params.cuerpoHtml}
       ${url ? `<p style="margin:24px 0 0;"><a href="${url}/erp" style="color:#1d4ed8;">Abrir el sistema</a></p>` : ""}
     </div>
