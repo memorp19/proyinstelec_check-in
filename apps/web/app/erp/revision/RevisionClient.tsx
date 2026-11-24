@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { GenerarPdf } from "../cotizaciones/GenerarPdf";
 
 interface Cot {
   numero: number;
@@ -14,6 +15,14 @@ interface Cot {
   fecha_solicitud: string;
   drive_folder_url?: string;
   aprobada?: boolean;
+  /** Armada en el ERP: lo que se aprueba es su PDF definitivo. */
+  pdf_del_cotizador?: boolean;
+  /** El PDF definitivo, si ya se generó. */
+  pdf_drive_id?: string | null;
+  /** Qué decir si falta el PDF definitivo. */
+  aviso_pdf?: string | null;
+  /** Si el encabezado cambió después de congelarse. */
+  aviso_encabezado?: string | null;
 }
 
 const key = (c: Cot) => `${String(c.numero).padStart(3, "0")}-${c.anio}`;
@@ -121,11 +130,33 @@ export function RevisionClient() {
                     Dirigida: {c.dirigida_a} · Elaboró: {c.elaboro}
                   </p>
                 </div>
-                <div className="shrink-0 flex gap-1.5">
+                <div className="shrink-0 flex flex-wrap items-start gap-1.5">
+                  {/* Lo que se aprueba es el PDF definitivo: se abre ese, no la carpeta. */}
+                  {c.pdf_drive_id && (
+                    <a
+                      href={`https://drive.google.com/file/d/${c.pdf_drive_id}/view`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={btnGhost}
+                    >
+                      Ver PDF
+                    </a>
+                  )}
                   {c.drive_folder_url && (
                     <a href={c.drive_folder_url} target="_blank" rel="noopener noreferrer" className={btnGhost}>
-                      Ver PDF / Carpeta
+                      {c.pdf_del_cotizador ? "Carpeta" : "Ver PDF / Carpeta"}
                     </a>
+                  )}
+                  {c.pdf_del_cotizador && (
+                    <GenerarPdf
+                      cotKey={key(c)}
+                      version={c.version}
+                      className={btnGhost}
+                      onListo={() => {
+                        setAviso(`${c.folio}: PDF generado desde lo congelado`);
+                        void cargar();
+                      }}
+                    />
                   )}
                   {!c.aprobada && (
                     <>
@@ -146,6 +177,15 @@ export function RevisionClient() {
                   )}
                 </div>
               </div>
+              {(c.aviso_pdf || c.aviso_encabezado) && (
+                <div className="mt-3 space-y-1">
+                  {[c.aviso_pdf, c.aviso_encabezado].filter(Boolean).map((a, i) => (
+                    <p key={i} className="font-mono text-[10px] text-amber bg-amber/10 border border-amber/20 rounded-lg px-3 py-2">
+                      {a}
+                    </p>
+                  ))}
+                </div>
+              )}
             </div>
           ))
         )}

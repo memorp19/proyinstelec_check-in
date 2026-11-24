@@ -737,6 +737,12 @@ export const cotArmado = pgTable(
     /** El PDF se encuentra por id, no por nombre. El nombre queda de respaldo. */
     pdfDriveId: text("pdf_drive_id"),
     docDriveId: text("doc_drive_id"),
+    /**
+     * Cuándo se generó el PDF **definitivo**: el que sale de lo congelado al
+     * mandar a revisión. `null` mientras el que hay sea un borrador de «Ver
+     * cotización», y el envío al cliente solo adjunta el definitivo.
+     */
+    pdfDefinitivoAt: timestamp("pdf_definitivo_at", { withTimezone: true }),
 
     createdBy: text("created_by").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -971,6 +977,14 @@ export const cotImportes = pgTable(
     total: numeric("total", IMPORTE).notNull(),
     /** El importe con letra, tal como sale en el documento. */
     letra: text("letra").notNull(),
+    /**
+     * Lo que imprime el documento además de los importes, tal como estaba al
+     * congelar: cliente, título y dirigida a, el bloque del documento ya
+     * completado y las direcciones (`FotoDelDocumento`). El PDF definitivo
+     * sale de aquí y no de la cotización viva, que cualquiera con el módulo
+     * puede editar. `null` en lo congelado antes de que existiera.
+     */
+    foto: jsonb("foto"),
   },
   (t) => ({
     pk: primaryKey({ columns: [t.numero, t.anio, t.version] }),

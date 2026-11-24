@@ -291,17 +291,14 @@ describe("cuando sale bien", () => {
   });
 
   /**
-   * La fecha se guarda solo la primera vez. Si se reescribiera en cada
-   * regeneración, una cotización rehecha una semana después cambiaría la que
-   * el cliente ya tiene impresa.
+   * «Ver cotización» es un borrador: no fija la fecha aunque el documento la
+   * acabe de poner. La fija el PDF definitivo, al mandar a revisión; si la
+   * fijara el borrador, una cotización vista el lunes y mandada el viernes
+   * saldría con fecha del lunes.
    */
-  it("guarda la fecha solo cuando el documento acaba de fijarla", async () => {
+  it("un borrador no fija la fecha, ni la primera vez", async () => {
     await POST(pedir(), { params });
-    expect(vi.mocked(guardarIdsDeDocumento).mock.calls[0][0].fecha).toBe("2026-11-11");
-
-    vi.mocked(generarDocumento).mockResolvedValue({ ...generado, fechaEsNueva: false } as never);
-    await POST(pedir(), { params });
-    expect(vi.mocked(guardarIdsDeDocumento).mock.calls[1][0].fecha).toBeUndefined();
+    expect(vi.mocked(guardarIdsDeDocumento).mock.calls[0][0]).not.toHaveProperty("fecha");
   });
 
   it("genera la versión que se le pida, no siempre la v0", async () => {

@@ -6,15 +6,30 @@ import { enviarARevision } from "@/src/lib/cotizaciones-flujos";
 import { notaParaRevisor } from "@/src/lib/nota-revision";
 import { accesoAlArmado } from "@/src/lib/cotizador-permisos";
 import { congelarVersion, getArmado } from "@/src/lib/cotizador-db";
+import { generarPdfDefinitivo } from "@/src/lib/cotizador-pdf";
 import { faltantesDelDocumento } from "@/src/lib/cotizador/docs/valores";
+import { FaltaConfiguracionDeDocumentos } from "@/src/lib/documentos-google";
+import { conPuntoFinal } from "@/src/lib/texto";
+
+/** Congelar, generar el PDF (unos 10 s con Google) y mandar: ver `documento/route.ts`. */
+export const maxDuration = 60;
+/** `googleapis` y el PDF en memoria necesitan Node, no el runtime edge. */
+export const runtime = "nodejs";
 
 /**
- * Congela los importes y manda la versión a revisión.
+ * Congela los importes, genera el PDF definitivo y manda la versión a revisión.
  *
- * El orden importa: **primero congelar**. Si se mandara a revisión y el
- * congelado fallara, el revisor estaría viendo una cotización que todavía se
- * recalcula sola — que es justo lo que este cambio viene a quitar. Al revés, un
- * congelado sin cambio de estatus se arregla volviendo a dar al botón.
+ * El orden importa:
+ *
+ * 1. **Congelar.** Si se mandara a revisión y el congelado fallara, el revisor
+ *    estaría viendo una cotización que todavía se recalcula sola.
+ * 2. **El PDF**, de lo congelado (`generarPdfDefinitivo`). Toda versión del
+ *    cotizador que llega a REVISION trae su PDF: es lo que el revisor aprueba
+ *    y lo que se le manda al cliente.
+ * 3. **El estatus y el correo al revisor**, que ya lleva el PDF adjunto.
+ *
+ * Si falla el paso 2, no se llega al 3: un congelado sin cambio de estatus se
+ * arregla volviendo a dar al botón.
  *
  * ── Y antes de todo eso, lo que falta ──
  *
@@ -84,6 +99,25 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
   const usuario = session!.user.email ?? "";
   try {
     const congelado = await congelarVersion({ numero: key.numero, anio: key.anio, version, usuario });
+
+    // El PDF definitivo, de lo que se acaba de congelar. Si Google falla, la
+    // versión NO pasa a revisión: el revisor aprobaría sin ver el documento, y
+    // después no habría con qué enviarla. Lo congelado se queda y se reescribe
+    // al reintentar, como siempre.
+    let pdf;
+    try {
+      pdf = await generarPdfDefinitivo({ numero: key.numero, anio: key.anio, version });
+    } catch (err) {
+      console.error("[erp/armado revision PDF]", err);
+      const motivo = conPuntoFinal((err as Error).message);
+      return NextResponse.json(
+        {
+          error: `No se pudo generar el PDF: ${motivo} La cotización sigue en PROCESO; vuelve a intentar.`,
+        },
+        { status: err instanceof FaltaConfiguracionDeDocumentos ? 503 : 502 },
+      );
+    }
+
     const { cotizacion, avisos } = await enviarARevision({
       numero: key.numero,
       anio: key.anio,
@@ -96,7 +130,8 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
       cotizacion,
       total: congelado.resultado.total,
       letra: congelado.letra,
-      avisos: [...congelado.avisos, ...avisos],
+      pdfUrl: pdf.pdfUrl,
+      avisos: [...congelado.avisos, ...pdf.avisos, ...avisos],
     });
   } catch (err) {
     const msg = (err as Error).message;

@@ -39,7 +39,7 @@ export function VisorDocumento({
       <div className="max-w-4xl mx-auto my-6 bg-navy border border-white/20 rounded-xl">
         <div className="sticky top-0 bg-navy/95 backdrop-blur border-b border-white/10 px-5 py-3 flex items-center gap-3">
           <div className="flex-1 min-w-0">
-            <p className={etiqueta}>Cotización generada</p>
+            <p className={etiqueta}>Borrador de la cotización</p>
             <p className="font-mono text-sm text-white truncate">{documento.nombre}</p>
           </div>
           <button className={btnGhost} onClick={onCerrar}>
@@ -71,8 +71,9 @@ export function VisorDocumento({
 
           <div className="flex flex-wrap items-center gap-3">
             <p className="flex-1 min-w-[200px] font-body text-xs text-white/40">
-              Con fecha {documento.fecha}. Queda en la carpeta de la cotización; al mandarla a
-              revisión es el que se adjunta.
+              Es un borrador, con fecha {documento.fecha}. Al mandarla a revisión se genera el PDF
+              definitivo con lo congelado: ese es el que se revisa y se envía, y el que fija la
+              fecha si no capturaste una.
             </p>
             <a className={btnGhost} href={documento.pdfUrl} target="_blank" rel="noreferrer">
               Abrir en Drive

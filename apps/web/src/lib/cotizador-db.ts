@@ -9,7 +9,7 @@
  * guardado usa dos pasos y el primero sirve de candado; está explicado en
  * `guardarArmado`.
  */
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import {
   catServicios,
@@ -34,8 +34,11 @@ import {
   filasDeArmado,
   importeEnLetra,
   montoDeCongelado,
+  fotoDelDocumento,
+  leerFoto,
   type Armado,
   type Desfase,
+  type FotoDelDocumento,
   type ResultadoCotizacion,
   type ServicioCatalogo,
 } from "./cotizador";
@@ -420,11 +423,33 @@ export async function guardarArmado(params: {
 }
 
 /**
- * Congela los importes de una versión.
+ * La foto de lo que imprime el documento, tomada ahora (`FotoDelDocumento`).
+ *
+ * El bloque del documento va ya completado con el machote —es lo que se
+ * imprime—, y las direcciones se leen del catálogo en este momento, como las
+ * lee «Ver cotización».
+ */
+export async function tomarFoto(completo: ArmadoCompleto): Promise<FotoDelDocumento> {
+  const { empresa, contacto } = await contactoParaCarta({
+    razonSocial: completo.cotizacion.cliente,
+    dirigidaA: completo.cotizacion.dirigida_a,
+  });
+  return fotoDelDocumento({
+    cotizacion: completo.cotizacion,
+    documento: completo.armado.documento,
+    direccionContacto: contacto?.direccion,
+    direccionCliente: empresa?.direccion,
+  });
+}
+
+/**
+ * Congela los importes de una versión, y la foto de lo que se imprime.
  *
  * Se calcula con el motor, se guarda el resultado completo y se copia el total
  * a la cotización diciendo que vino del cotizador. A partir de aquí la versión
- * no se edita: para cambiar algo se hace una versión nueva.
+ * no se edita: para cambiar algo se hace una versión nueva. El encabezado de
+ * la cotización sí se puede editar, y por eso va en la foto: el PDF sale de
+ * ella, no de lo vivo.
  */
 export async function congelarVersion(params: {
   numero: number;
@@ -434,6 +459,7 @@ export async function congelarVersion(params: {
 }): Promise<{ resultado: ResultadoCotizacion; letra: string; avisos: string[] }> {
   const completo = await getArmado(params.numero, params.anio, params.version);
   if (!completo) throw new Error("No existe esa versión de la cotización");
+  const foto = await tomarFoto(completo);
 
   const config = await getConfigErp();
   const entrada = entradaDeArmado(completo.armado, config.cotizador.BASE_NODOS_ESTUDIO);
@@ -464,6 +490,7 @@ export async function congelarVersion(params: {
       iva: String(c.iva),
       total: String(c.total),
       letra: c.letra,
+      foto,
     })
     .onConflictDoUpdate({
       target: [cotImportes.numero, cotImportes.anio, cotImportes.version],
@@ -477,6 +504,7 @@ export async function congelarVersion(params: {
         iva: String(c.iva),
         total: String(c.total),
         letra: c.letra,
+        foto,
       },
     });
 
@@ -554,17 +582,101 @@ export async function actualizarPrecios(params: {
 // ── Los ids del documento generado ────────────────────────────────────────────
 
 /**
- * Guarda dónde quedaron el Doc y el PDF de una versión.
+ * Guarda dónde quedaron el Doc y el PDF de un **borrador** («Ver cotización»).
  *
  * Una sola sentencia, como todo lo que escribe aquí: el driver HTTP de Neon
- * no tiene transacciones interactivas, y las tres columnas tienen que moverse
+ * no tiene transacciones interactivas, y las columnas tienen que moverse
  * juntas o no moverse.
  *
- * `fecha` solo se manda la **primera vez**, cuando el documento la fijó. Si se
- * reescribiera en cada regeneración, una cotización rehecha una semana después
- * cambiaría la fecha que el cliente ya tiene impresa.
+ * Un borrador **no fija la fecha** y **deja de ser definitivo** lo que hubiera:
+ * el PDF que se envía al cliente es solo el que sale de lo congelado
+ * (`guardarPdfDefinitivo`).
  */
 export async function guardarIdsDeDocumento(params: {
+  numero: number;
+  anio: number;
+  version: number;
+  docDriveId: string;
+  pdfDriveId: string;
+}): Promise<void> {
+  await getDb()
+    .update(cotArmado)
+    .set({
+      docDriveId: params.docDriveId,
+      pdfDriveId: params.pdfDriveId,
+      pdfDefinitivoAt: null,
+      updatedAt: new Date(),
+    })
+    .where(claveDeArmado(params));
+}
+
+function claveDeArmado(v: { numero: number; anio: number; version: number }) {
+  return and(eq(cotArmado.numero, v.numero), eq(cotArmado.anio, v.anio), eq(cotArmado.version, v.version));
+}
+
+function claveDeImportes(v: { numero: number; anio: number; version: number }) {
+  return and(eq(cotImportes.numero, v.numero), eq(cotImportes.anio, v.anio), eq(cotImportes.version, v.version));
+}
+
+// ── El PDF definitivo: lo congelado ───────────────────────────────────────────
+
+/** Lo congelado de una versión: los importes y la foto de lo que se imprime. */
+export interface Congelado {
+  resultado: ResultadoCotizacion;
+  letra: string;
+  /** `null` si se congeló antes de que existiera la foto. */
+  foto: FotoDelDocumento | null;
+}
+
+/** Lo congelado de una versión, o `null` si nunca pasó a revisión desde el cotizador. */
+export async function leerCongelado(v: {
+  numero: number;
+  anio: number;
+  version: number;
+}): Promise<Congelado | null> {
+  const [fila] = await getDb()
+    .select({ resultado: cotImportes.resultado, letra: cotImportes.letra, foto: cotImportes.foto })
+    .from(cotImportes)
+    .where(claveDeImportes(v))
+    .limit(1);
+  if (!fila) return null;
+  return {
+    resultado: fila.resultado as ResultadoCotizacion,
+    letra: fila.letra,
+    foto: leerFoto(fila.foto),
+  };
+}
+
+/**
+ * Guarda la foto de una versión que se congeló antes de que existiera.
+ *
+ * Solo si sigue sin foto (`WHERE foto IS NULL`): si dos personas generan el
+ * PDF a la vez, la primera foto es la que se queda. Devuelve la que quedó.
+ */
+export async function guardarFoto(params: {
+  numero: number;
+  anio: number;
+  version: number;
+  foto: FotoDelDocumento;
+}): Promise<FotoDelDocumento> {
+  const filas = await getDb()
+    .update(cotImportes)
+    .set({ foto: params.foto })
+    .where(and(claveDeImportes(params), isNull(cotImportes.foto)))
+    .returning({ foto: cotImportes.foto });
+  if (filas.length > 0) return params.foto;
+  return (await leerCongelado(params))?.foto ?? params.foto;
+}
+
+/**
+ * Guarda el PDF **definitivo** de una versión: sus ids, la marca de que es el
+ * definitivo y, si el documento la acaba de fijar, la fecha.
+ *
+ * La fecha se escribe en dos lados —el bloque del documento, para que la
+ * pantalla la enseñe, y la foto, que es de donde sale el PDF la próxima vez—
+ * y por eso va en un `db.batch`, que se aplica entero o no se aplica.
+ */
+export async function guardarPdfDefinitivo(params: {
   numero: number;
   anio: number;
   version: number;
@@ -574,29 +686,34 @@ export async function guardarIdsDeDocumento(params: {
   fecha?: string;
 }): Promise<void> {
   const db = getDb();
-  const clave = and(
-    eq(cotArmado.numero, params.numero),
-    eq(cotArmado.anio, params.anio),
-    eq(cotArmado.version, params.version),
-  );
+  const ahora = new Date();
+  const ids = {
+    docDriveId: params.docDriveId,
+    pdfDriveId: params.pdfDriveId,
+    pdfDefinitivoAt: ahora,
+    updatedAt: ahora,
+  };
 
   if (!params.fecha) {
-    await db
-      .update(cotArmado)
-      .set({ docDriveId: params.docDriveId, pdfDriveId: params.pdfDriveId, updatedAt: new Date() })
-      .where(clave);
+    await db.update(cotArmado).set(ids).where(claveDeArmado(params));
     return;
   }
 
-  // La fecha vive dentro del bloque `documento`, así que se mezcla ahí sin
-  // releerlo: `jsonb_set` lo hace en la misma sentencia que los dos ids.
-  await db
-    .update(cotArmado)
-    .set({
-      docDriveId: params.docDriveId,
-      pdfDriveId: params.pdfDriveId,
-      documento: sql`jsonb_set(coalesce(${cotArmado.documento}, '{}'::jsonb), '{fecha}', to_jsonb(${params.fecha}::text), true)`,
-      updatedAt: new Date(),
-    })
-    .where(clave);
+  // La fecha vive dentro de bloques `jsonb`, así que se mezcla ahí sin
+  // releerlos: `jsonb_set` lo hace en la misma sentencia que lo demás.
+  await db.batch([
+    db
+      .update(cotArmado)
+      .set({
+        ...ids,
+        documento: sql`jsonb_set(coalesce(${cotArmado.documento}, '{}'::jsonb), '{fecha}', to_jsonb(${params.fecha}::text), true)`,
+      })
+      .where(claveDeArmado(params)),
+    db
+      .update(cotImportes)
+      .set({
+        foto: sql`jsonb_set(${cotImportes.foto}, '{documento,fecha}', to_jsonb(${params.fecha}::text), true)`,
+      })
+      .where(and(claveDeImportes(params), isNotNull(cotImportes.foto))),
+  ]);
 }

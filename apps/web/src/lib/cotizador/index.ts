@@ -16,3 +16,4 @@ export * from "./documento";
 export * from "./presentacion";
 export * from "./persistencia";
 export * from "./armado";
+export * from "./foto";

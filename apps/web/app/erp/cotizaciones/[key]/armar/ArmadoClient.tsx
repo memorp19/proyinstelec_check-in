@@ -85,7 +85,13 @@ export function ArmadoClient({
   const [error, setError] = useState<string | null>(null);
   const [guardado, setGuardado] = useState<Guardado>({ estado: "limpio", hora: null });
   const [enviando, setEnviando] = useState(false);
-  const [resultadoEnvio, setResultadoEnvio] = useState<{ total: number; letra: string; avisos: string[] } | null>(null);
+  const [resultadoEnvio, setResultadoEnvio] = useState<{
+    total: number;
+    letra: string;
+    avisos: string[];
+    /** El PDF definitivo que se acaba de generar; no lo hay si la versión no tenía armado. */
+    pdfUrl?: string;
+  } | null>(null);
   const [verPrecios, setVerPrecios] = useState(false);
   const [generando, setGenerando] = useState(false);
   const [documento, setDocumento] = useState<DocumentoGenerado | null>(null);
@@ -286,6 +292,7 @@ export function ArmadoClient({
         total: cuerpo.total ?? 0,
         letra: cuerpo.letra ?? "",
         avisos: cuerpo.avisos ?? [],
+        pdfUrl: cuerpo.pdfUrl,
       });
       await cargar();
     } catch (e) {
@@ -507,6 +514,16 @@ export function ArmadoClient({
               Congelada en ${resultadoEnvio.total.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
             </p>
             <p className="font-body text-xs text-white/60 mt-1">{resultadoEnvio.letra}</p>
+            {resultadoEnvio.pdfUrl && (
+              <a
+                href={resultadoEnvio.pdfUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-block font-mono text-xs text-green underline mt-2"
+              >
+                Ver el PDF definitivo
+              </a>
+            )}
             {resultadoEnvio.avisos.map((a, i) => (
               <p key={i} className="font-body text-xs text-amber mt-1">
                 {a}

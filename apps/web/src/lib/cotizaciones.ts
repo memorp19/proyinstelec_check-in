@@ -1,6 +1,7 @@
 import { and, desc, eq, ilike, isNull, max, ne, or, sql, type SQL } from "drizzle-orm";
 import { getDb } from "../db";
-import { aprobaciones, cotArmado, cotizaciones } from "../db/schema";
+import { aprobaciones, cotArmado, cotImportes, cotizaciones } from "../db/schema";
+import { leerFoto, type FotoDelDocumento } from "./cotizador/foto";
 import { folioCotizacion, pad } from "./folios";
 import { registrarBitacora } from "./bitacora";
 
@@ -228,34 +229,66 @@ export async function getVersion(
   return fila ? aCotizacion(fila) : null;
 }
 
+/** Qué PDF tiene una versión, y de dónde tiene que salir. */
+export interface PdfDeLaVersion {
+  /**
+   * Si se armó en el ERP: pasó a revisión desde el cotizador y tiene lo
+   * congelado. Su PDF es el definitivo y se busca **solo por id**. Las
+   * importadas no: su PDF lo hace el Apps Script y se busca por nombre.
+   */
+  delCotizador: boolean;
+  /** El PDF definitivo, si ya se generó. Un borrador de «Ver cotización» no cuenta. */
+  pdfDriveId: string | null;
+  /** La foto de lo que se imprimió, para avisar si lo vivo ya no coincide. */
+  foto: FotoDelDocumento | null;
+}
+
 /**
- * El id del PDF que el ERP generó para esa versión, si lo hay.
+ * El PDF de una versión, para enviarla o para avisar que falta.
  *
- * Vive en `cot_armado` y no en `cotizaciones` porque es **por versión**: cada
- * una tiene su documento. Se consulta aparte para no cargar con una columna
- * del cotizador todo lo que lee cotizaciones.
+ * Vive en `cot_armado` y `cot_importes`, no en `cotizaciones`, porque es **por
+ * versión**: cada una tiene su documento. Se consulta aparte para no cargar con
+ * columnas del cotizador todo lo que lee cotizaciones.
  *
- * Es lo que hace que el envío al cliente encuentre el PDF **por id** en vez
- * de por nombre. `null` cuando la versión no pasó por el cotizador —todas las
- * importadas—, y entonces se busca por nombre, como siempre.
+ * Solo cuenta el PDF **definitivo** (`pdf_definitivo_at`). Un borrador de «Ver
+ * cotización» pudo salir antes del último cambio, y mandarlo sería mandar
+ * números que no son los congelados.
  */
-export async function pdfGeneradoDe(cotizacion: {
+export async function pdfDeLaVersion(cotizacion: {
   numero: number;
   anio: number;
   version: number;
-}): Promise<string | null> {
-  const [fila] = await getDb()
-    .select({ pdfDriveId: cotArmado.pdfDriveId })
-    .from(cotArmado)
-    .where(
-      and(
-        eq(cotArmado.numero, cotizacion.numero),
-        eq(cotArmado.anio, cotizacion.anio),
-        eq(cotArmado.version, cotizacion.version),
-      ),
-    )
-    .limit(1);
-  return fila?.pdfDriveId ?? null;
+}): Promise<PdfDeLaVersion> {
+  const db = getDb();
+  const [[armado], [importes]] = await Promise.all([
+    db
+      .select({ pdfDriveId: cotArmado.pdfDriveId, pdfDefinitivoAt: cotArmado.pdfDefinitivoAt })
+      .from(cotArmado)
+      .where(
+        and(
+          eq(cotArmado.numero, cotizacion.numero),
+          eq(cotArmado.anio, cotizacion.anio),
+          eq(cotArmado.version, cotizacion.version),
+        ),
+      )
+      .limit(1),
+    db
+      .select({ foto: cotImportes.foto })
+      .from(cotImportes)
+      .where(
+        and(
+          eq(cotImportes.numero, cotizacion.numero),
+          eq(cotImportes.anio, cotizacion.anio),
+          eq(cotImportes.version, cotizacion.version),
+        ),
+      )
+      .limit(1),
+  ]);
+  return {
+    delCotizador: importes !== undefined,
+    pdfDriveId: armado?.pdfDefinitivoAt ? armado.pdfDriveId ?? null : null,
+    foto: leerFoto(importes?.foto),
+  };
 }
 
 /** La versión vigente (la de mayor número de versión) o null si no existe. */

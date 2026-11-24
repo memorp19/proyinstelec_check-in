@@ -84,7 +84,7 @@ export type RenglonesOcultos = Partial<Record<keyof ContactoDocumento, boolean>>
 
 export interface DatosDocumento {
   esquema: number;
-  /** `aaaa-mm-dd`. Vacía = se fija al generar el documento y ya no se mueve. */
+  /** `aaaa-mm-dd`. Vacía = la fija el PDF definitivo al mandar a revisión, y ya no se mueve. */
   fecha: string;
   contacto: ContactoDocumento;
   ocultar: RenglonesOcultos;
