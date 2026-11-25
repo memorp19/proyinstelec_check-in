@@ -2,6 +2,7 @@ import { auth } from "@/src/auth";
 import { redirect } from "next/navigation";
 import { AppHeader } from "../_components/AppHeader";
 import { NavBar } from "./components/NavBar";
+import { ActualizadorPwa } from "./components/ActualizadorPwa";
 
 // Server-side guard — middleware already handles the redirect,
 // but this adds a second layer for Server Components that bypass middleware.
@@ -15,6 +16,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <>
       <AppHeader />
       <NavBar isAdmin={isAdmin} />
+      {/* Que la app instalada no se quede con el código viejo. */}
+      <ActualizadorPwa />
       <div className="pt-[52px]">{children}</div>
     </>
   );

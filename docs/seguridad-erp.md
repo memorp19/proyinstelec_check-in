@@ -35,7 +35,7 @@ uno es la propuesta del folio:
 |---|---|---|
 | **Enviar al cliente** *(nuevo, chico)* | M7: destinatarios libres y el «Mensaje» como HTML | Es lo único que **sale de la empresa** hoy. |
 | **Autoaprobación** | A4, y que «Elaboró» decida quién arma (§3.1) | Ya estaba en la brecha (punto 7). |
-| **Endurecimiento** *(nuevo, chico)* | M11 (transiciones en una sentencia), ✅ B11 (iframe), la foto del check-in (§3.4), la bitácora del encabezado (§3.7) | Cambios cortos. La pantalla solo cambia para avisar «alguien más la cambió». Va en dos partes: la primera no toca cotizaciones (B11 y §3.4), para no chocar con los PR que esperan; M11 y §3.7, después. |
+| **Endurecimiento** *(nuevo, chico)* | M11 (transiciones en una sentencia), ✅ B11 (iframe), ✅ la foto del check-in (§3.4), la bitácora del encabezado (§3.7) | Cambios cortos. La pantalla solo cambia para avisar «alguien más la cambió». Va en dos partes: la primera no toca cotizaciones (B11 y §3.4), para no chocar con los PR que esperan; M11 y §3.7, después. |
 | **Eliminación auditada** | M9: cotizaciones y contactos | Ya estaba en el plan (§6.9). |
 | **El folio** *(propuesta, §6)* | B7: el número y el año los decide el servidor (el año, decidido el 20 nov) | Cuando se apruebe la propuesta. |
 | **Migración de OT y compras** | A1, A7, A12, M1–M3, M5, B3–B6 | Nada de eso existe todavía en el ERP: se escribe con las reglas de la §2. |
@@ -257,27 +257,42 @@ Siete cosas, ninguna grave, pero cinco repiten en chico un hallazgo del legacy.
   versiones (`marcarNoAsignadas`) y registrar la OC posterior (`WHERE estatus
   = 'ASIGNADA'`).
 
-### 3.4 La foto del check-in acepta cualquier sesión (como el A8, en chico)
+### 3.4 La foto del check-in aceptaba cualquier sesión (como el A8, en chico) — ✅ cerrado
 
-- **Quién tiene sesión:** `signIn` acepta **cualquier cuenta de Google**
-  (`src/auth.ts:59`); el `hd` de `auth.config.ts:40` es solo una sugerencia
-  a Google. Es a propósito: así entran los temporales con su Gmail. Pero
-  quien entra queda con sesión y el perfil incompleto, y el middleware solo
-  lo detiene en las páginas, no en `/api`.
-- **`POST /api/upload`:** pide sesión y nada más. El proyecto y el nombre de
-  la carpeta llegan del navegador (`app/api/upload/route.ts:38-67`). Cualquier
-  cuenta de Google puede subir imágenes de hasta 8 MB a la carpeta de
-  check-in de la empresa, con el nombre de cualquier trabajador.
-- **`POST /api/jornada`** sí revisa que un temporal fiche solo en sus
-  proyectos (`app/api/jornada/route.ts:50-58`, prueba en
-  `api/jornada.test.ts`). Guarda el `driveFileId` y el enlace que le manda
-  el navegador, pero solo se le enseñan a la misma persona.
-- **⏳ PR de endurecimiento:**
-  - `upload` exige el perfil completo y rol `campo` o `admin`;
-  - toma el proyecto de la asignación, como `jornada`, y el nombre de la
-    sesión;
-  - al cerrarlo, su excepción en `rutas-protegidas.test.ts` se queda (sigue
-    siendo de solo sesión), pero sin «PENDIENTE».
+Lo que había:
+- **Quién tiene sesión:** `signIn` acepta **cualquier cuenta de Google**; el
+  `hd` de `auth.config.ts` es solo una sugerencia a Google. Es a propósito:
+  así entran los temporales con su Gmail. Pero quien entra queda con sesión y
+  el perfil incompleto, y el middleware solo lo detiene en las páginas, no en
+  `/api`.
+- **`POST /api/upload`** pedía sesión y nada más. El proyecto, la fecha y el
+  nombre de la carpeta llegaban del navegador: cualquier cuenta de Google
+  podía subir imágenes a la carpeta de check-in de la empresa, con el nombre
+  de cualquier trabajador, y crear carpetas con cualquier nombre.
+
+**✅ PR de endurecimiento:**
+- **Quién:** sesión, y además perfil completo, activo y rol `campo` o
+  `admin`, leídos de la base. Los temporales con Gmail siguen subiendo.
+- **A dónde, lo decide el servidor:**
+  - en el check-in, el proyecto que se pide, si puede fichar en él. Es la
+    misma regla de `/api/jornada` (`puedeFicharEn`, `src/lib/fichaje.ts`);
+  - en el check-out, el proyecto de su jornada, por su id: tiene que ser de
+    quien llama y seguir abierta;
+  - la carpeta, `Proyectos/{proyecto}/{fecha}/{nombre}`, con los nombres de la
+    base, y la fecha y la hora de México del servidor (también en el nombre
+    del archivo, `checkin_HHMM`).
+- **Qué:** JPEG, PNG o WebP reconocidos por sus bytes (`tipoDeFoto`,
+  `src/lib/fotos.ts`), hasta 3 MB. Más no cabe en el cuerpo que deja pasar
+  Vercel. La pantalla comprime antes (1600 px, JPEG al 85 %).
+- **Una pantalla vieja** (la PWA guardada en el teléfono) recibe 400 con
+  «Actualiza la aplicación (cierra y vuelve a abrirla).». La app de campo se
+  recarga sola en cuanto hay versión nueva, si no hay trabajo a medias.
+- **La pantalla avisa** cuando la foto no sube, y el check-in sigue.
+- La excepción de `upload` en `rutas-protegidas.test.ts` se queda (sigue
+  siendo de solo sesión), ya sin «PENDIENTE». Prueba: `api/upload.test.ts`.
+
+Sigue igual: `/api/jornada` guarda el `driveFileId` y el enlace que le manda
+el navegador, pero solo se le enseñan a la misma persona (B4).
 
 ### 3.5 Un contacto se borra (el M9)
 
@@ -380,7 +395,7 @@ Es el equivalente de «funciones públicas sin permiso» (A3, A6, A8, M13).
   - `auth/[...nextauth]`, que no pide nada porque es el inicio de sesión;
   - las de check-in y perfil, que piden solo sesión y trabajan con los datos
     de quien llama;
-  - `upload`, marcada PENDIENTE (§3.4).
+  - `upload`, que el PR de endurecimiento sacó de PENDIENTE (§3.4).
   - Si una excepción ya no existe, la prueba falla.
 - **Se comprobó que falla:** quitando el `if (rechazo)` de una ruta, la ruta
   contesta 200 y la prueba lo marca. Una ruta nueva que consulta la base
@@ -476,7 +491,7 @@ Es la del B11, y llegó con el PR de endurecimiento.
 | B2 | Una revisión de cobros sin chequeo, que cualquiera disparaba | 1 y 10 | ✅ Por diseño | No hay procesos sin ruta; toda ruta, en `rutas-protegidas.test.ts` |
 | B3 | Se tomaba un folio de requisición apartado para otra persona | 4 · los folios los da el contador | ⏳ Migración de OT y compras | `src/lib/folios.ts` |
 | B4 | IDs de archivos de Drive llegaban del navegador | 4 · solo IDs de esa solicitud | ⏳ Migración de OT y compras | En el check-in, el enlace de la foto también llega del navegador, pero solo se le enseña a la misma persona (§3.4) |
-| B5 | El tipo de archivo se aceptaba por lo que decía el navegador; los gastos sin tope | 4 | ⏳ Migración de OT y compras | Hoy: fotos con lista de tipos y tope de tamaño (`upload`, `perfil/foto`) |
+| B5 | El tipo de archivo se aceptaba por lo que decía el navegador; los gastos sin tope | 4 | ⏳ Migración de OT y compras | Hoy: las fotos (`upload`, `perfil/foto`) se reconocen por sus bytes y tienen tope de tamaño (§3.4) |
 | B6 | Una sola persona firmaba los cuatro pasos de una requisición | 3 | ⏳ Migración de OT y compras | Decidir con la regla de compras: al menos «Aprobó» ≠ quien elaboró |
 | B7 | El alta confiaba en la versión y el año que mandaba el navegador | 4 | ⏳ El folio (§6) | La versión ya no: `createCotizacion` la fuerza a 0 (`lib/cotizaciones.test.ts`, «crea la versión 0 en PROCESO…»). El número y el año sí llegan del navegador. Decidido el 20 nov: el año lo pone el servidor con la fecha de México, sin excepción (§2.3) |
 | B8 | Un enlace de correo aprobaba con un solo GET | 1 · aprobar es un POST con sesión y permiso | ✅ Por diseño | Los correos llevan a la pantalla (`/erp/revision`), no a una acción |
