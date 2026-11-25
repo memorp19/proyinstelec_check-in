@@ -26,7 +26,7 @@ reconocerlo.
 |---|---|---|---|
 | **Altos (A1–A12)** | 8 | 4 | 0 |
 | **Medios (M1–M13)** | 5 | 7 | 1 |
-| **Bajos (B1–B12)** | 6 | 6 | 0 |
+| **Bajos (B1–B12)** | 7 | 5 | 0 |
 
 Los ⏳ caen en seis PR. Tres ya estaban previstos, dos salen de este mapa y
 uno es la propuesta del folio:
@@ -35,7 +35,7 @@ uno es la propuesta del folio:
 |---|---|---|
 | **Enviar al cliente** *(nuevo, chico)* | M7: destinatarios libres y el «Mensaje» como HTML | Es lo único que **sale de la empresa** hoy. |
 | **Autoaprobación** | A4, y que «Elaboró» decida quién arma (§3.1) | Ya estaba en la brecha (punto 7). |
-| **Endurecimiento** *(nuevo, chico)* | M11 (transiciones en una sentencia), B11 (iframe), la foto del check-in (§3.4), la bitácora del encabezado (§3.7) | Cambios cortos. La pantalla solo cambia para avisar «alguien más la cambió». |
+| **Endurecimiento** *(nuevo, chico)* | M11 (transiciones en una sentencia), ✅ B11 (iframe), la foto del check-in (§3.4), la bitácora del encabezado (§3.7) | Cambios cortos. La pantalla solo cambia para avisar «alguien más la cambió». Va en dos partes: la primera no toca cotizaciones (B11 y §3.4), para no chocar con los PR que esperan; M11 y §3.7, después. |
 | **Eliminación auditada** | M9: cotizaciones y contactos | Ya estaba en el plan (§6.9). |
 | **El folio** *(propuesta, §6)* | B7: el número y el año los decide el servidor (el año, decidido el 20 nov) | Cuando se apruebe la propuesta. |
 | **Migración de OT y compras** | A1, A7, A12, M1–M3, M5, B3–B6 | Nada de eso existe todavía en el ERP: se escribe con las reglas de la §2. |
@@ -288,13 +288,24 @@ Siete cosas, ninguna grave, pero cinco repiten en chico un hallazgo del legacy.
   - deja de ofrecerse para enviar;
   - se puede reactivar.
 
-### 3.6 El ERP se puede meter en un iframe (el B11)
+### 3.6 El ERP se podía meter en un iframe (el B11) — ✅ cerrado
 
-- **Qué pasa:** `next.config.js` no manda `X-Frame-Options` ni
-  `Content-Security-Policy: frame-ancestors`. Una página ajena puede mostrar
-  el ERP en un marco y engañar a un aprobador para que haga clic.
-- **⏳ PR de endurecimiento:** `headers()` en `next.config.js` con
-  `X-Frame-Options: DENY` y `frame-ancestors 'none'`.
+Lo que había: `next.config.js` no mandaba `X-Frame-Options` ni
+`Content-Security-Policy: frame-ancestors`. Una página ajena podía mostrar el
+ERP en un marco y engañar a un aprobador para que hiciera clic.
+
+**✅ PR de endurecimiento:** `headers()` en `next.config.js`, para todas las
+respuestas (páginas, `/api`, estáticos y las redirecciones del middleware):
+- `Content-Security-Policy: frame-ancestors 'none'` y `X-Frame-Options: DENY`;
+- de paso, `X-Content-Type-Options: nosniff` y
+  `Referrer-Policy: strict-origin-when-cross-origin`.
+
+La CSP lleva **solo** `frame-ancestors`. Una completa (scripts, estilos,
+conexiones) pide inventariar lo que carga la app, y un error ahí rompe el
+inicio de sesión o la PWA; si se quiere, va aparte. El visor del PDF de Drive
+no cambia: es el ERP el que enmarca a Drive, no al revés.
+
+Prueba: `src/__tests__/seguridad/encabezados.test.ts` (§4.3).
 
 ### 3.7 Los cambios del encabezado no dejan rastro completo
 
@@ -351,7 +362,7 @@ la pena revisar esa lista en Drive.
 
 ---
 
-## 4. Las dos pruebas nuevas
+## 4. Las pruebas de seguridad
 
 ### 4.1 `src/__tests__/seguridad/rutas-protegidas.test.ts`
 
@@ -403,6 +414,20 @@ Es el equivalente del A5 y el M10.
 - **Se comprobó que falla:** quitando el `escaparHtml` del título en el
   correo al cliente, devolviendo el título de `plantillaCorreo` a como estaba
   y agregando un `dangerouslySetInnerHTML`.
+
+### 4.3 `src/__tests__/seguridad/encabezados.test.ts`
+
+Es la del B11, y llegó con el PR de endurecimiento.
+
+- **Qué revisa:** lee `next.config.js` como lo carga Next, con `next-pwa`
+  encima, y con el mismo comparador de rutas de Next comprueba que páginas,
+  `/api`, el inicio de sesión y los estáticos llevan `frame-ancestors 'none'`,
+  `X-Frame-Options: DENY`, `nosniff` y `Referrer-Policy`.
+- **La CSP:** tiene que traer solo `frame-ancestors`. Ampliarla es una
+  decisión aparte, y la prueba obliga a tomarla.
+- **Se comprobó que falla:** sin `headers()`, con una regla que deja fuera la
+  raíz o solo cubre `/erp`, con `SAMEORIGIN`, con otra directiva en la CSP y
+  sin `nosniff`.
 
 ---
 
@@ -457,7 +482,7 @@ Es el equivalente del A5 y el M10.
 | B8 | Un enlace de correo aprobaba con un solo GET | 1 · aprobar es un POST con sesión y permiso | ✅ Por diseño | Los correos llevan a la pantalla (`/erp/revision`), no a una acción |
 | B9 | Si no se podía leer el estatus, la cotización se trataba como editable | 6 | ✅ Por diseño | Si la lectura falla, la ruta contesta error y no guarda |
 | B10 | Unas 45 herramientas del editor sin chequeo, que enseñaban IDs y costos | 10 | ✅ Por diseño | Son scripts locales (`scripts/`), con guardas contra producción |
-| B11 | La página se podía incrustar en cualquier sitio | — | ⏳ Endurecimiento | §3.6 |
+| B11 | La página se podía incrustar en cualquier sitio | — | ✅ Endurecimiento | `frame-ancestors 'none'` y `X-Frame-Options: DENY` en todas las respuestas (`next.config.js`, `seguridad/encabezados.test.ts`, §3.6) |
 | B12 | En un activador, la identidad caía a la del dueño | 3 | ✅ Por diseño | Quién es lo dice el JWT de la sesión; la cuenta de servicio de Google nunca se registra como usuario |
 
 ---
