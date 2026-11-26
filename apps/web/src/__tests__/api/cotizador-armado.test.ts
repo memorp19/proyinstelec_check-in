@@ -16,6 +16,9 @@ vi.mock("@/src/lib/cotizador-db", () => ({
   },
 }));
 vi.mock("@/src/lib/cotizaciones-flujos", () => ({ enviarARevision: vi.fn() }));
+// El PDF definitivo tiene su propia prueba (lib/cotizador-pdf.test.ts): aquí se
+// prueba en qué orden lo pide la ruta y qué hace si falla.
+vi.mock("@/src/lib/cotizador-pdf", () => ({ generarPdfDefinitivo: vi.fn() }));
 vi.mock("@/src/lib/banxico", () => ({ tipoDeCambioFix: vi.fn() }));
 
 import { CONDICIONES_POR_OMISION, documentoVacio } from "@/src/lib/cotizador";
@@ -32,6 +35,8 @@ import {
   guardarArmado,
 } from "@/src/lib/cotizador-db";
 import { enviarARevision } from "@/src/lib/cotizaciones-flujos";
+import { generarPdfDefinitivo } from "@/src/lib/cotizador-pdf";
+import { FaltaConfiguracionDeDocumentos } from "@/src/lib/documentos-google";
 import { tipoDeCambioFix } from "@/src/lib/banxico";
 import { GET, PUT } from "@/app/api/erp/cotizaciones/[key]/armado/route";
 import { POST as POST_REVISION } from "@/app/api/erp/cotizaciones/[key]/armado/revision/route";
@@ -264,6 +269,13 @@ describe("POST revisión", () => {
       cotizacion: { ...cotizacion, estatus: "REVISION" },
       avisos: [],
     } as never);
+    vi.mocked(generarPdfDefinitivo).mockResolvedValue({
+      nombre: "PCOTOP-450-2026 Pruebas",
+      pdfDriveId: "pdf-definitivo",
+      pdfUrl: "https://drive.google.com/file/d/pdf-definitivo/view",
+      fecha: "2026-11-23",
+      avisos: [],
+    });
   });
 
   /**
@@ -476,5 +488,86 @@ describe("GET catálogo de servicios", () => {
     mockAuth.mockResolvedValue(SIN_MODULO);
     const r = await GET_CATALOGO(pedir(null, "GET", "http://localhost/api/erp/catalogo-servicios"));
     expect(r.status).toBe(403);
+  });
+});
+
+/**
+ * Mandar a revisión genera el PDF definitivo, de lo congelado, antes de
+ * cambiar el estatus. Si Google falla, la versión se queda en PROCESO.
+ */
+describe("POST revisión — el PDF definitivo", () => {
+  beforeEach(() => {
+    vi.mocked(congelarVersion).mockResolvedValue({
+      resultado: { total: 1000 }, letra: "MIL PESOS", avisos: [],
+    } as never);
+    vi.mocked(enviarARevision).mockResolvedValue({
+      cotizacion: { ...cotizacion, estatus: "REVISION" }, avisos: [],
+    } as never);
+    vi.mocked(generarPdfDefinitivo).mockResolvedValue({
+      nombre: "PCOTOP-450-2026 Pruebas",
+      pdfDriveId: "pdf-definitivo",
+      pdfUrl: "https://drive.google.com/file/d/pdf-definitivo/view",
+      fecha: "2026-11-23",
+      avisos: ["un aviso del documento"],
+    });
+  });
+
+  const mandar = () => POST_REVISION(pedir({ version: 0 }, "POST"), { params });
+
+  it("en orden: congelar, generar el PDF, y después cambiar el estatus", async () => {
+    expect((await mandar()).status).toBe(200);
+
+    const congelar = vi.mocked(congelarVersion).mock.invocationCallOrder[0];
+    const pdf = vi.mocked(generarPdfDefinitivo).mock.invocationCallOrder[0];
+    const estatus = vi.mocked(enviarARevision).mock.invocationCallOrder[0];
+    expect(congelar).toBeLessThan(pdf);
+    expect(pdf).toBeLessThan(estatus);
+    expect(generarPdfDefinitivo).toHaveBeenCalledWith({ numero: 450, anio: 2026, version: 0 });
+  });
+
+  it("devuelve el enlace al PDF y junta sus avisos", async () => {
+    const cuerpo = await (await mandar()).json();
+
+    expect(cuerpo.pdfUrl).toBe("https://drive.google.com/file/d/pdf-definitivo/view");
+    expect(cuerpo.avisos).toContain("un aviso del documento");
+  });
+
+  // El revisor aprobaría sin ver el documento, y después no habría con qué enviarla.
+  it("si Google falla, no pasa a revisión y lo dice: 502", async () => {
+    vi.mocked(generarPdfDefinitivo).mockRejectedValue(new Error("Google contestó 500"));
+    const consola = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const r = await mandar();
+
+    expect(r.status).toBe(502);
+    expect((await r.json()).error).toBe(
+      "No se pudo generar el PDF: Google contestó 500. La cotización sigue en PROCESO; vuelve a intentar.",
+    );
+    expect(enviarARevision).not.toHaveBeenCalled();
+    consola.mockRestore();
+  });
+
+  it("sin la configuración de Google, 503 y tampoco pasa", async () => {
+    vi.mocked(generarPdfDefinitivo).mockRejectedValue(
+      new FaltaConfiguracionDeDocumentos(["ERP_PLANTILLA_DOC_COTIZACION_ID"]),
+    );
+    const consola = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const r = await mandar();
+
+    expect(r.status).toBe(503);
+    expect((await r.json()).error).toContain("ERP_PLANTILLA_DOC_COTIZACION_ID");
+    expect(enviarARevision).not.toHaveBeenCalled();
+    consola.mockRestore();
+  });
+
+  it("con un hueco del documento no congela ni genera nada", async () => {
+    vi.mocked(getArmado).mockResolvedValue({
+      ...completo,
+      armado: { ...armado, condiciones: { ...CONDICIONES_POR_OMISION, lugar: "" } },
+    } as never);
+
+    expect((await mandar()).status).toBe(422);
+    expect(generarPdfDefinitivo).not.toHaveBeenCalled();
   });
 });

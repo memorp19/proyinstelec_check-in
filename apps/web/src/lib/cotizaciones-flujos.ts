@@ -11,7 +11,7 @@ import {
   getVersion,
   getVigente,
   marcarNoAsignadas,
-  pdfGeneradoDe,
+  pdfDeLaVersion,
   puedeEnviarseAlCliente,
   registrarAprobacion,
   updateCotizacion,
@@ -19,6 +19,12 @@ import {
   type EnvioVisto,
 } from "./cotizaciones";
 import { contactosParaEnvio, type ClienteEmpresa, type Contacto } from "./clientes";
+import {
+  avisoDeEncabezado,
+  avisoSinPdf,
+  cambiosDeEncabezado,
+  type FotoDelDocumento,
+} from "./cotizador/foto";
 import {
   enviarCorreo,
   escaparHtml,
@@ -304,14 +310,18 @@ export async function enviarARevision(params: {
   // nada y el catálogo no tiene por qué consultarse.
   const firmaNota = nota ? await nombreDeUsuario(params.usuario) : "";
 
-  // PDF adjunto si ya existe en la carpeta (opcional en esta etapa)
+  // El PDF adjunto. En las armadas en el ERP es el definitivo, que la ruta del
+  // cotizador acaba de generar; en las importadas, el que haya en la carpeta
+  // (opcional en esta etapa).
   let adjuntos: Adjunto[] | undefined;
   if (cotizacion.drive_folder_id) {
     try {
+      const delPdf = await pdfDeLaVersion(cotizacion);
       const { pdf, nombresEnCarpeta } = await buscarPdfCotizacion({
         folderId: cotizacion.drive_folder_id,
         folio,
-        pdfDriveId: await pdfGeneradoDe(cotizacion),
+        pdfDriveId: delPdf.pdfDriveId,
+        soloPorId: delPdf.delCotizador,
       });
       if (pdf) {
         adjuntos = [{ filename: pdf.filename, mimeType: "application/pdf", contenido: pdf.contenido }];
@@ -475,7 +485,35 @@ export interface DatosEnvio {
   pdfDisponible: boolean;
   /** Para que la pantalla diga qué correos, además de los contactos, se aceptan. */
   dominioEmpresa: string;
+  /** Si se armó en el ERP: su PDF es el definitivo, y se puede generar en REVISION. */
+  pdfDelCotizador: boolean;
+  /** Qué decir si no hay PDF (`avisoSinPdf`); `null` si lo hay. */
+  avisoPdf: string | null;
+  /** Si lo vivo del encabezado ya no coincide con lo congelado; `null` si coincide. */
+  avisoEncabezado: string | null;
 }
+
+/**
+ * Lo que imprime el PDF de una versión congelada, o lo vivo si no lo es.
+ *
+ * El correo al cliente lo usa para que el asunto y el saludo digan lo mismo
+ * que el PDF adjunto, aunque alguien haya editado el encabezado después.
+ */
+function encabezadoDelEnvio(
+  cotizacion: Cotizacion,
+  foto: FotoDelDocumento | null,
+): { cliente: string; titulo: string; dirigidaA: string } {
+  return (
+    foto?.encabezado ?? {
+      cliente: cotizacion.cliente,
+      titulo: cotizacion.titulo,
+      dirigidaA: cotizacion.dirigida_a,
+    }
+  );
+}
+
+const asuntoPorOmision = (numero: number, cliente: string) =>
+  `Cotización PCOTOP-${String(numero).padStart(3, "0")} - ${cliente}`;
 
 export async function datosParaEnvio(params: {
   numero: number;
@@ -494,6 +532,9 @@ export async function datosParaEnvio(params: {
     ccEquipo: [],
     pdfDisponible: false,
     dominioEmpresa: dominioEmpresa(),
+    pdfDelCotizador: false,
+    avisoPdf: null,
+    avisoEncabezado: null,
   };
   if (!cotizacion) return base;
 
@@ -508,15 +549,19 @@ export async function datosParaEnvio(params: {
   const equipo = await equipoRemitentes();
   const ccEquipo = equipo.map((u) => u.email).filter((e) => e !== params.remitente.toLowerCase());
 
+  // Lo mismo que buscará el envío: en las armadas en el ERP, solo el PDF
+  // definitivo; en las importadas, por nombre.
+  const delPdf = await pdfDeLaVersion(cotizacion);
   let pdfDisponible = false;
-  if (cotizacion.drive_folder_id) {
+  if (cotizacion.drive_folder_id && (delPdf.pdfDriveId || !delPdf.delCotizador)) {
     try {
       pdfDisponible =
         (
           await buscarPdfCotizacion({
             folderId: cotizacion.drive_folder_id,
             folio: folioEsperado(cotizacion),
-            pdfDriveId: await pdfGeneradoDe(cotizacion),
+            pdfDriveId: delPdf.pdfDriveId,
+            soloPorId: delPdf.delCotizador,
           })
         ).pdf != null;
     } catch {
@@ -529,9 +574,20 @@ export async function datosParaEnvio(params: {
     empresa,
     contactos,
     sugeridoId,
-    asuntoSugerido: `Cotización PCOTOP-${String(cotizacion.numero).padStart(3, "0")} - ${cotizacion.cliente}`,
+    asuntoSugerido: asuntoPorOmision(cotizacion.numero, encabezadoDelEnvio(cotizacion, delPdf.foto).cliente),
     ccEquipo,
     pdfDisponible,
+    pdfDelCotizador: delPdf.delCotizador,
+    avisoPdf: pdfDisponible
+      ? null
+      : avisoSinPdf({
+          delCotizador: delPdf.delCotizador,
+          estatus: cotizacion.estatus,
+          folio: folioEsperado(cotizacion),
+        }),
+    avisoEncabezado: delPdf.foto
+      ? avisoDeEncabezado(cambiosDeEncabezado(delPdf.foto.encabezado, cotizacion))
+      : null,
   };
 }
 
@@ -659,34 +715,41 @@ export async function enviarAlCliente(params: {
   });
   if (!revision.ok) throw new DestinatariosNoValidos(revision.error);
 
-  // PDF obligatorio (regla dura del legacy)
+  // PDF obligatorio (regla dura del legacy). En las armadas en el ERP, solo
+  // el definitivo, por su id: uno con el mismo nombre en la carpeta puede ser
+  // un borrador con números que no son los congelados. En las importadas, por
+  // nombre, como siempre.
   if (!cotizacion.drive_folder_id) {
     throw new Error("La cotización no tiene carpeta de Drive; no se localizó el PDF");
   }
   const esperado = folioEsperado(cotizacion);
+  const delPdf = await pdfDeLaVersion(cotizacion);
+  const sinPdf = () =>
+    avisoSinPdf({ delCotizador: delPdf.delCotizador, estatus: cotizacion.estatus, folio: esperado });
+  if (delPdf.delCotizador && !delPdf.pdfDriveId) throw new Error(sinPdf());
   const { pdf, nombresEnCarpeta } = await buscarPdfCotizacion({
     folderId: cotizacion.drive_folder_id,
     folio: esperado,
-    pdfDriveId: await pdfGeneradoDe(cotizacion),
+    pdfDriveId: delPdf.pdfDriveId,
+    soloPorId: delPdf.delCotizador,
   });
   if (!pdf) {
-    throw new Error(
-      `No se encontró el PDF en la carpeta de la cotización. Genera el PDF con el nombre "${esperado} …" y vuelve a intentar. ${queHabia(nombresEnCarpeta)}`,
-    );
+    throw new Error(delPdf.delCotizador ? sinPdf() : `${sinPdf()} ${queHabia(nombresEnCarpeta)}`);
   }
 
   const equipo = await equipoRemitentes();
   const cc = equipo.map((u) => u.email).filter((e) => e !== params.remitente.email.toLowerCase());
 
-  const asunto =
-    params.asunto?.trim() ||
-    `Cotización PCOTOP-${String(cotizacion.numero).padStart(3, "0")} - ${cotizacion.cliente}`;
+  // El asunto y el saludo dicen lo mismo que el PDF adjunto: lo congelado, no
+  // lo que alguien haya editado en el encabezado después.
+  const impreso = encabezadoDelEnvio(cotizacion, delPdf.foto);
+  const asunto = params.asunto?.trim() || asuntoPorOmision(cotizacion.numero, impreso.cliente);
   // El mensaje es texto tecleado, como todo lo demás: va escapado, y sus
   // saltos de línea, como `<br/>`. Este correo sale de la empresa.
   const cuerpo = params.mensaje?.trim()
     ? `<p style="font-size:13px;color:#111827;">${textoAHtml(params.mensaje)}</p>`
-    : `<p style="font-size:13px;color:#111827;">Estimado(a) ${escaparHtml(cotizacion.dirigida_a)}:</p>
-     <p style="font-size:13px;color:#111827;">Por este medio le hacemos llegar nuestra propuesta económica del proyecto <b>${escaparHtml(cotizacion.titulo)}</b>, adjunta en PDF.</p>
+    : `<p style="font-size:13px;color:#111827;">Estimado(a) ${escaparHtml(impreso.dirigidaA)}:</p>
+     <p style="font-size:13px;color:#111827;">Por este medio le hacemos llegar nuestra propuesta económica del proyecto <b>${escaparHtml(impreso.titulo)}</b>, adjunta en PDF.</p>
      <p style="font-size:13px;color:#111827;">Quedamos atentos a sus comentarios.</p>
      <p style="font-size:13px;color:#111827;margin-top:16px;">${escaparHtml(params.remitente.nombre)}<br/>${escaparHtml(params.telefonoFirma ?? "")}<br/>${escaparHtml(params.remitente.email)}</p>`;
 

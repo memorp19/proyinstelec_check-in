@@ -41,6 +41,8 @@ interface Respuesta {
   avisos: string[];
   llenadoAutomatico: Array<"contacto" | "textos">;
   congelado: { total: string; letra: string; congeladoAt: string } | null;
+  /** El PDF definitivo, desde REVISION en adelante; `null` si no tiene uno que valga. */
+  pdfDefinitivoUrl: string | null;
   actualizadoEn: string | null;
   acceso: { puedeVer: boolean; puedeEditar: boolean; motivo: string };
   catalogo: ServicioCatalogo[];
@@ -85,7 +87,13 @@ export function ArmadoClient({
   const [error, setError] = useState<string | null>(null);
   const [guardado, setGuardado] = useState<Guardado>({ estado: "limpio", hora: null });
   const [enviando, setEnviando] = useState(false);
-  const [resultadoEnvio, setResultadoEnvio] = useState<{ total: number; letra: string; avisos: string[] } | null>(null);
+  const [resultadoEnvio, setResultadoEnvio] = useState<{
+    total: number;
+    letra: string;
+    avisos: string[];
+    /** El PDF definitivo que se acaba de generar; no lo hay si la versión no tenía armado. */
+    pdfUrl?: string;
+  } | null>(null);
   const [verPrecios, setVerPrecios] = useState(false);
   const [generando, setGenerando] = useState(false);
   const [documento, setDocumento] = useState<DocumentoGenerado | null>(null);
@@ -164,6 +172,14 @@ export function ArmadoClient({
         : [],
     [armado, datos],
   );
+
+  /**
+   * Si se manda por la ruta de las importadas: sin partidas y sin nada
+   * congelado. Es la regla del servidor (`seArmoEnElCotizador`): una que se
+   * congeló alguna vez es del cotizador aunque se haya quedado sin partidas, y
+   * la ruta de las importadas la rechaza. La del cotizador dice qué falta.
+   */
+  const sinArmado = !!armado && armado.partidas.length === 0 && !datos?.congelado;
 
   // ── Autoguardado ────────────────────────────────────────────────────────────
   const guardar = useCallback(
@@ -251,9 +267,10 @@ export function ArmadoClient({
    * Dos caminos, y el que se toma depende de si hay algo que congelar.
    *
    * Con partidas, la ruta del cotizador: calcula, congela y manda. Sin ellas
-   * —las que se cargaron del control de 2026 nunca pasaron por aquí— la ruta
-   * de siempre, que solo cambia el estatus. Congelar una cotización vacía
-   * guardaría un total de cero y lo daría por bueno.
+   * ni nada congelado (`sinArmado`) —las que se cargaron del control de 2026
+   * nunca pasaron por aquí— la ruta de siempre, que solo cambia el estatus.
+   * Congelar una cotización vacía guardaría un total de cero y lo daría por
+   * bueno.
    */
   const mandarARevision = useCallback(async () => {
     if (!armado) return;
@@ -263,7 +280,6 @@ export function ArmadoClient({
     setEnviando(true);
     setError(null);
     try {
-      const sinArmado = armado.partidas.length === 0;
       if (!sinArmado) await guardarYa();
 
       const ruta = sinArmado
@@ -286,6 +302,7 @@ export function ArmadoClient({
         total: cuerpo.total ?? 0,
         letra: cuerpo.letra ?? "",
         avisos: cuerpo.avisos ?? [],
+        pdfUrl: cuerpo.pdfUrl,
       });
       await cargar();
     } catch (e) {
@@ -293,7 +310,7 @@ export function ArmadoClient({
     } finally {
       setEnviando(false);
     }
-  }, [armado, cargar, cotKey, faltantes, guardarYa, nota, version]);
+  }, [armado, cargar, cotKey, faltantes, guardarYa, nota, sinArmado, version]);
 
   // ── Dibujo ──────────────────────────────────────────────────────────────────
   if (cargando) {
@@ -354,6 +371,36 @@ export function ArmadoClient({
       </header>
 
       <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
+        {/**
+          * Lo que acaba de pasar, arriba. Al mandar, la pantalla se recarga y
+          * queda al principio; hasta abajo, este recuadro no se veía.
+          */}
+        {resultadoEnvio && (
+          <div className={`${tarjeta} p-4 bg-green/10 border-green/30`}>
+            <p className="font-mono text-sm text-green">
+              Mandada a revisión: congelada en ${resultadoEnvio.total.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+            </p>
+            <p className="font-body text-xs text-white/60 mt-1">{resultadoEnvio.letra}</p>
+            {/* El enlace vive en «Importes congelados», que sale de la base.
+                Este es por si la recarga falló y ese recuadro no lo trae. */}
+            {resultadoEnvio.pdfUrl && !datos.pdfDefinitivoUrl && (
+              <a
+                href={resultadoEnvio.pdfUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-block font-mono text-xs text-green underline mt-2"
+              >
+                Ver el PDF definitivo
+              </a>
+            )}
+            {resultadoEnvio.avisos.map((a, i) => (
+              <p key={i} className="font-body text-xs text-amber mt-1">
+                {a}
+              </p>
+            ))}
+          </div>
+        )}
+
         {soloLectura && (
           <div className={`${tarjeta} p-4 bg-amber/10 border-amber/30`}>
             <p className={etiqueta}>Solo lectura</p>
@@ -362,17 +409,30 @@ export function ArmadoClient({
         )}
 
         {congelado && (
-          <div className={`${tarjeta} p-4`}>
-            <p className={etiqueta}>Importes congelados</p>
-            <p className="font-mono text-sm text-white mt-1">
-              ${Number(congelado.total).toLocaleString("es-MX", { minimumFractionDigits: 2 })} ·{" "}
-              {new Date(congelado.congeladoAt).toLocaleString("es-MX")}
-            </p>
-            <p className="font-body text-xs text-white/50 mt-1">{congelado.letra}</p>
-            <p className="font-body text-xs text-white/40 mt-2">
-              Es lo que se guardó al mandarla a revisión. Lo de abajo se recalcula al vuelo: si no
-              coinciden, el catálogo cambió desde entonces y el documento sigue valiendo el congelado.
-            </p>
+          <div className={`${tarjeta} p-4 flex flex-wrap items-start gap-4`}>
+            <div className="flex-1 min-w-[240px]">
+              <p className={etiqueta}>Importes congelados</p>
+              <p className="font-mono text-sm text-white mt-1">
+                ${Number(congelado.total).toLocaleString("es-MX", { minimumFractionDigits: 2 })} ·{" "}
+                {new Date(congelado.congeladoAt).toLocaleString("es-MX")}
+              </p>
+              <p className="font-body text-xs text-white/50 mt-1">{congelado.letra}</p>
+              <p className="font-body text-xs text-white/40 mt-2">
+                Es lo que se guardó al mandarla a revisión. Lo de abajo se recalcula al vuelo: si no
+                coinciden, el catálogo cambió desde entonces y el documento sigue valiendo el congelado.
+              </p>
+            </div>
+            {/* El PDF que sale de lo congelado: el que se revisa y se envía. */}
+            {datos.pdfDefinitivoUrl && (
+              <a
+                href={datos.pdfDefinitivoUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`${btnPrimary} shrink-0 inline-flex items-center`}
+              >
+                Ver el PDF definitivo
+              </a>
+            )}
           </div>
         )}
 
@@ -481,7 +541,7 @@ export function ArmadoClient({
             cliente={cotizacion.cliente}
             titulo={cotizacion.titulo}
             folio={cotizacion.folio}
-            sinArmado={armado.partidas.length === 0}
+            sinArmado={sinArmado}
             faltantes={faltantes}
             nota={nota}
             onNota={setNota}
@@ -499,20 +559,6 @@ export function ArmadoClient({
             onCerrar={() => setDocumento(null)}
             onRegenerar={() => void generarCotizacion()}
           />
-        )}
-
-        {resultadoEnvio && (
-          <div className={`${tarjeta} p-4 bg-green/10 border-green/30`}>
-            <p className="font-mono text-sm text-green">
-              Congelada en ${resultadoEnvio.total.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
-            </p>
-            <p className="font-body text-xs text-white/60 mt-1">{resultadoEnvio.letra}</p>
-            {resultadoEnvio.avisos.map((a, i) => (
-              <p key={i} className="font-body text-xs text-amber mt-1">
-                {a}
-              </p>
-            ))}
-          </div>
         )}
 
         {error && <p className="font-mono text-xs text-danger">{error}</p>}

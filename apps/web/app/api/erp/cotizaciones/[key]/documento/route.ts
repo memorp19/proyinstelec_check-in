@@ -14,7 +14,12 @@ import {
 } from "@/src/lib/documentos-google";
 
 /**
- * «Ver cotización»: genera el documento y su PDF en la carpeta de la versión.
+ * «Ver cotización»: genera un **borrador** del documento y su PDF en la
+ * carpeta de la versión, mientras está en PROCESO.
+ *
+ * El PDF que se revisa y se envía es otro: el definitivo, que sale de lo
+ * congelado al mandar a revisión (`cotizador-pdf.ts`). Este no fija la fecha
+ * ni cuenta para enviar.
  *
  * ── Por qué tarda, y por qué eso importa aquí ──
  *
@@ -110,13 +115,15 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
     // Al final y en una sola sentencia. Si esto fallara, los archivos ya
     // existen en Drive y volver a dar al botón los rehace: lo que no se puede
     // es quedarse con ids que apunten a documentos apartados.
+    //
+    // Es un borrador: no fija la fecha (la fija el PDF definitivo, al mandar
+    // a revisión) y no es el que se envía al cliente.
     await guardarIdsDeDocumento({
       numero: key.numero,
       anio: key.anio,
       version,
       docDriveId: generado.docId,
       pdfDriveId: pdf.driveFileId,
-      fecha: generado.fechaEsNueva ? generado.fecha : undefined,
     });
 
     return NextResponse.json({

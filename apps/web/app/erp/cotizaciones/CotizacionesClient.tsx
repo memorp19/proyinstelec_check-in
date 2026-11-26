@@ -10,10 +10,12 @@ import {
   IconoEnviar,
   IconoLapiz,
   IconoPaquete,
+  IconoPdf,
   IconoRama,
   IconoReloj,
 } from "./Iconos";
 import { validarDestinatarios } from "@/src/lib/destinatarios";
+import { GenerarPdf } from "./GenerarPdf";
 
 // ── Tipos (espejo de la API) ──────────────────────────────────────────────────
 
@@ -37,6 +39,8 @@ interface Cot {
   folio_ot?: string;
   drive_folder_url?: string;
   aprobada?: boolean;
+  /** El PDF definitivo, desde REVISION en adelante; `null` si no tiene. */
+  pdf_definitivo_url?: string | null;
   /** Todas las versiones de esta cotización, para las etiquetas. */
   versiones?: Array<{ version: number; folio: string; estatus: string; orden_compra?: string }>;
 }
@@ -713,6 +717,14 @@ function Tarjeta({
             </button>
           )}
 
+          {/* Lo primero que se busca después de mandarla: el documento que se
+              revisa y se envía. El servidor decide si hay uno que valga. */}
+          {c.pdf_definitivo_url && (
+            <a href={c.pdf_definitivo_url} target="_blank" rel="noopener noreferrer" className={btnIcono}>
+              <IconoPdf /> Ver PDF
+            </a>
+          )}
+
           {/* Cotizar: mientras se puede tocar se arma; después se consulta */}
           <a href={armar} className={cotizable ? btnAccion : btnIcono}>
             <IconoCalculadora /> {cotizable ? "Cotizar" : "Ver cotización"}
@@ -1156,7 +1168,10 @@ function EliminarForm({ cot, onDone }: { cot: Cot; onDone: (msg: string) => void
 interface DatosEnvio {
   puede: boolean;
   motivo?: string;
-  /** Lo que se vio al abrir: el servidor solo envía si sigue así. */
+  /**
+   * Lo que se vio al abrir: el servidor solo envía si sigue así. Es también la
+   * versión de «Generar PDF», que no cambia ni el estatus ni la fecha de envío.
+   */
   cotizacion: { version: number; estatus: string; cliente: string; fecha_envio?: string } | null;
   contactos: Array<{ contacto_id: string; nombre: string; puesto?: string; correo?: string }>;
   sugeridoId: string | null;
@@ -1164,6 +1179,12 @@ interface DatosEnvio {
   ccEquipo: string[];
   pdfDisponible: boolean;
   dominioEmpresa: string;
+  /** Armada en el ERP: su PDF es el definitivo, y en REVISION se puede generar. */
+  pdfDelCotizador: boolean;
+  /** Qué decir si falta el PDF. */
+  avisoPdf: string | null;
+  /** Si el encabezado cambió después de congelarse. */
+  avisoEncabezado: string | null;
 }
 
 function EnviarForm({ cot, onDone }: { cot: Cot; onDone: (msg: string) => void }) {
@@ -1176,20 +1197,28 @@ function EnviarForm({ cot, onDone }: { cot: Cot; onDone: (msg: string) => void }
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const cargar = useCallback(
+    (primeraVez: boolean) =>
+      fetch(`/api/erp/cotizaciones/${key(cot)}/enviar`)
+        .then((r) => r.json())
+        .then((d: DatosEnvio & { error?: string }) => {
+          if (d.error) { setError(d.error); return; }
+          setDatos(d);
+          // Al recargar después de generar el PDF no se pisa lo que ya se escribió
+          if (!primeraVez) return;
+          setAsunto(d.asuntoSugerido);
+          if (d.sugeridoId) {
+            const sugerido = d.contactos.find((c) => c.contacto_id === d.sugeridoId);
+            if (sugerido?.correo) setSeleccion(new Set([sugerido.correo]));
+          }
+        })
+        .catch(() => setError("No se pudieron cargar los datos de envío")),
+    [cot],
+  );
+
   useEffect(() => {
-    fetch(`/api/erp/cotizaciones/${key(cot)}/enviar`)
-      .then((r) => r.json())
-      .then((d: DatosEnvio & { error?: string }) => {
-        if (d.error) { setError(d.error); return; }
-        setDatos(d);
-        setAsunto(d.asuntoSugerido);
-        if (d.sugeridoId) {
-          const sugerido = d.contactos.find((c) => c.contacto_id === d.sugeridoId);
-          if (sugerido?.correo) setSeleccion(new Set([sugerido.correo]));
-        }
-      })
-      .catch(() => setError("No se pudieron cargar los datos de envío"));
-  }, [cot]);
+    void cargar(true);
+  }, [cargar]);
 
   function toggle(correo: string) {
     setSeleccion((prev) => {
@@ -1253,10 +1282,23 @@ function EnviarForm({ cot, onDone }: { cot: Cot; onDone: (msg: string) => void }
 
   return (
     <div className="space-y-3">
-      {datos && !datos.pdfDisponible && (
+      {datos && !datos.pdfDisponible && datos.avisoPdf && (
+        <div className="font-mono text-[10px] text-amber bg-amber/10 border border-amber/20 rounded-lg px-3 py-2 space-y-2">
+          <p>{datos.avisoPdf}</p>
+          {/* Solo en REVISION: desde ENVIADA el PDF es el que tiene el cliente. */}
+          {datos.pdfDelCotizador && datos.cotizacion?.estatus === "REVISION" && (
+            <GenerarPdf
+              cotKey={key(cot)}
+              version={datos.cotizacion.version}
+              className={btnIcono}
+              onListo={() => void cargar(false)}
+            />
+          )}
+        </div>
+      )}
+      {datos?.avisoEncabezado && (
         <p className="font-mono text-[10px] text-amber bg-amber/10 border border-amber/20 rounded-lg px-3 py-2">
-          No se localizó el PDF en la carpeta de la cotización. Genera el PDF con el nombre
-          «{cot.folio} …» antes de enviar — el envío es obligatorio con PDF.
+          {datos.avisoEncabezado}
         </p>
       )}
 

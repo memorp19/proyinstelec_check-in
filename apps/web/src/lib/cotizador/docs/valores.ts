@@ -172,12 +172,19 @@ export function valoresDeMarcadores(d: DatosParaMarcadores): Valores {
 // ── La fecha, que se fija una vez ─────────────────────────────────────────────
 
 /**
- * La fecha del documento: la guardada, o la de hoy si es la primera vez.
+ * La fecha del documento: la guardada, o la de hoy si no hay.
  *
- * **No cambia al regenerar.** Una cotización que se rehace una semana después
- * —porque se corrigió un precio— tiene que seguir diciendo la fecha con la
- * que el cliente la recibió; si se moviera, dos PDF del mismo folio dirían
- * fechas distintas y ninguna sería la buena.
+ * **La fija el PDF definitivo, al mandar a revisión** (decisión del 23 nov).
+ * Un borrador de «Ver cotización» imprime la de hoy pero no la guarda: si la
+ * guardara, una cotización vista el lunes y mandada el viernes saldría con
+ * fecha del lunes.
+ *
+ * **Y ya no cambia al regenerar.** Un PDF que se rehace desde lo congelado
+ * tiene que seguir diciendo la fecha con la que se revisó; si se moviera, dos
+ * PDF del mismo folio dirían fechas distintas y ninguna sería la buena.
+ *
+ * «Hoy» es el de México, no el del servidor: en Vercel el reloj corre en UTC,
+ * y desde las 18:00 ya sería mañana.
  *
  * Devuelve también `esNueva` para que quien llame sepa que hay que guardarla.
  */
@@ -187,13 +194,16 @@ export function fechaFija(
 ): { fecha: string; esNueva: boolean } {
   const g = (guardada ?? "").trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(g)) return { fecha: g, esNueva: false };
-
-  const d = hoy();
-  const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-    d.getDate(),
-  ).padStart(2, "0")}`;
-  return { fecha: iso, esNueva: true };
+  return { fecha: FECHA_EN_MEXICO.format(hoy()), esNueva: true };
 }
+
+/** `aaaa-mm-dd` en la hora de México. `en-CA` es el formato ISO de fecha. */
+const FECHA_EN_MEXICO = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/Mexico_City",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
 
 // ── Lo que falta ──────────────────────────────────────────────────────────────
 

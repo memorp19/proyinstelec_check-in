@@ -1,13 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/src/auth";
 import { exigirPermiso } from "@/src/lib/permisos";
-import { getVersion, getVigente, parseCotKey } from "@/src/lib/cotizaciones";
+import { getVersion, getVigente, parseCotKey, seArmoEnElCotizador } from "@/src/lib/cotizaciones";
 import { enviarARevision } from "@/src/lib/cotizaciones-flujos";
+import { folioCotizacion } from "@/src/lib/folios";
 import { notaParaRevisor } from "@/src/lib/nota-revision";
 
 /**
  * Manda a revisión una cotización que no pasó por el cotizador (las cargadas
  * del control de 2026 no tienen armado que congelar).
+ *
+ * **Solo esas.** Una armada en el cotizador pasa por `armado/revision`, que
+ * congela los importes y genera el PDF definitivo. Por aquí llegaría a
+ * REVISION sin nada de eso: con el PDF de antes de una corrección —el que el
+ * revisor rechazó— o con ninguno, y el envío mandaría ese. La pantalla nunca
+ * la manda por aquí; la ruta lo rechaza igual, con 409, porque es el estado de
+ * la versión el que no lo permite.
  *
  * La versión viaja en el cuerpo: la pantalla sabe cuál está mirando, y dos
  * versiones pueden estar en PROCESO a la vez. Sin cuerpo se resuelve la
@@ -38,6 +46,20 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
       ? await getVigente(key.numero, key.anio)
       : await getVersion(key.numero, key.anio, pedida);
   if (!cotizacion) return NextResponse.json({ error: "No existe esa cotización" }, { status: 404 });
+
+  // Sobre la versión ya resuelta, que es la que se va a mover.
+  if (await seArmoEnElCotizador(cotizacion)) {
+    const folio = folioCotizacion(cotizacion.numero, cotizacion.anio, cotizacion.version);
+    return NextResponse.json(
+      {
+        error:
+          `La ${folio} se armó en el cotizador: mándala a revisión desde su «Vista previa», ` +
+          "que congela los importes y genera el PDF definitivo. Esta ruta es solo para las " +
+          "importadas, que no tienen armado.",
+      },
+      { status: 409 },
+    );
+  }
 
   try {
     const { cotizacion: actualizada, avisos } = await enviarARevision({

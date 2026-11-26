@@ -28,9 +28,9 @@ vi.mock("@/src/lib/cotizaciones", () => ({
   getVigente: vi.fn(),
   getVersion: vi.fn(),
   marcarNoAsignadas: vi.fn().mockResolvedValue(0),
-  // Las versiones de estas pruebas no pasaron por el cotizador: el PDF se
-  // busca por nombre, que es lo que estas pruebas ejercen.
-  pdfGeneradoDe: vi.fn().mockResolvedValue(null),
+  // Por omisión las versiones de estas pruebas no pasaron por el cotizador:
+  // el PDF se busca por nombre. Las del PDF definitivo lo cambian.
+  pdfDeLaVersion: vi.fn(),
   puedeEnviarseAlCliente: vi.fn(),
   registrarAprobacion: vi.fn().mockResolvedValue({}),
   updateCotizacion: vi.fn().mockResolvedValue(undefined),
@@ -61,6 +61,7 @@ import {
   getVigente,
   getVersion,
   marcarNoAsignadas,
+  pdfDeLaVersion,
   puedeEnviarseAlCliente,
   registrarAprobacion,
   updateCotizacion,
@@ -77,6 +78,7 @@ import {
   aprobarCotizacion,
   solicitarCorreccion,
   enviarAlCliente,
+  datosParaEnvio,
   ingresarOrdenCompra,
   generarOTSinOrdenCompra,
   DestinatariosNoValidos,
@@ -114,6 +116,7 @@ beforeEach(() => {
   });
   vi.mocked(apartarEnvio).mockResolvedValue(true);
   vi.mocked(devolverEnvio).mockResolvedValue(true);
+  vi.mocked(pdfDeLaVersion).mockResolvedValue({ delCotizador: false, pdfDriveId: null, foto: null });
   vi.mocked(listUsers).mockResolvedValue(usuarios as any);
   // Fiel al de verdad: busca por correo, sin distinguir mayúsculas.
   vi.mocked(getUserByEmail).mockImplementation(async (email: string) =>
@@ -468,7 +471,7 @@ describe("enviarAlCliente", () => {
 
     const enviar = enviarAlCliente(pedido({ visto: { ...VISTO, version: 1 } }));
 
-    await expect(enviar).rejects.toThrow('"PCOTOP-001-2026-1 …"');
+    await expect(enviar).rejects.toThrow("«PCOTOP-001-2026-1 …»");
     await expect(enviar).rejects.not.toThrow("-v1");
     // Y se busca por el canónico, que es lo que de verdad se llama el archivo
     expect(vi.mocked(buscarPdfCotizacion).mock.calls[0][0].folio).toBe("PCOTOP-001-2026-1");
@@ -1102,5 +1105,185 @@ describe("el texto tecleado va escapado en los correos", () => {
 
       expect(vi.mocked(enviarCorreo).mock.calls[0][0].html).toContain("Quedamos atentos");
     });
+  });
+});
+
+/**
+ * El PDF definitivo (PR 7a). En las versiones armadas en el ERP, el PDF que se
+ * revisa y se envía es el que salió de lo congelado: se busca solo por su id,
+ * y el correo dice lo mismo que ese PDF aunque alguien haya editado el
+ * encabezado después.
+ */
+describe("el PDF definitivo", () => {
+  const FOTO = {
+    encabezado: { cliente: "Aceros del Norte", titulo: "Subestación congelada", dirigidaA: "Ing. Congelado" },
+    documento: {} as never,
+    direccionContacto: null,
+    direccionCliente: null,
+  };
+  const ARMADA_CON_PDF = { delCotizador: true, pdfDriveId: "pdf-definitivo", foto: FOTO };
+  const ARMADA_SIN_PDF = { delCotizador: true, pdfDriveId: null, foto: FOTO };
+  const UN_PDF = {
+    pdf: { filename: "PCOTOP-001-2026 Subestación.pdf", contenido: Buffer.from("pdf") },
+    nombresEnCarpeta: ["PCOTOP-001-2026 Subestación.pdf"],
+  };
+
+  // Al contacto del cliente y con lo que vio la pantalla, como en las pruebas
+  // del envío: lo que se prueba aquí es el PDF, no los destinatarios.
+  const EN_REVISION = { version: 0, estatus: "REVISION" as const, fechaEnvio: null };
+  const enviar = (visto: { version: number; estatus: "REVISION" | "ENVIADA"; fechaEnvio: string | null } = EN_REVISION) =>
+    enviarAlCliente({
+      numero: 1, anio: 2026, destinatarios: [CONTACTO], visto,
+      remitente: { email: "alguien@empresa.test", nombre: "Alguien" },
+    });
+
+  beforeEach(() => {
+    vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({ puede: true, cotizacion: vigente as never });
+  });
+
+  describe("al enviar al cliente", () => {
+    it("armada y sin PDF definitivo: dice que se genere, sin buscar por nombre, apartar ni mandar nada", async () => {
+      vi.mocked(pdfDeLaVersion).mockResolvedValue(ARMADA_SIN_PDF);
+
+      const intento = enviar();
+
+      await expect(intento).rejects.toThrow("no tiene su PDF definitivo");
+      await expect(intento).rejects.toThrow("«Generar PDF»");
+      expect(buscarPdfCotizacion).not.toHaveBeenCalled();
+      expect(apartarEnvio).not.toHaveBeenCalled();
+      expect(enviarCorreo).not.toHaveBeenCalled();
+    });
+
+    // Un PDF con el mismo nombre en la carpeta puede ser un borrador viejo.
+    it("armada y con su definitivo: lo busca solo por id", async () => {
+      vi.mocked(pdfDeLaVersion).mockResolvedValue(ARMADA_CON_PDF);
+      vi.mocked(buscarPdfCotizacion).mockResolvedValue(UN_PDF);
+
+      await enviar();
+
+      expect(buscarPdfCotizacion).toHaveBeenCalledWith(
+        expect.objectContaining({ pdfDriveId: "pdf-definitivo", soloPorId: true }),
+      );
+      expect(vi.mocked(enviarCorreo).mock.calls[0][0].adjuntos?.[0].filename).toBe(
+        "PCOTOP-001-2026 Subestación.pdf",
+      );
+    });
+
+    it("ya enviada y su PDF desapareció de Drive: no se regenera, se recupera", async () => {
+      vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({
+        puede: true, cotizacion: { ...vigente, estatus: "ENVIADA" } as never,
+      });
+      vi.mocked(pdfDeLaVersion).mockResolvedValue(ARMADA_CON_PDF);
+      vi.mocked(buscarPdfCotizacion).mockResolvedValue({ pdf: null, nombresEnCarpeta: [] });
+
+      // Un reenvío: la pantalla la vio ya ENVIADA.
+      const intento = enviar({ version: 0, estatus: "ENVIADA", fechaEnvio: null });
+
+      await expect(intento).rejects.toThrow("no se regenera");
+      await expect(intento).rejects.toThrow("papelera");
+      expect(apartarEnvio).not.toHaveBeenCalled();
+      expect(enviarCorreo).not.toHaveBeenCalled();
+    });
+
+    it("importada: por nombre, y dice que su PDF lo hace el Apps Script", async () => {
+      vi.mocked(buscarPdfCotizacion).mockResolvedValue({ pdf: null, nombresEnCarpeta: ["otra-cosa.pdf"] });
+
+      const intento = enviar();
+
+      await expect(intento).rejects.toThrow("no se armó en el ERP");
+      await expect(intento).rejects.toThrow("Apps Script");
+      await expect(intento).rejects.toThrow("En la carpeta hay: otra-cosa.pdf.");
+      expect(buscarPdfCotizacion).toHaveBeenCalledWith(expect.objectContaining({ soloPorId: false }));
+    });
+
+    // El encabezado lo edita cualquiera con el módulo: el correo no puede
+    // decir un título y el PDF adjunto otro.
+    it("el asunto y el saludo salen de la foto, no del encabezado vivo", async () => {
+      vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({
+        puede: true,
+        cotizacion: {
+          ...vigente, cliente: "Cliente Renombrado", titulo: "Título editado", dirigida_a: "Otra Persona",
+        } as never,
+      });
+      vi.mocked(pdfDeLaVersion).mockResolvedValue(ARMADA_CON_PDF);
+      vi.mocked(buscarPdfCotizacion).mockResolvedValue(UN_PDF);
+
+      await enviar();
+
+      const correo = vi.mocked(enviarCorreo).mock.calls[0][0];
+      expect(correo.asunto).toBe("Cotización PCOTOP-001 - Aceros del Norte");
+      expect(correo.html).toContain("Estimado(a) Ing. Congelado:");
+      expect(correo.html).toContain("Subestación congelada");
+      expect(correo.html).not.toContain("Título editado");
+      expect(correo.html).not.toContain("Otra Persona");
+    });
+  });
+
+  describe("lo que ve la pantalla de envío", () => {
+    it("armada sin definitivo en REVISION: el aviso de generarlo, y no busca por nombre", async () => {
+      vi.mocked(pdfDeLaVersion).mockResolvedValue(ARMADA_SIN_PDF);
+
+      const datos = await datosParaEnvio({ numero: 1, anio: 2026, remitente: "alguien@empresa.test" });
+
+      expect(datos.pdfDelCotizador).toBe(true);
+      expect(datos.pdfDisponible).toBe(false);
+      expect(datos.avisoPdf).toContain("«Generar PDF»");
+      expect(buscarPdfCotizacion).not.toHaveBeenCalled();
+    });
+
+    it("con el definitivo, no hay aviso de PDF", async () => {
+      vi.mocked(pdfDeLaVersion).mockResolvedValue(ARMADA_CON_PDF);
+      vi.mocked(buscarPdfCotizacion).mockResolvedValue(UN_PDF);
+
+      const datos = await datosParaEnvio({ numero: 1, anio: 2026, remitente: "alguien@empresa.test" });
+
+      expect(datos.pdfDisponible).toBe(true);
+      expect(datos.avisoPdf).toBeNull();
+    });
+
+    it("si el encabezado cambió después de congelarse, lo avisa con los dos valores", async () => {
+      vi.mocked(puedeEnviarseAlCliente).mockResolvedValue({
+        puede: true, cotizacion: { ...vigente, titulo: "Título editado" } as never,
+      });
+      vi.mocked(pdfDeLaVersion).mockResolvedValue({
+        ...ARMADA_CON_PDF,
+        foto: {
+          ...FOTO,
+          encabezado: { ...FOTO.encabezado, cliente: vigente.cliente, dirigidaA: vigente.dirigida_a },
+        },
+      });
+      vi.mocked(buscarPdfCotizacion).mockResolvedValue(UN_PDF);
+
+      const datos = await datosParaEnvio({ numero: 1, anio: 2026, remitente: "alguien@empresa.test" });
+
+      expect(datos.avisoEncabezado).toContain(
+        "el título ahora dice «Título editado» y el PDF lleva «Subestación congelada»",
+      );
+      expect(datos.asuntoSugerido).toBe(`Cotización PCOTOP-001 - ${vigente.cliente}`);
+    });
+
+    it("sin foto (importada), sin aviso de encabezado", async () => {
+      vi.mocked(buscarPdfCotizacion).mockResolvedValue(UN_PDF);
+
+      const datos = await datosParaEnvio({ numero: 1, anio: 2026, remitente: "alguien@empresa.test" });
+
+      expect(datos.avisoEncabezado).toBeNull();
+      expect(datos.pdfDelCotizador).toBe(false);
+    });
+  });
+
+  // Lo que el revisor aprueba es el definitivo que la ruta acaba de generar.
+  it("el correo al revisor adjunta el definitivo, buscado solo por id", async () => {
+    vi.mocked(cambiarEstatus).mockResolvedValue({ ...vigente, estatus: "REVISION" } as never);
+    vi.mocked(pdfDeLaVersion).mockResolvedValue(ARMADA_CON_PDF);
+    vi.mocked(buscarPdfCotizacion).mockResolvedValue(UN_PDF);
+
+    await enviarARevision({ numero: 1, anio: 2026, version: 0, usuario: "alguien@empresa.test" });
+
+    expect(buscarPdfCotizacion).toHaveBeenCalledWith(
+      expect.objectContaining({ pdfDriveId: "pdf-definitivo", soloPorId: true }),
+    );
+    const alRevisor = vi.mocked(enviarCorreo).mock.calls[0][0];
+    expect(alRevisor.adjuntos?.[0].filename).toBe("PCOTOP-001-2026 Subestación.pdf");
   });
 });

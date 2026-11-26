@@ -208,9 +208,17 @@ export async function buscarPdfCotizacion(params: {
    * bautizado el archivo.
    */
   pdfDriveId?: string | null;
+  /**
+   * Solo por id, sin buscar por nombre. Es el caso de las versiones armadas
+   * en el ERP: su PDF es el definitivo, y uno con el mismo nombre en la
+   * carpeta puede ser un borrador viejo —con números que no son los
+   * congelados—.
+   */
+  soloPorId?: boolean;
 }): Promise<ResultadoPdfCotizacion> {
   const drive = await getDriveClient();
 
+  if (params.soloPorId && !params.pdfDriveId) return { pdf: null, nombresEnCarpeta: [] };
   if (params.pdfDriveId) {
     try {
       const meta = await drive.files.get({
@@ -229,6 +237,7 @@ export async function buscarPdfCotizacion(params: {
       // Lo apartaron o lo borraron a mano: se sigue buscando por nombre, que
       // es lo que había antes de que existiera la columna.
     }
+    if (params.soloPorId) return { pdf: null, nombresEnCarpeta: [] };
   }
   const res = await drive.files.list({
     q: `'${params.folderId}' in parents and mimeType='application/pdf' and trashed=false`,

@@ -395,3 +395,55 @@ describe("buscarPdfCotizacion — no confundir versiones", () => {
     });
   });
 });
+
+/**
+ * Las versiones armadas en el ERP: su PDF es el definitivo y se busca solo
+ * por id. Uno con el mismo nombre en la carpeta puede ser un borrador viejo,
+ * con números que no son los congelados.
+ */
+describe("buscarPdfCotizacion — solo por id", () => {
+  function driveCon(meta: { name: string; trashed: boolean } | Error) {
+    const get = vi.fn((params: { alt?: string }) => {
+      if (params.alt === "media") return Promise.resolve({ data: new ArrayBuffer(8) });
+      return meta instanceof Error ? Promise.reject(meta) : Promise.resolve({ data: { id: "pdf-d", ...meta } });
+    });
+    const list = vi.fn().mockResolvedValue({
+      data: { files: [{ id: "otro", name: "PCOTOP-454-2026 Borrador viejo.pdf" }] },
+    });
+    getDriveClient.mockResolvedValue({ files: { get, list } });
+    return { get, list };
+  }
+
+  const buscar = (pdfDriveId: string | null, soloPorId: boolean) =>
+    buscarPdfCotizacion({ folderId: "carpeta-454", folio: "PCOTOP-454-2026", pdfDriveId, soloPorId });
+
+  it("con su id, ese", async () => {
+    driveCon({ name: "PCOTOP-454-2026 Pruebas.pdf", trashed: false });
+    expect((await buscar("pdf-d", true)).pdf?.filename).toBe("PCOTOP-454-2026 Pruebas.pdf");
+  });
+
+  it("sin id, nada, y ni siquiera mira la carpeta", async () => {
+    const { list } = driveCon({ name: "x", trashed: false });
+    expect((await buscar(null, true)).pdf).toBeNull();
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("si lo mandaron a la papelera, nada: no cae al nombre", async () => {
+    const { list } = driveCon({ name: "PCOTOP-454-2026 Pruebas.pdf", trashed: true });
+    expect((await buscar("pdf-d", true)).pdf).toBeNull();
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("si ya no existe, tampoco cae al nombre", async () => {
+    const { list } = driveCon(new Error("File not found"));
+    expect((await buscar("pdf-d", true)).pdf).toBeNull();
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  // Las importadas siguen como siempre: si el id no sirve, por nombre.
+  it("sin soloPorId, un id en la papelera sí cae al nombre", async () => {
+    const { list } = driveCon({ name: "PCOTOP-454-2026 Pruebas.pdf", trashed: true });
+    expect((await buscar("pdf-d", false)).pdf?.filename).toBe("PCOTOP-454-2026 Borrador viejo.pdf");
+    expect(list).toHaveBeenCalled();
+  });
+});

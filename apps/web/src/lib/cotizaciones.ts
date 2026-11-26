@@ -1,6 +1,7 @@
-import { and, desc, eq, ilike, isNull, max, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, ilike, isNotNull, isNull, max, ne, or, sql, type SQL } from "drizzle-orm";
 import { getDb } from "../db";
-import { aprobaciones, cotArmado, cotizaciones } from "../db/schema";
+import { aprobaciones, cotArmado, cotImportes, cotPartidas, cotizaciones } from "../db/schema";
+import { leerFoto, type FotoDelDocumento } from "./cotizador/foto";
 import { folioCotizacion, pad } from "./folios";
 import { registrarBitacora } from "./bitacora";
 
@@ -228,34 +229,189 @@ export async function getVersion(
   return fila ? aCotizacion(fila) : null;
 }
 
+/** Qué PDF tiene una versión, y de dónde tiene que salir. */
+export interface PdfDeLaVersion {
+  /**
+   * Si se armó en el ERP: pasó a revisión desde el cotizador y tiene lo
+   * congelado. Su PDF es el definitivo y se busca **solo por id**. Las
+   * importadas no: su PDF lo hace el Apps Script y se busca por nombre.
+   */
+  delCotizador: boolean;
+  /** El PDF definitivo, si ya se generó. Un borrador de «Ver cotización» no cuenta. */
+  pdfDriveId: string | null;
+  /** La foto de lo que se imprimió, para avisar si lo vivo ya no coincide. */
+  foto: FotoDelDocumento | null;
+}
+
 /**
- * El id del PDF que el ERP generó para esa versión, si lo hay.
+ * El PDF de una versión, para enviarla o para avisar que falta.
  *
- * Vive en `cot_armado` y no en `cotizaciones` porque es **por versión**: cada
- * una tiene su documento. Se consulta aparte para no cargar con una columna
- * del cotizador todo lo que lee cotizaciones.
+ * Vive en `cot_armado` y `cot_importes`, no en `cotizaciones`, porque es **por
+ * versión**: cada una tiene su documento. Se consulta aparte para no cargar con
+ * columnas del cotizador todo lo que lee cotizaciones.
  *
- * Es lo que hace que el envío al cliente encuentre el PDF **por id** en vez
- * de por nombre. `null` cuando la versión no pasó por el cotizador —todas las
- * importadas—, y entonces se busca por nombre, como siempre.
+ * Solo cuenta el PDF **definitivo** (`pdf_definitivo_at`). Un borrador de «Ver
+ * cotización» pudo salir antes del último cambio, y mandarlo sería mandar
+ * números que no son los congelados.
  */
-export async function pdfGeneradoDe(cotizacion: {
+export async function pdfDeLaVersion(cotizacion: {
   numero: number;
   anio: number;
   version: number;
-}): Promise<string | null> {
-  const [fila] = await getDb()
-    .select({ pdfDriveId: cotArmado.pdfDriveId })
+}): Promise<PdfDeLaVersion> {
+  const db = getDb();
+  const [[armado], [importes]] = await Promise.all([
+    db
+      .select({ pdfDriveId: cotArmado.pdfDriveId, pdfDefinitivoAt: cotArmado.pdfDefinitivoAt })
+      .from(cotArmado)
+      .where(
+        and(
+          eq(cotArmado.numero, cotizacion.numero),
+          eq(cotArmado.anio, cotizacion.anio),
+          eq(cotArmado.version, cotizacion.version),
+        ),
+      )
+      .limit(1),
+    db
+      .select({ foto: cotImportes.foto })
+      .from(cotImportes)
+      .where(
+        and(
+          eq(cotImportes.numero, cotizacion.numero),
+          eq(cotImportes.anio, cotizacion.anio),
+          eq(cotImportes.version, cotizacion.version),
+        ),
+      )
+      .limit(1),
+  ]);
+  return {
+    delCotizador: importes !== undefined,
+    pdfDriveId: armado?.pdfDefinitivoAt ? armado.pdfDriveId ?? null : null,
+    foto: leerFoto(importes?.foto),
+  };
+}
+
+/**
+ * Si la versión se armó en el cotizador: tiene partidas, o ya se congeló
+ * alguna vez.
+ *
+ * Esas pasan a revisión solo por la ruta del cotizador, que congela los
+ * importes y genera el PDF definitivo. Lo congelado cuenta aunque ya no le
+ * queden partidas: es una versión que regresó de una corrección, y su PDF es
+ * el que el revisor rechazó.
+ */
+export async function seArmoEnElCotizador(v: {
+  numero: number;
+  anio: number;
+  version: number;
+}): Promise<boolean> {
+  const db = getDb();
+  const [[partida], [congelado]] = await Promise.all([
+    db
+      .select({ id: cotPartidas.id })
+      .from(cotPartidas)
+      .where(
+        and(
+          eq(cotPartidas.numero, v.numero),
+          eq(cotPartidas.anio, v.anio),
+          eq(cotPartidas.version, v.version),
+        ),
+      )
+      .limit(1),
+    db
+      .select({ numero: cotImportes.numero })
+      .from(cotImportes)
+      .where(
+        and(
+          eq(cotImportes.numero, v.numero),
+          eq(cotImportes.anio, v.anio),
+          eq(cotImportes.version, v.version),
+        ),
+      )
+      .limit(1),
+  ]);
+  return partida !== undefined || congelado !== undefined;
+}
+
+/**
+ * Los estatus en los que el PDF definitivo es el de la versión.
+ *
+ * A todos se llega pasando por REVISION, que es donde se genera. PROCESO no:
+ * una versión regresa ahí cuando el revisor pide corregirla, y su PDF —el que
+ * se rechazó— sigue marcado como definitivo hasta que se vuelva a mandar.
+ * CANCELADA y las DEPENDIENTE también pueden venir de PROCESO.
+ */
+const ESTATUS_CON_PDF_DEFINITIVO: readonly string[] = ["REVISION", "ENVIADA", "ASIGNADA", "NO ASIGNADA"];
+
+/**
+ * El enlace al PDF definitivo de una versión, o `null` si no tiene uno que
+ * valga.
+ *
+ * Es lo primero que se busca después de mandarla a revisión, y la tarjeta y la
+ * pantalla del armado lo enseñan con esta misma regla. Un borrador de «Ver
+ * cotización» no cuenta: pudo salir antes del último cambio.
+ */
+export function enlaceDelPdfDefinitivo(v: {
+  estatus: string;
+  pdfDriveId: string | null;
+  pdfDefinitivoAt: Date | null;
+}): string | null {
+  if (!v.pdfDriveId || !v.pdfDefinitivoAt) return null;
+  if (!ESTATUS_CON_PDF_DEFINITIVO.includes(v.estatus)) return null;
+  return `https://drive.google.com/file/d/${encodeURIComponent(v.pdfDriveId)}/view`;
+}
+
+/**
+ * El enlace al PDF definitivo de cada versión de una lista, en una sola
+ * consulta, por folio. Las que no tienen uno que valga no aparecen.
+ *
+ * Solo pregunta por las que están en un estatus que lo puede tener: la lista
+ * entera del año sería pedir de más.
+ */
+export async function pdfsDefinitivosDe(
+  versiones: Array<{ numero: number; anio: number; version: number; estatus: string }>,
+): Promise<Map<string, string>> {
+  const fuera = new Map<string, string>();
+  const candidatas = versiones.filter((v) => ESTATUS_CON_PDF_DEFINITIVO.includes(v.estatus));
+  if (candidatas.length === 0) return fuera;
+
+  const estatusDe = new Map(
+    candidatas.map((v) => [folioCotizacion(v.numero, v.anio, v.version), v.estatus]),
+  );
+  const filas = await getDb()
+    .select({
+      numero: cotArmado.numero,
+      anio: cotArmado.anio,
+      version: cotArmado.version,
+      pdfDriveId: cotArmado.pdfDriveId,
+      pdfDefinitivoAt: cotArmado.pdfDefinitivoAt,
+    })
     .from(cotArmado)
     .where(
       and(
-        eq(cotArmado.numero, cotizacion.numero),
-        eq(cotArmado.anio, cotizacion.anio),
-        eq(cotArmado.version, cotizacion.version),
+        isNotNull(cotArmado.pdfDefinitivoAt),
+        or(
+          ...candidatas.map((v) =>
+            and(
+              eq(cotArmado.numero, v.numero),
+              eq(cotArmado.anio, v.anio),
+              eq(cotArmado.version, v.version),
+            ),
+          ),
+        ),
       ),
-    )
-    .limit(1);
-  return fila?.pdfDriveId ?? null;
+    );
+
+  for (const f of filas) {
+    const folio = folioCotizacion(f.numero, f.anio, f.version);
+    const enlace = enlaceDelPdfDefinitivo({
+      estatus: estatusDe.get(folio) ?? "",
+      pdfDriveId: f.pdfDriveId,
+      pdfDefinitivoAt: f.pdfDefinitivoAt,
+    });
+    if (enlace) fuera.set(folio, enlace);
+  }
+  return fuera;
 }
 
 /** La versión vigente (la de mayor número de versión) o null si no existe. */

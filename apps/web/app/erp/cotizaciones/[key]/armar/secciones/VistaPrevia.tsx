@@ -270,7 +270,7 @@ export function VistaPrevia({
               ? `Captura ${faltantes.length === 1 ? "el dato que falta" : "los datos que faltan"} y vuelve: el botón se enciende solo.`
               : sinArmado
                 ? "Al mandarla, el revisor la verá tal como está."
-                : "Al mandarla, estos importes se congelan: el revisor ve estos números y ya no se mueven."}
+                : "Al mandarla, estos importes se congelan y se genera el PDF definitivo, que es el que se revisa y se envía. Tarda unos segundos."}
           </p>
           <button className={btnGhost} onClick={onCerrar}>
             Seguir editando
@@ -280,7 +280,7 @@ export function VistaPrevia({
             disabled={enviando || faltantes.length > 0}
             onClick={onMandar}
           >
-            {enviando ? "Mandando…" : "Mandar a revisión"}
+            {enviando ? (sinArmado ? "Mandando…" : "Generando el PDF y mandando a revisión…") : "Mandar a revisión"}
           </button>
         </div>
       </div>
