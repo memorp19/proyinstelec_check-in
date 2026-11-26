@@ -26,9 +26,40 @@ const withPWA = require("next-pwa")({
   ],
 });
 
+/**
+ * Los encabezados de seguridad, en TODAS las respuestas: páginas, `/api` y
+ * archivos estáticos (B11, docs/seguridad-erp.md §3.6).
+ *
+ * - **Que nadie meta el ERP en un marco.** Una página ajena podría mostrarlo
+ *   dentro de la suya y engañar a un aprobador para que haga clic donde no
+ *   ve. `frame-ancestors 'none'` es la regla moderna; `X-Frame-Options: DENY`,
+ *   la que entienden los navegadores viejos. Esto decide quién puede
+ *   enmarcar al ERP, no qué enmarca el ERP: el visor del PDF de Drive (un
+ *   iframe nuestro hacia drive.google.com) sigue igual.
+ * - **La CSP lleva solo `frame-ancestors`.** Una CSP completa (scripts,
+ *   estilos, conexiones) pide inventariar todo lo que carga la app, y un
+ *   error ahí rompe el inicio de sesión o la PWA. Va aparte, si se decide.
+ * - **`nosniff`:** el navegador no adivina el tipo de un archivo; usa el que
+ *   dice el servidor. Así una foto subida no se puede ejecutar como script.
+ * - **`Referrer-Policy`:** a otros sitios solo viaja el dominio, nunca la
+ *   ruta (que lleva folios y llaves). El inicio de sesión con Google no la
+ *   necesita.
+ *
+ * La prueba es `src/__tests__/seguridad/encabezados.test.ts`.
+ */
+const ENCABEZADOS_DE_SEGURIDAD = [
+  { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+  { key: "X-Frame-Options", value: "DENY" },
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+];
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  async headers() {
+    return [{ source: "/:path*", headers: ENCABEZADOS_DE_SEGURIDAD }];
+  },
   images: {
     remotePatterns: [
       // Google profile pictures (OAuth avatar)

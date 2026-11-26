@@ -26,7 +26,7 @@ reconocerlo.
 |---|---|---|---|
 | **Altos (A1–A12)** | 8 | 4 | 0 |
 | **Medios (M1–M13)** | 6 | 6 | 1 |
-| **Bajos (B1–B12)** | 6 | 6 | 0 |
+| **Bajos (B1–B12)** | 7 | 5 | 0 |
 
 Los ⏳ caen en cinco PR. Tres ya estaban previstos, uno sale de este mapa y
 otro es la propuesta del folio. El primero que salió del mapa, «Enviar al
@@ -36,7 +36,7 @@ cliente», ya entró:
 |---|---|---|
 | ✅ **Enviar al cliente** | M7: destinatarios libres y el «Mensaje» como HTML; el doble envío del M11 (§3.2) | Era lo único que **salía de la empresa**. |
 | **Autoaprobación** | A4, y que «Elaboró» decida quién arma (§3.1) | Ya estaba en la brecha (punto 7). |
-| **Endurecimiento** *(nuevo, chico)* | M11 (transiciones en una sentencia), B11 (iframe), la foto del check-in (§3.4), la bitácora del encabezado (§3.7) | Cambios cortos. La pantalla solo cambia para avisar «alguien más la cambió». |
+| **Endurecimiento** *(nuevo, chico)* | M11 (transiciones en una sentencia), ✅ B11 (iframe), ✅ la foto del check-in (§3.4), la bitácora del encabezado (§3.7) | Cambios cortos. La pantalla solo cambia para avisar «alguien más la cambió». Va en dos partes: la primera no toca cotizaciones (B11 y §3.4), para no chocar con los PR que esperan; M11 y §3.7, después. |
 | **Eliminación auditada** | M9: cotizaciones y contactos | Ya estaba en el plan (§6.9). |
 | **El folio** *(propuesta, §6)* | B7: el número y el año los decide el servidor (el año, decidido el 20 nov) | Cuando se apruebe la propuesta. |
 | **Migración de OT y compras** | A1, A7, A12, M1–M3, M5, B3–B6 | Nada de eso existe todavía en el ERP: se escribe con las reglas de la §2. |
@@ -271,27 +271,42 @@ Lo que había:
   versiones (`marcarNoAsignadas`) y registrar la OC posterior (`WHERE estatus
   = 'ASIGNADA'`).
 
-### 3.4 La foto del check-in acepta cualquier sesión (como el A8, en chico)
+### 3.4 La foto del check-in aceptaba cualquier sesión (como el A8, en chico) — ✅ cerrado
 
-- **Quién tiene sesión:** `signIn` acepta **cualquier cuenta de Google**
-  (`src/auth.ts:59`); el `hd` de `auth.config.ts:40` es solo una sugerencia
-  a Google. Es a propósito: así entran los temporales con su Gmail. Pero
-  quien entra queda con sesión y el perfil incompleto, y el middleware solo
-  lo detiene en las páginas, no en `/api`.
-- **`POST /api/upload`:** pide sesión y nada más. El proyecto y el nombre de
-  la carpeta llegan del navegador (`app/api/upload/route.ts:38-67`). Cualquier
-  cuenta de Google puede subir imágenes de hasta 8 MB a la carpeta de
-  check-in de la empresa, con el nombre de cualquier trabajador.
-- **`POST /api/jornada`** sí revisa que un temporal fiche solo en sus
-  proyectos (`app/api/jornada/route.ts:50-58`, prueba en
-  `api/jornada.test.ts`). Guarda el `driveFileId` y el enlace que le manda
-  el navegador, pero solo se le enseñan a la misma persona.
-- **⏳ PR de endurecimiento:**
-  - `upload` exige el perfil completo y rol `campo` o `admin`;
-  - toma el proyecto de la asignación, como `jornada`, y el nombre de la
-    sesión;
-  - al cerrarlo, su excepción en `rutas-protegidas.test.ts` se queda (sigue
-    siendo de solo sesión), pero sin «PENDIENTE».
+Lo que había:
+- **Quién tiene sesión:** `signIn` acepta **cualquier cuenta de Google**; el
+  `hd` de `auth.config.ts` es solo una sugerencia a Google. Es a propósito:
+  así entran los temporales con su Gmail. Pero quien entra queda con sesión y
+  el perfil incompleto, y el middleware solo lo detiene en las páginas, no en
+  `/api`.
+- **`POST /api/upload`** pedía sesión y nada más. El proyecto, la fecha y el
+  nombre de la carpeta llegaban del navegador: cualquier cuenta de Google
+  podía subir imágenes a la carpeta de check-in de la empresa, con el nombre
+  de cualquier trabajador, y crear carpetas con cualquier nombre.
+
+**✅ PR de endurecimiento:**
+- **Quién:** sesión, y además perfil completo, activo y rol `campo` o
+  `admin`, leídos de la base. Los temporales con Gmail siguen subiendo.
+- **A dónde, lo decide el servidor:**
+  - en el check-in, el proyecto que se pide, si puede fichar en él. Es la
+    misma regla de `/api/jornada` (`puedeFicharEn`, `src/lib/fichaje.ts`);
+  - en el check-out, el proyecto de su jornada, por su id: tiene que ser de
+    quien llama y seguir abierta;
+  - la carpeta, `Proyectos/{proyecto}/{fecha}/{nombre}`, con los nombres de la
+    base, y la fecha y la hora de México del servidor (también en el nombre
+    del archivo, `checkin_HHMM`).
+- **Qué:** JPEG, PNG o WebP reconocidos por sus bytes (`tipoDeFoto`,
+  `src/lib/fotos.ts`), hasta 3 MB. Más no cabe en el cuerpo que deja pasar
+  Vercel. La pantalla comprime antes (1600 px, JPEG al 85 %).
+- **Una pantalla vieja** (la PWA guardada en el teléfono) recibe 400 con
+  «Actualiza la aplicación (cierra y vuelve a abrirla).». La app de campo se
+  recarga sola en cuanto hay versión nueva, si no hay trabajo a medias.
+- **La pantalla avisa** cuando la foto no sube, y el check-in sigue.
+- La excepción de `upload` en `rutas-protegidas.test.ts` se queda (sigue
+  siendo de solo sesión), ya sin «PENDIENTE». Prueba: `api/upload.test.ts`.
+
+Sigue igual: `/api/jornada` guarda el `driveFileId` y el enlace que le manda
+el navegador, pero solo se le enseñan a la misma persona (B4).
 
 ### 3.5 Un contacto se borra (el M9)
 
@@ -302,13 +317,24 @@ Lo que había:
   - deja de ofrecerse para enviar;
   - se puede reactivar.
 
-### 3.6 El ERP se puede meter en un iframe (el B11)
+### 3.6 El ERP se podía meter en un iframe (el B11) — ✅ cerrado
 
-- **Qué pasa:** `next.config.js` no manda `X-Frame-Options` ni
-  `Content-Security-Policy: frame-ancestors`. Una página ajena puede mostrar
-  el ERP en un marco y engañar a un aprobador para que haga clic.
-- **⏳ PR de endurecimiento:** `headers()` en `next.config.js` con
-  `X-Frame-Options: DENY` y `frame-ancestors 'none'`.
+Lo que había: `next.config.js` no mandaba `X-Frame-Options` ni
+`Content-Security-Policy: frame-ancestors`. Una página ajena podía mostrar el
+ERP en un marco y engañar a un aprobador para que hiciera clic.
+
+**✅ PR de endurecimiento:** `headers()` en `next.config.js`, para todas las
+respuestas (páginas, `/api`, estáticos y las redirecciones del middleware):
+- `Content-Security-Policy: frame-ancestors 'none'` y `X-Frame-Options: DENY`;
+- de paso, `X-Content-Type-Options: nosniff` y
+  `Referrer-Policy: strict-origin-when-cross-origin`.
+
+La CSP lleva **solo** `frame-ancestors`. Una completa (scripts, estilos,
+conexiones) pide inventariar lo que carga la app, y un error ahí rompe el
+inicio de sesión o la PWA; si se quiere, va aparte. El visor del PDF de Drive
+no cambia: es el ERP el que enmarca a Drive, no al revés.
+
+Prueba: `src/__tests__/seguridad/encabezados.test.ts` (§4.3).
 
 ### 3.7 Los cambios del encabezado no dejan rastro completo
 
@@ -365,7 +391,7 @@ la pena revisar esa lista en Drive.
 
 ---
 
-## 4. Las dos pruebas nuevas
+## 4. Las pruebas de seguridad
 
 ### 4.1 `src/__tests__/seguridad/rutas-protegidas.test.ts`
 
@@ -383,7 +409,7 @@ Es el equivalente de «funciones públicas sin permiso» (A3, A6, A8, M13).
   - `auth/[...nextauth]`, que no pide nada porque es el inicio de sesión;
   - las de check-in y perfil, que piden solo sesión y trabajan con los datos
     de quien llama;
-  - `upload`, marcada PENDIENTE (§3.4).
+  - `upload`, que el PR de endurecimiento sacó de PENDIENTE (§3.4).
   - Si una excepción ya no existe, la prueba falla.
 - **Se comprobó que falla:** quitando el `if (rechazo)` de una ruta, la ruta
   contesta 200 y la prueba lo marca. Una ruta nueva que consulta la base
@@ -418,6 +444,20 @@ Es el equivalente del A5 y el M10.
 - **Se comprobó que falla:** quitando el `escaparHtml` del título en el
   correo al cliente, devolviendo el título de `plantillaCorreo` a como estaba
   y agregando un `dangerouslySetInnerHTML`.
+
+### 4.3 `src/__tests__/seguridad/encabezados.test.ts`
+
+Es la del B11, y llegó con el PR de endurecimiento.
+
+- **Qué revisa:** lee `next.config.js` como lo carga Next, con `next-pwa`
+  encima, y con el mismo comparador de rutas de Next comprueba que páginas,
+  `/api`, el inicio de sesión y los estáticos llevan `frame-ancestors 'none'`,
+  `X-Frame-Options: DENY`, `nosniff` y `Referrer-Policy`.
+- **La CSP:** tiene que traer solo `frame-ancestors`. Ampliarla es una
+  decisión aparte, y la prueba obliga a tomarla.
+- **Se comprobó que falla:** sin `headers()`, con una regla que deja fuera la
+  raíz o solo cubre `/erp`, con `SAMEORIGIN`, con otra directiva en la CSP y
+  sin `nosniff`.
 
 ---
 
@@ -466,13 +506,13 @@ Es el equivalente del A5 y el M10.
 | B2 | Una revisión de cobros sin chequeo, que cualquiera disparaba | 1 y 10 | ✅ Por diseño | No hay procesos sin ruta; toda ruta, en `rutas-protegidas.test.ts` |
 | B3 | Se tomaba un folio de requisición apartado para otra persona | 4 · los folios los da el contador | ⏳ Migración de OT y compras | `src/lib/folios.ts` |
 | B4 | IDs de archivos de Drive llegaban del navegador | 4 · solo IDs de esa solicitud | ⏳ Migración de OT y compras | En el check-in, el enlace de la foto también llega del navegador, pero solo se le enseña a la misma persona (§3.4) |
-| B5 | El tipo de archivo se aceptaba por lo que decía el navegador; los gastos sin tope | 4 | ⏳ Migración de OT y compras | Hoy: fotos con lista de tipos y tope de tamaño (`upload`, `perfil/foto`) |
+| B5 | El tipo de archivo se aceptaba por lo que decía el navegador; los gastos sin tope | 4 | ⏳ Migración de OT y compras | Hoy: las fotos (`upload`, `perfil/foto`) se reconocen por sus bytes y tienen tope de tamaño (§3.4) |
 | B6 | Una sola persona firmaba los cuatro pasos de una requisición | 3 | ⏳ Migración de OT y compras | Decidir con la regla de compras: al menos «Aprobó» ≠ quien elaboró |
 | B7 | El alta confiaba en la versión y el año que mandaba el navegador | 4 | ⏳ El folio (§6) | La versión ya no: `createCotizacion` la fuerza a 0 (`lib/cotizaciones.test.ts`, «crea la versión 0 en PROCESO…»). El número y el año sí llegan del navegador. Decidido el 20 nov: el año lo pone el servidor con la fecha de México, sin excepción (§2.3) |
 | B8 | Un enlace de correo aprobaba con un solo GET | 1 · aprobar es un POST con sesión y permiso | ✅ Por diseño | Los correos llevan a la pantalla (`/erp/revision`), no a una acción |
 | B9 | Si no se podía leer el estatus, la cotización se trataba como editable | 6 | ✅ Por diseño | Si la lectura falla, la ruta contesta error y no guarda |
 | B10 | Unas 45 herramientas del editor sin chequeo, que enseñaban IDs y costos | 10 | ✅ Por diseño | Son scripts locales (`scripts/`), con guardas contra producción |
-| B11 | La página se podía incrustar en cualquier sitio | — | ⏳ Endurecimiento | §3.6 |
+| B11 | La página se podía incrustar en cualquier sitio | — | ✅ Endurecimiento | `frame-ancestors 'none'` y `X-Frame-Options: DENY` en todas las respuestas (`next.config.js`, `seguridad/encabezados.test.ts`, §3.6) |
 | B12 | En un activador, la identidad caía a la del dueño | 3 | ✅ Por diseño | Quién es lo dice el JWT de la sesión; la cuenta de servicio de Google nunca se registra como usuario |
 
 ---

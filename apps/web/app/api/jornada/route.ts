@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/src/auth";
 import { createJornada, getOpenJornada } from "@/src/lib/jornadas";
 import { getUserById } from "@/src/lib/users";
+import { puedeFicharEn } from "@/src/lib/fichaje";
 import { syncToOdooAsync } from "@/src/lib/odoo";
 import type { DeviceInfo } from "@/src/lib/device-info";
 import { DEMO_MODE } from "@/src/demo";
@@ -49,11 +50,12 @@ export async function POST(req: NextRequest) {
   }
 
   // Los temporales sólo pueden fichar en sus proyectos asignados. La asignación
-  // vive en la tabla puente, no en el token, así que se lee de la base.
-  const isDev = process.env.NODE_ENV === "development";
-  if (!isDev && session.user.tipo === "temporal") {
+  // vive en la tabla puente, no en el token, así que se lee de la base. La
+  // regla es la misma de la foto del check-in (`puedeFicharEn`).
+  if (session.user.tipo === "temporal") {
     const perfil = await getUserById(usuarioId);
-    if (!perfil?.proyectos_asignados.includes(proyectoId)) {
+    const asignados = perfil?.proyectos_asignados ?? [];
+    if (!puedeFicharEn({ tipo: "temporal", proyectos_asignados: asignados }, proyectoId)) {
       return NextResponse.json({ error: "No tienes acceso a este proyecto" }, { status: 403 });
     }
   }

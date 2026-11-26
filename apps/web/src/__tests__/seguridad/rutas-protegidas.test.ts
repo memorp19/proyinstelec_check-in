@@ -115,9 +115,11 @@ const EXCEPCIONES: Record<string, { exige: "nada" | "sesion"; porque: string }> 
   upload: {
     exige: "sesion",
     porque:
-      "La foto del check-in. PENDIENTE (docs/seguridad-erp.md, «Las rutas de solo sesión»): " +
-      "acepta cualquier sesión, también la de un temporal con el perfil incompleto, y el " +
-      "proyecto y el nombre de la carpeta llegan del navegador.",
+      "La foto del check-in y del check-out de quien llama. Pide sesión porque los temporales " +
+      "entran con cualquier cuenta de Google, y además perfil completo, activo y rol campo o " +
+      "admin, leídos de la base. La carpeta la decide el servidor: el proyecto (si puede " +
+      "fichar en él, o el de su jornada), la fecha y la hora de México, y su nombre " +
+      "(docs/seguridad-erp.md §3.4; prueba en api/upload.test.ts).",
   },
 };
 

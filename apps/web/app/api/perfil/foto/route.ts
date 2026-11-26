@@ -4,6 +4,7 @@ import { auth } from "@/src/auth";
 import { updatePerfil } from "@/src/lib/users";
 import { uploadPhoto } from "@/src/lib/drive";
 import { DEMO_MODE } from "@/src/demo";
+import { EXTENSION_DE_FOTO, tipoDeFoto } from "@/src/lib/fotos";
 
 const MAX_SIZE_BYTES = 4 * 1024 * 1024;
 
@@ -15,6 +16,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ foto_url: session.user.image ?? null });
   }
 
+  // `mimeType` se acepta pero no se usa: el tipo sale de los bytes.
   let body: { base64: string; mimeType?: string };
   try {
     body = await req.json();
@@ -29,13 +31,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "La imagen supera el tamaño máximo (4 MB)" }, { status: 413 });
   }
 
-  const mimeType = body.mimeType ?? "image/jpeg";
-  if (!["image/jpeg", "image/png", "image/webp"].includes(mimeType)) {
-    return NextResponse.json({ error: "Tipo de archivo no permitido" }, { status: 415 });
+  // El tipo, por los bytes: el que dice el navegador lo controla quien llama.
+  const mimeType = tipoDeFoto(buffer);
+  if (!mimeType) {
+    return NextResponse.json({ error: "La foto tiene que ser JPEG, PNG o WebP." }, { status: 415 });
   }
 
   const fecha = new Date().toISOString().slice(0, 10);
-  const ext = mimeType.split("/")[1];
+  const ext = EXTENSION_DE_FOTO[mimeType];
 
   try {
     const result = await uploadPhoto({
