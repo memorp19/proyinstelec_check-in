@@ -1,18 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { useSession } from "next-auth/react";
 import { getCurrentPosition } from "@/src/lib/geolocation";
 import { getDeviceInfo } from "@/src/lib/device-info";
 import { enqueue } from "@/src/lib/sync-queue";
+import { avisoSinConexion, subirFotoDeJornada, type FotoSubida } from "@/src/lib/foto-jornada";
 import { PhotoCapture } from "./PhotoCapture";
+import { useSinRecargar } from "./ActualizadorPwa";
 
 interface CheckoutCardProps {
   jornadaId: string;
   checkInTimestamp: string;
-  proyectoNombre: string;
-  trabajadorNombre: string;
-  onCheckoutSuccess: (duracionMinutos: number) => void;
+  /** `avisoFoto`: si la foto no subió, qué decirle a la persona. El check-out sí quedó. */
+  onCheckoutSuccess: (duracionMinutos: number, avisoFoto?: string) => void;
 }
 
 type Status = "idle" | "locating" | "uploading" | "saving" | "done" | "error";
@@ -20,11 +20,8 @@ type Status = "idle" | "locating" | "uploading" | "saving" | "done" | "error";
 export function CheckoutCard({
   jornadaId,
   checkInTimestamp,
-  proyectoNombre,
-  trabajadorNombre,
   onCheckoutSuccess,
 }: CheckoutCardProps) {
-  const { data: session } = useSession();
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
   const [observaciones, setObservaciones] = useState("");
@@ -34,6 +31,14 @@ export function CheckoutCard({
   const [showNota, setShowNota] = useState(false);
   const [notaText, setNotaText] = useState("");
   const [photoFile, setPhotoFile] = useState<File | null>(null);
+
+  const isLoading = ["locating", "uploading", "saving"].includes(status);
+
+  // La tarjeta vive toda la jornada, así que solo frena la recarga cuando hay
+  // algo que se perdería: una foto tomada, una nota o un cierre en curso.
+  useSinRecargar(
+    Boolean(photoFile) || isLoading || observaciones.trim() !== "" || showNota || showIncident,
+  );
 
   const handleCheckout = async () => {
     if (!photoFile) {
@@ -49,37 +54,17 @@ export function CheckoutCard({
       const deviceInfo = getDeviceInfo();
       const timestamp = new Date().toISOString();
 
-      let driveFileId: string | undefined;
-      let driveWebViewLink: string | undefined;
-      let fotoHash: string | undefined;
-
+      // Como en el check-in: la foto va aparte y nunca tumba el cierre. El
+      // proyecto lo saca el servidor de la jornada, no de la pantalla.
+      let foto: FotoSubida | undefined;
+      let avisoFoto: string | undefined;
       if (navigator.onLine) {
         setStatus("uploading");
-        const base64 = await fileToBase64(photoFile);
-        const localDate = new Date().toLocaleDateString("es-MX", {
-          timeZone: "America/Mexico_City",
-          year: "numeric", month: "2-digit", day: "2-digit",
-        }).split("/").reverse().join("-");
-
-        const uploadRes = await fetch("/api/upload", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            base64,
-            filename: `checkout_${timestamp.slice(11, 16).replace(":", "")}.jpg`,
-            mimeType: photoFile.type || "image/jpeg",
-            proyectoNombre,
-            fecha: localDate,
-            trabajadorNombre,
-          }),
-        });
-
-        if (uploadRes.ok) {
-          const d = await uploadRes.json();
-          driveFileId = d.driveFileId;
-          driveWebViewLink = d.webViewLink;
-          fotoHash = d.hash;
-        }
+        const subida = await subirFotoDeJornada({ tipo: "checkout", jornadaId }, photoFile);
+        if (subida.ok) foto = subida.foto;
+        else avisoFoto = subida.aviso;
+      } else {
+        avisoFoto = avisoSinConexion("checkout");
       }
 
       const payload = {
@@ -88,9 +73,9 @@ export function CheckoutCard({
           lat: position.lat,
           lng: position.lng,
           precision: position.precision,
-          driveFileId,
-          driveWebViewLink,
-          fotoHash,
+          driveFileId: foto?.driveFileId,
+          driveWebViewLink: foto?.webViewLink,
+          fotoHash: foto?.hash,
           observaciones: observaciones.trim() || undefined,
           deviceInfo,
         },
@@ -111,19 +96,17 @@ export function CheckoutCard({
 
         const { duracionMinutos } = await res.json();
         setStatus("done");
-        onCheckoutSuccess(duracionMinutos);
+        onCheckoutSuccess(duracionMinutos, avisoFoto);
       } else {
         await enqueue("checkout", { jornadaId, ...payload });
         setStatus("done");
-        onCheckoutSuccess(0);
+        onCheckoutSuccess(0, avisoFoto);
       }
     } catch (err) {
       setStatus("error");
       setError(err instanceof Error ? err.message : "Error inesperado");
     }
   };
-
-  const isLoading = ["locating", "uploading", "saving"].includes(status);
 
   const handleVerMapa = async () => {
     setMapLoading(true);
@@ -402,13 +385,4 @@ export function CheckoutCard({
       </button>
     </div>
   );
-}
-
-async function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve((reader.result as string).split(",")[1]);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
 }

@@ -1,25 +1,29 @@
 "use client";
 
 import { useState } from "react";
-import { useSession } from "next-auth/react";
 import { getCurrentPosition } from "@/src/lib/geolocation";
 import { getDeviceInfo } from "@/src/lib/device-info";
 import { enqueue } from "@/src/lib/sync-queue";
+import { avisoSinConexion, subirFotoDeJornada, type FotoSubida } from "@/src/lib/foto-jornada";
 import { PhotoCapture } from "./PhotoCapture";
+import { useSinRecargar } from "./ActualizadorPwa";
 
 interface CheckinCardProps {
   proyectoId: string;
-  proyectoNombre: string;
-  onCheckinSuccess: (jornadaId: string) => void;
+  /** `avisoFoto`: si la foto no subió, qué decirle a la persona. El check-in sí quedó. */
+  onCheckinSuccess: (jornadaId: string, avisoFoto?: string) => void;
 }
 
 type Status = "idle" | "locating" | "uploading" | "saving" | "done" | "error";
 
-export function CheckinCard({ proyectoId, proyectoNombre, onCheckinSuccess }: CheckinCardProps) {
-  const { data: session } = useSession();
+export function CheckinCard({ proyectoId, onCheckinSuccess }: CheckinCardProps) {
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
+
+  // Mientras se ficha no hay recarga: la cámara del teléfono saca a la app de
+  // la pantalla, y una recarga a medias perdería la foto.
+  useSinRecargar(true);
 
   const handleCheckin = async () => {
     if (!proyectoId) {
@@ -39,40 +43,18 @@ export function CheckinCard({ proyectoId, proyectoNombre, onCheckinSuccess }: Ch
       const deviceInfo = getDeviceInfo();
       const timestamp = new Date().toISOString();
 
-      let driveFileId: string | undefined;
-      let driveWebViewLink: string | undefined;
-      let fotoHash: string | undefined;
-
+      // La foto va aparte y nunca tumba el check-in: si no sube, la jornada
+      // queda con la foto pendiente y la pantalla dice por qué. La carpeta y
+      // el nombre los decide el servidor; aquí solo se dice a qué proyecto.
+      let foto: FotoSubida | undefined;
+      let avisoFoto: string | undefined;
       if (navigator.onLine) {
         setStatus("uploading");
-        const base64 = await fileToBase64(photoFile);
-        const localDate = new Date().toLocaleDateString("es-MX", {
-          timeZone: "America/Mexico_City",
-          year: "numeric",
-          month: "2-digit",
-          day: "2-digit",
-        }).split("/").reverse().join("-"); // YYYY-MM-DD
-
-        const uploadRes = await fetch("/api/upload", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            base64,
-            filename: `checkin_${timestamp.slice(11, 16).replace(":", "")}.jpg`,
-            mimeType: photoFile.type || "image/jpeg",
-            proyectoNombre,
-            fecha: localDate,
-            trabajadorNombre: session?.user.name ?? "trabajador",
-          }),
-        });
-
-        if (uploadRes.ok) {
-          const uploadData = await uploadRes.json();
-          driveFileId = uploadData.driveFileId;
-          driveWebViewLink = uploadData.webViewLink;
-          fotoHash = uploadData.hash;
-        }
-        // If upload fails, continue — mark as pendiente
+        const subida = await subirFotoDeJornada({ tipo: "checkin", proyectoId }, photoFile);
+        if (subida.ok) foto = subida.foto;
+        else avisoFoto = subida.aviso;
+      } else {
+        avisoFoto = avisoSinConexion("checkin");
       }
 
       const checkinPayload = {
@@ -82,9 +64,9 @@ export function CheckinCard({ proyectoId, proyectoNombre, onCheckinSuccess }: Ch
           lat: position.lat,
           lng: position.lng,
           precision: position.precision,
-          driveFileId,
-          driveWebViewLink,
-          fotoHash,
+          driveFileId: foto?.driveFileId,
+          driveWebViewLink: foto?.webViewLink,
+          fotoHash: foto?.hash,
           deviceInfo,
         },
       };
@@ -104,12 +86,12 @@ export function CheckinCard({ proyectoId, proyectoNombre, onCheckinSuccess }: Ch
 
         const { jornadaId } = await res.json();
         setStatus("done");
-        onCheckinSuccess(jornadaId);
+        onCheckinSuccess(jornadaId, avisoFoto);
       } else {
         // Offline — queue for later sync
         const id = await enqueue("checkin", checkinPayload);
         setStatus("done");
-        onCheckinSuccess(id);
+        onCheckinSuccess(id, avisoFoto);
       }
     } catch (err) {
       setStatus("error");
@@ -164,13 +146,4 @@ export function CheckinCard({ proyectoId, proyectoNombre, onCheckinSuccess }: Ch
       </button>
     </div>
   );
-}
-
-async function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve((reader.result as string).split(",")[1]);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
 }

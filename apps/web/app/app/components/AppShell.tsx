@@ -102,6 +102,12 @@ export function AppShell({
   );
   const [duracion, setDuracion] = useState<number | null>(null);
   const [deviceLabel, setDeviceLabel] = useState("Detectando dispositivo…");
+  /**
+   * Si la foto del último check-in o check-out no subió, qué pasó. Vive aquí y
+   * no en la tarjeta porque la tarjeta se desmonta al terminar, y el aviso
+   * tiene que seguir a la vista en la pantalla siguiente.
+   */
+  const [avisoFoto, setAvisoFoto] = useState<string | null>(null);
 
   // Restore from localStorage when server didn't return an open jornada
   // (covers browser refresh when the server query fails or offline start)
@@ -156,17 +162,19 @@ export function AppShell({
       })
     : "--:--";
 
-  const handleCheckinSuccess = (id: string) => {
+  const handleCheckinSuccess = (id: string, aviso?: string) => {
     const ts = new Date().toISOString();
     saveJornada({ jornadaId: id, checkInTs: ts, proyectoId: selectedProyectoId });
     setJornadaId(id);
     setCheckInTs(ts);
+    setAvisoFoto(aviso ?? null);
     setView("active");
   };
 
-  const handleCheckoutSuccess = (mins: number) => {
+  const handleCheckoutSuccess = (mins: number, aviso?: string) => {
     clearJornada();
     setDuracion(mins);
+    setAvisoFoto(aviso ?? null);
     setView("done");
   };
 
@@ -176,6 +184,7 @@ export function AppShell({
     setCheckInTs(null);
     setSelectedProyectoId(null);
     setDuracion(null);
+    setAvisoFoto(null);
     setView("dashboard");
   };
 
@@ -195,6 +204,11 @@ export function AppShell({
           </p>
         )}
         <p className="font-mono text-xs text-white/25 mt-1">Se sincronizará automáticamente</p>
+        {avisoFoto && (
+          <div className="w-full max-w-sm">
+            <AvisoFoto aviso={avisoFoto} onCerrar={() => setAvisoFoto(null)} />
+          </div>
+        )}
         <button
           onClick={handleNuevaJornada}
           className="mt-6 bg-blue text-white font-head text-base font-bold px-8 py-3 rounded-xl active:scale-[0.98] transition-transform"
@@ -342,11 +356,7 @@ export function AppShell({
 
         <div className="flex-1 px-4 pb-24 md:pb-8 space-y-3 w-full max-w-2xl mx-auto">
           <OfflineBanner />
-          <CheckinCard
-            proyectoId={proyectoActual.id}
-            proyectoNombre={proyectoActual.nombre}
-            onCheckinSuccess={handleCheckinSuccess}
-          />
+          <CheckinCard proyectoId={proyectoActual.id} onCheckinSuccess={handleCheckinSuccess} />
         </div>
       </main>
     );
@@ -384,15 +394,36 @@ export function AppShell({
       {/* Body */}
       <div className="flex-1 px-4 py-4 pb-24 md:pb-8 space-y-3 max-w-2xl mx-auto w-full">
         <OfflineBanner />
+        {avisoFoto && <AvisoFoto aviso={avisoFoto} onCerrar={() => setAvisoFoto(null)} />}
         <CheckoutCard
           jornadaId={jornadaId!}
           checkInTimestamp={checkInTs!}
-          proyectoNombre={proyectoActual?.nombre ?? "Proyecto"}
-          trabajadorNombre={userName}
           onCheckoutSuccess={handleCheckoutSuccess}
         />
       </div>
     </main>
+  );
+}
+
+/**
+ * La foto no subió, pero el registro sí. Ámbar y no rojo: no hay nada que
+ * rehacer, y quedarse en la pantalla anterior asustaría más de la cuenta.
+ */
+function AvisoFoto({ aviso, onCerrar }: { aviso: string; onCerrar: () => void }) {
+  return (
+    <div
+      role="status"
+      className="flex items-start gap-2 bg-amber/10 border border-amber/40 rounded-xl px-3 py-2.5 text-left"
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 mt-0.5" aria-hidden="true">
+        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+        <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
+      </svg>
+      <p className="flex-1 font-mono text-xs text-amber">{aviso}</p>
+      <button type="button" onClick={onCerrar} className="shrink-0 font-mono text-[10px] text-amber underline">
+        Entendido
+      </button>
+    </div>
   );
 }
 
