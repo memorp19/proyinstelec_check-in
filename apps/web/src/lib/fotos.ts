@@ -54,32 +54,6 @@ export function tipoDeFoto(bytes: Uint8Array): TipoDeFoto | null {
   return null;
 }
 
-const EN_MEXICO = new Intl.DateTimeFormat("en-CA", {
-  timeZone: "America/Mexico_City",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  hourCycle: "h23",
-});
-
-/**
- * La fecha (`aaaa-mm-dd`) y la hora (`HHMM`) en México, del reloj del
- * servidor.
- *
- * Vercel corre en UTC: con el reloj tal cual, un check-in a las 9:00 se
- * llamaba `checkin_1500`, y después de las 18:00 caía en la carpeta del día
- * siguiente.
- */
-export function ahoraEnMexico(ahora: Date = new Date()): { fecha: string; hhmm: string } {
-  const partes = Object.fromEntries(EN_MEXICO.formatToParts(ahora).map((p) => [p.type, p.value]));
-  return {
-    fecha: `${partes.year}-${partes.month}-${partes.day}`,
-    hhmm: `${partes.hour}${partes.minute}`,
-  };
-}
-
 /** `checkin_0915.jpg`: el momento, la hora de México y la extensión del tipo real. */
 export function nombreDeFoto(momento: "checkin" | "checkout", hhmm: string, tipo: TipoDeFoto): string {
   return `${momento}_${hhmm}.${EXTENSION_DE_FOTO[tipo]}`;

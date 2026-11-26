@@ -41,9 +41,6 @@ export async function PATCH(
       lat: number;
       lng: number;
       precision: number;
-      driveFileId?: string;
-      driveWebViewLink?: string;
-      fotoHash?: string;
       observaciones?: string;
       deviceInfo?: DeviceInfo;
     };
@@ -60,11 +57,18 @@ export async function PATCH(
     return NextResponse.json({ error: "Faltan campos requeridos" }, { status: 400 });
   }
 
+  // Como en el check-in: la foto la pone `/api/upload` después del cierre, y
+  // un id de Drive que mande el navegador no se guarda (B4).
   const duracionMinutos = await closeJornada(
     jornadaId,
     {
-      ...checkOut,
-      uploadStatus: checkOut.driveFileId ? "ok" : "pendiente",
+      timestamp: checkOut.timestamp,
+      lat: checkOut.lat,
+      lng: checkOut.lng,
+      precision: checkOut.precision,
+      observaciones: checkOut.observaciones,
+      deviceInfo: checkOut.deviceInfo,
+      uploadStatus: "pendiente",
     },
     jornada.checkIn.timestamp,
   );

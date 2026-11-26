@@ -150,6 +150,23 @@ describe("POST /api/jornada (check-in)", () => {
       }),
     );
   });
+
+  // La foto la pone /api/upload en la jornada ya creada (B4): lo que mande el
+  // navegador como id de Drive no se guarda.
+  it("un id de Drive que mande el navegador no se guarda: nace con la foto pendiente", async () => {
+    mockAuth.mockResolvedValue(PLANTA_SESSION as any);
+
+    await POST(makeRequest("http://localhost/api/jornada", VALID_CHECKIN_BODY));
+
+    expect(vi.mocked(createJornada).mock.calls[0][0].checkIn).toEqual({
+      timestamp: "2026-05-14T09:41:00.000Z",
+      lat: 19.4284,
+      lng: -99.1946,
+      precision: 8,
+      deviceInfo: undefined,
+      uploadStatus: "pendiente",
+    });
+  });
 });
 
 // ── PATCH /api/jornada/[jornadaId] ───────────────────────────────────────────
@@ -218,5 +235,22 @@ describe("PATCH /api/jornada/:id (check-out)", () => {
     vi.mocked(getJornada).mockResolvedValue({ ...OPEN_JORNADA, estado: "cerrada" } as any);
     const res = await PATCH(makePatchRequest(VALID_CHECKOUT_BODY), { params: { jornadaId: "jornada-abc" } });
     expect(res.status).toBe(409);
+  });
+
+  // Como en el check-in: la foto de salida la pone /api/upload después del cierre.
+  it("un id de Drive que mande el navegador no se guarda: cierra con la foto pendiente", async () => {
+    mockAuth.mockResolvedValue(PLANTA_SESSION as any);
+
+    await PATCH(makePatchRequest(VALID_CHECKOUT_BODY), { params: { jornadaId: "jornada-abc" } });
+
+    expect(vi.mocked(closeJornada).mock.calls[0][1]).toEqual({
+      timestamp: "2026-05-14T17:41:00.000Z",
+      lat: 19.4284,
+      lng: -99.1946,
+      precision: 10,
+      observaciones: undefined,
+      deviceInfo: undefined,
+      uploadStatus: "pendiente",
+    });
   });
 });

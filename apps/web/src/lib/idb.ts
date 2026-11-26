@@ -2,7 +2,8 @@ import { openDB, deleteDB, type DBSchema, type IDBPDatabase } from "idb";
 
 // ── Schema ────────────────────────────────────────────────────────────────────
 
-export type SyncItemType = "checkin" | "checkout" | "evidencia";
+/** `foto`: la del check-in o del check-out, que se sube después de su registro. */
+export type SyncItemType = "checkin" | "checkout" | "evidencia" | "foto";
 export type SyncItemStatus = "pending" | "syncing" | "done" | "error";
 
 export interface SyncQueueItem {
@@ -67,7 +68,7 @@ export async function getAllItems(): Promise<SyncQueueItem[]> {
 
 export async function updateItem(
   id: string,
-  patch: Partial<Pick<SyncQueueItem, "status" | "attempts" | "error">>,
+  patch: Partial<Pick<SyncQueueItem, "status" | "attempts" | "error" | "payload">>,
 ): Promise<void> {
   const db = await getDB();
   const item = await db.get("sync-queue", id);

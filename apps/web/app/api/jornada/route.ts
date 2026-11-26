@@ -30,9 +30,6 @@ export async function POST(req: NextRequest) {
       lat: number;
       lng: number;
       precision: number;
-      driveFileId?: string;
-      driveWebViewLink?: string;
-      fotoHash?: string;
       deviceInfo?: DeviceInfo;
     };
   };
@@ -70,13 +67,20 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // La foto no llega por aquí: la pone `/api/upload` en la jornada ya
+    // creada, una sola vez. Lo que mande el navegador como id de Drive no se
+    // guarda (B4): la jornada nace con la foto pendiente.
     const jornada = await createJornada({
       usuarioId,
       proyectoId,
       tipo: session.user.tipo as "planta" | "temporal",
       checkIn: {
-        ...checkIn,
-        uploadStatus: checkIn.driveFileId ? "ok" : "pendiente",
+        timestamp: checkIn.timestamp,
+        lat: checkIn.lat,
+        lng: checkIn.lng,
+        precision: checkIn.precision,
+        deviceInfo: checkIn.deviceInfo,
+        uploadStatus: "pendiente",
       },
     });
 
