@@ -6,12 +6,20 @@ import { CheckinCard } from "./CheckinCard";
 import { CheckoutCard } from "./CheckoutCard";
 import { OfflineBanner } from "./OfflineBanner";
 import { getDeviceInfo } from "@/src/lib/device-info";
+import { EVENTO_JORNADA } from "@/src/lib/sync-queue";
+import {
+  borrarJornadaLocal as clearJornada,
+  guardarJornadaLocal as saveJornada,
+  leerJornadaLocal as loadJornada,
+} from "@/src/lib/jornada-local";
+import { PROYECTO_SIN_NOMBRE, type NombreDeProyecto } from "@/src/lib/nombre-proyecto";
 
 interface AppShellProps {
   userName: string;
   userTipo: string;
   proyectosAsignados: string[];
-  proyectosNombres: Record<string, string>;
+  /** El nombre y la empresa de cada proyecto, por id. Nunca se enseña el id. */
+  nombresDeProyectos: Record<string, NombreDeProyecto>;
   dateLabel: string;
   openJornadaId: string | null;
   openJornadaCheckInTs: string | null;
@@ -19,29 +27,6 @@ interface AppShellProps {
 }
 
 type View = "dashboard" | "checkin" | "active" | "done";
-
-const STORAGE_KEY = "proyinstelec:jornada" as const;
-
-interface CachedJornada {
-  jornadaId: string;
-  checkInTs: string;
-  proyectoId: string | null;
-}
-
-function saveJornada(data: CachedJornada) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch {}
-}
-
-function loadJornada(): CachedJornada | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as CachedJornada) : null;
-  } catch { return null; }
-}
-
-function clearJornada() {
-  try { localStorage.removeItem(STORAGE_KEY); } catch {}
-}
 
 function useLiveClock() {
   const fmt = () =>
@@ -82,7 +67,7 @@ export function AppShell({
   userName,
   userTipo,
   proyectosAsignados,
-  proyectosNombres,
+  nombresDeProyectos,
   dateLabel,
   openJornadaId,
   openJornadaCheckInTs,
@@ -102,12 +87,6 @@ export function AppShell({
   );
   const [duracion, setDuracion] = useState<number | null>(null);
   const [deviceLabel, setDeviceLabel] = useState("Detectando dispositivo…");
-  /**
-   * Si la foto del último check-in o check-out no subió, qué pasó. Vive aquí y
-   * no en la tarjeta porque la tarjeta se desmonta al terminar, y el aviso
-   * tiene que seguir a la vista en la pantalla siguiente.
-   */
-  const [avisoFoto, setAvisoFoto] = useState<string | null>(null);
 
   // Restore from localStorage when server didn't return an open jornada
   // (covers browser refresh when the server query fails or offline start)
@@ -122,6 +101,17 @@ export function AppShell({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Un check-in hecho sin señal tiene el id de la cola. Cuando la cola lo
+  // manda, el servidor le da el suyo, y el check-out tiene que usar ese.
+  useEffect(() => {
+    const alResolver = (e: Event) => {
+      const { deCola, delServidor } = (e as CustomEvent<{ deCola: string; delServidor: string }>).detail;
+      setJornadaId((actual) => (actual === deCola ? delServidor : actual));
+    };
+    window.addEventListener(EVENTO_JORNADA, alResolver);
+    return () => window.removeEventListener(EVENTO_JORNADA, alResolver);
+  }, []);
+
   const clock = useLiveClock();
   const elapsed = useElapsedTimer(view === "active" ? checkInTs : null);
 
@@ -132,17 +122,26 @@ export function AppShell({
   }, []);
 
   // Build the effective project list (include dev fallback)
-  const proyectos: { id: string; nombre: string }[] =
+  const proyectos: Array<{ id: string } & NombreDeProyecto> =
     proyectosAsignados.length > 0
       ? proyectosAsignados.map((id) => ({
           id,
-          nombre: proyectosNombres[id] ?? formatProyectoId(id),
+          nombre: nombresDeProyectos[id]?.nombre ?? PROYECTO_SIN_NOMBRE,
+          empresa: nombresDeProyectos[id]?.empresa ?? "",
         }))
       : isDev
-        ? [{ id: "dev-proyecto", nombre: "Proyecto dev (local)" }]
+        ? [{ id: "dev-proyecto", nombre: "Proyecto dev (local)", empresa: "" }]
         : [];
 
   const proyectoActual = proyectos.find((p) => p.id === selectedProyectoId) ?? proyectos[0];
+
+  // El de la jornada activa, por su id: puede no estar entre los asignados
+  // (planta ficha en cualquiera), y caer en el primero de la lista enseñaría
+  // otro proyecto.
+  const nombreActivo =
+    (selectedProyectoId && nombresDeProyectos[selectedProyectoId]?.nombre) ||
+    proyectos.find((p) => p.id === selectedProyectoId)?.nombre ||
+    PROYECTO_SIN_NOMBRE;
 
   const firstName = userName.split(" ")[0];
 
@@ -162,19 +161,18 @@ export function AppShell({
       })
     : "--:--";
 
-  const handleCheckinSuccess = (id: string, aviso?: string) => {
+  const handleCheckinSuccess = (id: string) => {
     const ts = new Date().toISOString();
+    // Si `id` es el de la cola, la cola lo cambia aquí cuando lo mande.
     saveJornada({ jornadaId: id, checkInTs: ts, proyectoId: selectedProyectoId });
     setJornadaId(id);
     setCheckInTs(ts);
-    setAvisoFoto(aviso ?? null);
     setView("active");
   };
 
-  const handleCheckoutSuccess = (mins: number, aviso?: string) => {
+  const handleCheckoutSuccess = (mins: number) => {
     clearJornada();
     setDuracion(mins);
-    setAvisoFoto(aviso ?? null);
     setView("done");
   };
 
@@ -184,7 +182,6 @@ export function AppShell({
     setCheckInTs(null);
     setSelectedProyectoId(null);
     setDuracion(null);
-    setAvisoFoto(null);
     setView("dashboard");
   };
 
@@ -203,12 +200,11 @@ export function AppShell({
             {Math.floor(duracion / 60)}h {duracion % 60}m registradas
           </p>
         )}
-        <p className="font-mono text-xs text-white/25 mt-1">Se sincronizará automáticamente</p>
-        {avisoFoto && (
-          <div className="w-full max-w-sm">
-            <AvisoFoto aviso={avisoFoto} onCerrar={() => setAvisoFoto(null)} />
-          </div>
-        )}
+        <p className="font-mono text-xs text-white/25 mt-1">Lo que falte por subir se sube solo</p>
+        {/* Cuántas fotos faltan, y si algo no se pudo mandar. */}
+        <div className="w-full max-w-sm">
+          <OfflineBanner />
+        </div>
         <button
           onClick={handleNuevaJornada}
           className="mt-6 bg-blue text-white font-head text-base font-bold px-8 py-3 rounded-xl active:scale-[0.98] transition-transform"
@@ -280,7 +276,7 @@ export function AppShell({
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="font-head text-base font-bold text-white">{p.nombre}</p>
-                    <p className="font-mono text-[10px] text-white/40 truncate">{p.id}</p>
+                    {p.empresa && <p className="font-mono text-[10px] text-white/40 truncate">{p.empresa}</p>}
                   </div>
                   <button
                     onClick={() => {
@@ -335,7 +331,9 @@ export function AppShell({
 
           <p className="font-mono text-[10px] text-white/40 uppercase tracking-widest mb-1">Check-in</p>
           <p className="font-head text-2xl font-bold text-white leading-tight">{proyectoActual.nombre}</p>
-          <p className="font-mono text-[10px] text-white/40 mt-1">{proyectoActual.id}</p>
+          {proyectoActual.empresa && (
+            <p className="font-mono text-[10px] text-white/40 mt-1">{proyectoActual.empresa}</p>
+          )}
 
           {/* Date / Clock card */}
           <div className="mt-4 bg-white/10 border border-white/10 rounded-xl px-4 py-3 flex justify-between items-center">
@@ -372,9 +370,7 @@ export function AppShell({
           Jornada activa
         </p>
         <div className="flex items-center justify-between gap-2">
-          <p className="font-head text-2xl font-bold text-white leading-tight">
-            {proyectoActual?.nombre ?? "Proyecto"}
-          </p>
+          <p className="font-head text-2xl font-bold text-white leading-tight">{nombreActivo}</p>
           <span className="shrink-0 flex items-center gap-1.5 bg-green/20 border border-green/40 text-green font-mono text-[10px] px-2.5 py-1 rounded-full">
             <span className="w-1.5 h-1.5 rounded-full bg-green animate-pulse" />
             EN CAMPO
@@ -386,7 +382,7 @@ export function AppShell({
           {elapsed}
         </p>
         <p className="font-mono text-[10px] text-white/50 mt-2">
-          Check-in: {checkInTime} · {proyectoActual?.nombre ?? ""}
+          Check-in: {checkInTime} · {nombreActivo}
         </p>
         </div>
       </div>
@@ -394,7 +390,6 @@ export function AppShell({
       {/* Body */}
       <div className="flex-1 px-4 py-4 pb-24 md:pb-8 space-y-3 max-w-2xl mx-auto w-full">
         <OfflineBanner />
-        {avisoFoto && <AvisoFoto aviso={avisoFoto} onCerrar={() => setAvisoFoto(null)} />}
         <CheckoutCard
           jornadaId={jornadaId!}
           checkInTimestamp={checkInTs!}
@@ -405,31 +400,4 @@ export function AppShell({
   );
 }
 
-/**
- * La foto no subió, pero el registro sí. Ámbar y no rojo: no hay nada que
- * rehacer, y quedarse en la pantalla anterior asustaría más de la cuenta.
- */
-function AvisoFoto({ aviso, onCerrar }: { aviso: string; onCerrar: () => void }) {
-  return (
-    <div
-      role="status"
-      className="flex items-start gap-2 bg-amber/10 border border-amber/40 rounded-xl px-3 py-2.5 text-left"
-    >
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 mt-0.5" aria-hidden="true">
-        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-        <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
-      </svg>
-      <p className="flex-1 font-mono text-xs text-amber">{aviso}</p>
-      <button type="button" onClick={onCerrar} className="shrink-0 font-mono text-[10px] text-amber underline">
-        Entendido
-      </button>
-    </div>
-  );
-}
-
-function formatProyectoId(id: string): string {
-  return id
-    .replace(/[-_]/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-}
 

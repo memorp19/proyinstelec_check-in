@@ -1,12 +1,10 @@
 import { auth } from "@/src/auth";
 import { getUserById } from "@/src/lib/users";
 import { getJornadasHistorialByUsuario } from "@/src/lib/jornadas";
+import { nombresDeProyectos } from "@/src/lib/proyectos";
+import { nombreDeProyecto, nombresDeDemo } from "@/src/lib/nombre-proyecto";
 import { DEMO_MODE, DEMO_PROJECTS, DEMO_HISTORIAL, getDemoPresetById, type ProyectoStats } from "@/src/demo";
 import { PerfilClient } from "./_components/PerfilClient";
-
-function formatProyectoId(id: string): string {
-  return id.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
 
 export default async function PerfilPage() {
   const session = await auth();
@@ -25,8 +23,11 @@ export default async function PerfilPage() {
     ? getDemoPresetById(userId).proyectos_asignados
     : (dbUser?.proyectos_asignados ?? []);
 
-  // Build project name map
-  const proyectosNombres: Record<string, string> = DEMO_MODE ? DEMO_PROJECTS : {};
+  // Los nombres, de la base: los asignados y los del historial, que pueden ya
+  // no estar asignados. Antes la pantalla enseñaba el id (un UUID).
+  const nombres = DEMO_MODE
+    ? nombresDeDemo(DEMO_PROJECTS)
+    : await nombresDeProyectos([...proyectosAsignados, ...jornadas.map((j) => j.proyectoId)]).catch(() => ({}));
 
   // Compute historial from real jornadas
   let historial: ProyectoStats[];
@@ -46,7 +47,7 @@ export default async function PerfilPage() {
     }
     historial = Object.entries(byProject).map(([proyectoId, stats]) => ({
       proyectoId,
-      nombre: proyectosNombres[proyectoId] ?? formatProyectoId(proyectoId),
+      nombre: nombreDeProyecto(nombres, proyectoId),
       ...stats,
     })).sort((a, b) => b.ultimaFecha.localeCompare(a.ultimaFecha));
   }
@@ -57,7 +58,7 @@ export default async function PerfilPage() {
       fotoUrl={fotoUrl}
       nickname={nickname}
       proyectosAsignados={proyectosAsignados}
-      proyectosNombres={proyectosNombres}
+      nombresDeProyectos={nombres}
       historial={historial}
     />
   );

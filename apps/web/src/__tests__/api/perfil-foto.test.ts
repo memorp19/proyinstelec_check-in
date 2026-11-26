@@ -13,6 +13,7 @@ import { auth } from "@/src/auth";
 import { uploadPhoto } from "@/src/lib/drive";
 import { updatePerfil } from "@/src/lib/users";
 import { POST } from "@/app/api/perfil/foto/route";
+import { TOPE_FOTO_BYTES } from "@/src/lib/fotos";
 
 const mockAuth = auth as unknown as ReturnType<typeof vi.fn>;
 
@@ -53,5 +54,30 @@ describe("POST /api/perfil/foto", () => {
     await POST(pedir({ base64: PNG.toString("base64") }));
 
     expect(uploadPhoto).toHaveBeenCalledWith(expect.objectContaining({ mimeType: "image/png" }));
+  });
+
+  // El mismo tope que la del check-in: lo que cabe en Vercel en base64.
+  it("3 MB y un byte: 413, sin subir; justo 3 MB, pasa", async () => {
+    const pasada = Buffer.concat([PNG, Buffer.alloc(TOPE_FOTO_BYTES + 1 - PNG.length)]);
+    expect((await POST(pedir({ base64: pasada.toString("base64") }))).status).toBe(413);
+    expect(uploadPhoto).not.toHaveBeenCalled();
+
+    const justa = Buffer.concat([PNG, Buffer.alloc(TOPE_FOTO_BYTES - PNG.length)]);
+    expect((await POST(pedir({ base64: justa.toString("base64") }))).status).toBe(200);
+  });
+
+  // A las 18:30 de México, en UTC ya es el día siguiente.
+  it("la carpeta y el nombre llevan la fecha de México", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-26T00:30:00Z"));
+    try {
+      await POST(pedir({ base64: PNG.toString("base64") }));
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(uploadPhoto).toHaveBeenCalledWith(
+      expect.objectContaining({ fecha: "2026-11-25", filename: "perfil-u-1-2026-11-25.png" }),
+    );
   });
 });

@@ -3,18 +3,18 @@
 import { useState } from "react";
 import { getCurrentPosition } from "@/src/lib/geolocation";
 import { getDeviceInfo } from "@/src/lib/device-info";
-import { enqueue } from "@/src/lib/sync-queue";
-import { avisoSinConexion, subirFotoDeJornada, type FotoSubida } from "@/src/lib/foto-jornada";
+import { avisarErrorDeCola, despertarCola, encolarFoto, registrarCheckin } from "@/src/lib/sync-queue";
+import { prepararFoto } from "@/src/lib/foto-jornada";
 import { PhotoCapture } from "./PhotoCapture";
 import { useSinRecargar } from "./ActualizadorPwa";
 
 interface CheckinCardProps {
   proyectoId: string;
-  /** `avisoFoto`: si la foto no subió, qué decirle a la persona. El check-in sí quedó. */
-  onCheckinSuccess: (jornadaId: string, avisoFoto?: string) => void;
+  /** El id de la jornada: el del servidor, o el de la cola si se hizo sin señal. */
+  onCheckinSuccess: (jornadaId: string) => void;
 }
 
-type Status = "idle" | "locating" | "uploading" | "saving" | "done" | "error";
+type Status = "idle" | "locating" | "saving" | "done" | "error";
 
 export function CheckinCard({ proyectoId, onCheckinSuccess }: CheckinCardProps) {
   const [status, setStatus] = useState<Status>("idle");
@@ -43,63 +43,44 @@ export function CheckinCard({ proyectoId, onCheckinSuccess }: CheckinCardProps) 
       const deviceInfo = getDeviceInfo();
       const timestamp = new Date().toISOString();
 
-      // La foto va aparte y nunca tumba el check-in: si no sube, la jornada
-      // queda con la foto pendiente y la pantalla dice por qué. La carpeta y
-      // el nombre los decide el servidor; aquí solo se dice a qué proyecto.
-      let foto: FotoSubida | undefined;
-      let avisoFoto: string | undefined;
-      if (navigator.onLine) {
-        setStatus("uploading");
-        const subida = await subirFotoDeJornada({ tipo: "checkin", proyectoId }, photoFile);
-        if (subida.ok) foto = subida.foto;
-        else avisoFoto = subida.aviso;
-      } else {
-        avisoFoto = avisoSinConexion("checkin");
-      }
+      setStatus("saving");
+      // Comprimida antes: así ocupa poco en el teléfono si tiene que esperar señal.
+      const foto = await prepararFoto(photoFile);
 
-      const checkinPayload = {
+      // Primero el registro. Con señal va directo; sin ella, o si la red se
+      // cae, queda en la cola del teléfono y se manda solo al volver.
+      const { jornadaId } = await registrarCheckin({
         proyectoId,
         checkIn: {
           timestamp,
           lat: position.lat,
           lng: position.lng,
           precision: position.precision,
-          driveFileId: foto?.driveFileId,
-          driveWebViewLink: foto?.webViewLink,
-          fotoHash: foto?.hash,
           deviceInfo,
         },
-      };
+      });
 
-      if (navigator.onLine) {
-        setStatus("saving");
-        const res = await fetch("/api/jornada", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(checkinPayload),
-        });
-
-        if (!res.ok) {
-          const err = await res.json();
-          throw new Error(err.error ?? "Error al registrar el check-in");
-        }
-
-        const { jornadaId } = await res.json();
-        setStatus("done");
-        onCheckinSuccess(jornadaId, avisoFoto);
-      } else {
-        // Offline — queue for later sync
-        const id = await enqueue("checkin", checkinPayload);
-        setStatus("done");
-        onCheckinSuccess(id, avisoFoto);
+      // Después la foto, siempre por la cola: se sube sola, ahora o al volver
+      // la señal, a esta jornada y una sola vez. La pantalla dice cuántas faltan.
+      try {
+        await encolarFoto({ momento: "checkin", jornadaId, foto });
+        despertarCola();
+      } catch (err) {
+        // El check-in sí quedó: no se le dice a la persona que falló.
+        avisarErrorDeCola(
+          `La foto del check-in no se pudo guardar en el teléfono: ${err instanceof Error ? err.message : "error desconocido"}. El check-in sí quedó registrado.`,
+        );
       }
+
+      setStatus("done");
+      onCheckinSuccess(jornadaId);
     } catch (err) {
       setStatus("error");
       setError(err instanceof Error ? err.message : "Error inesperado");
     }
   };
 
-  const isLoading = ["locating", "uploading", "saving"].includes(status);
+  const isLoading = ["locating", "saving"].includes(status);
 
   return (
     <div className="space-y-3 pt-1">
@@ -132,7 +113,6 @@ export function CheckinCard({ proyectoId, onCheckinSuccess }: CheckinCardProps) 
         {isLoading ? (
           <span className="font-mono text-sm tracking-wide">
             {status === "locating" && "⊙  Obteniendo ubicación…"}
-            {status === "uploading" && "↑  Subiendo foto…"}
             {status === "saving" && "✓  Registrando…"}
           </span>
         ) : (

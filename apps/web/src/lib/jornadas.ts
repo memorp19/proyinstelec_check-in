@@ -1,7 +1,8 @@
-import { and, asc, between, desc, eq, gte } from "drizzle-orm";
+import { and, asc, between, desc, eq, gte, isNull } from "drizzle-orm";
 import { getDb } from "../db";
 import { jornadas } from "../db/schema";
 import type { DeviceInfo } from "./device-info";
+import { inicioDelDiaEnMexico } from "./hora-mexico";
 
 /**
  * Jornadas de trabajo (check-in / check-out).
@@ -159,6 +160,54 @@ export async function closeJornada(
   return duracionMinutos;
 }
 
+/**
+ * Pone la foto del check-in o del check-out en su jornada, **una sola vez**.
+ *
+ * Es una sola sentencia que solo escribe si ese lugar sigue vacío: si dos
+ * subidas de la misma foto llegan a la vez (un reintento de la cola, dos
+ * pestañas), solo una queda, y la otra se entera porque no le toca fila. La
+ * del check-out, además, solo con la jornada ya cerrada: antes no hay hora de
+ * salida con la que nombrarla.
+ *
+ * Devuelve si la puso.
+ */
+export async function ponerFotoDeJornada(params: {
+  jornadaId: string;
+  momento: "checkin" | "checkout";
+  foto: { driveFileId: string; webViewLink: string; hash: string };
+}): Promise<boolean> {
+  const { jornadaId, momento, foto } = params;
+  const filas =
+    momento === "checkin"
+      ? await getDb()
+          .update(jornadas)
+          .set({
+            checkinDriveFileId: foto.driveFileId,
+            checkinDriveUrl: foto.webViewLink,
+            checkinFotoHash: foto.hash,
+            checkinUploadStatus: "ok",
+          })
+          .where(and(eq(jornadas.id, jornadaId), isNull(jornadas.checkinDriveFileId)))
+          .returning({ id: jornadas.id })
+      : await getDb()
+          .update(jornadas)
+          .set({
+            checkoutDriveFileId: foto.driveFileId,
+            checkoutDriveUrl: foto.webViewLink,
+            checkoutFotoHash: foto.hash,
+            checkoutUploadStatus: "ok",
+          })
+          .where(
+            and(
+              eq(jornadas.id, jornadaId),
+              eq(jornadas.estado, "cerrada"),
+              isNull(jornadas.checkoutDriveFileId),
+            ),
+          )
+          .returning({ id: jornadas.id });
+  return filas.length > 0;
+}
+
 // ── Lecturas ──────────────────────────────────────────────────────────────────
 
 export async function getJornada(jornadaId: string): Promise<Jornada | null> {
@@ -170,10 +219,16 @@ export async function getJornada(jornadaId: string): Promise<Jornada | null> {
   return row ? aJornada(row) : null;
 }
 
-/** Jornada abierta del usuario en el día de hoy, o null. */
-export async function getOpenJornada(usuarioId: string): Promise<Jornada | null> {
-  const inicioDelDia = new Date();
-  inicioDelDia.setHours(0, 0, 0, 0);
+/**
+ * Jornada abierta del usuario en el día de hoy **de México**, o null.
+ *
+ * El día se corta a las 00:00 de México, no del servidor: Vercel corre en
+ * UTC, y con su medianoche una jornada abierta en la mañana dejaba de
+ * encontrarse a las 18:00. La pantalla de campo ya no la veía, y el check-in
+ * dejaba abrir una segunda.
+ */
+export async function getOpenJornada(usuarioId: string, ahora: Date = new Date()): Promise<Jornada | null> {
+  const inicioDelDia = inicioDelDiaEnMexico(ahora);
 
   const [row] = await getDb()
     .select()

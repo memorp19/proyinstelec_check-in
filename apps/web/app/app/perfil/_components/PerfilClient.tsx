@@ -3,6 +3,8 @@
 import { useRef, useState } from "react";
 
 import type { ProyectoStats } from "@/src/demo";
+import { aBase64, prepararFoto } from "@/src/lib/foto-jornada";
+import { nombreDeProyecto, type NombreDeProyecto } from "@/src/lib/nombre-proyecto";
 import { ProyectoDetalle } from "./ProyectoDetalle";
 
 interface Props {
@@ -10,7 +12,8 @@ interface Props {
   fotoUrl: string | null;
   nickname: string | null;
   proyectosAsignados: string[];
-  proyectosNombres: Record<string, string>;
+  /** El nombre y la empresa de cada proyecto, por id. Nunca se enseña el id. */
+  nombresDeProyectos: Record<string, NombreDeProyecto>;
   historial: ProyectoStats[];
 }
 
@@ -31,10 +34,6 @@ function formatFecha(iso: string): string {
   });
 }
 
-function formatProyectoId(id: string): string {
-  return id.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
 function Initials({ nombre }: { nombre: string }) {
   const parts = nombre.trim().split(" ");
   const initials = parts.length >= 2
@@ -47,7 +46,7 @@ function Initials({ nombre }: { nombre: string }) {
   );
 }
 
-export function PerfilClient({ nombre, fotoUrl: initialFotoUrl, nickname: initialNickname, proyectosAsignados, proyectosNombres, historial }: Props) {
+export function PerfilClient({ nombre, fotoUrl: initialFotoUrl, nickname: initialNickname, proyectosAsignados, nombresDeProyectos, historial }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [fotoUrl, setFotoUrl] = useState(initialFotoUrl);
@@ -72,11 +71,14 @@ export function PerfilClient({ nombre, fotoUrl: initialFotoUrl, nickname: initia
     setError(null);
 
     try {
-      const base64 = await toBase64(file);
+      // Comprimida como la del check-in (1600 px, JPEG al 85 %): la original
+      // del celular pesa de 3 a 6 MB y no cabe en el cuerpo que deja pasar
+      // Vercel. El tipo lo reconoce el servidor por los bytes.
+      const base64 = await aBase64(await prepararFoto(file));
       const res = await fetch("/api/perfil/foto", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ base64, mimeType: file.type }),
+        body: JSON.stringify({ base64 }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Error al subir foto");
@@ -268,9 +270,11 @@ export function PerfilClient({ nombre, fotoUrl: initialFotoUrl, nickname: initia
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="font-head text-sm font-bold text-white truncate">
-                      {proyectosNombres[id] ?? formatProyectoId(id)}
+                      {nombreDeProyecto(nombresDeProyectos, id)}
                     </p>
-                    <p className="font-mono text-[10px] text-white/40">{id}</p>
+                    {nombresDeProyectos[id]?.empresa && (
+                      <p className="font-mono text-[10px] text-white/40">{nombresDeProyectos[id].empresa}</p>
+                    )}
                   </div>
                   <span className="shrink-0 flex items-center gap-1 bg-green/20 border border-green/30 rounded-full px-2 py-0.5">
                     <span className="w-1.5 h-1.5 rounded-full bg-green" />
@@ -302,7 +306,11 @@ export function PerfilClient({ nombre, fotoUrl: initialFotoUrl, nickname: initia
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
                       <p className="font-head text-sm font-bold text-white truncate">{p.nombre}</p>
-                      <p className="font-mono text-[10px] text-white/40 mt-0.5">{p.proyectoId}</p>
+                      {nombresDeProyectos[p.proyectoId]?.empresa && (
+                        <p className="font-mono text-[10px] text-white/40 mt-0.5">
+                          {nombresDeProyectos[p.proyectoId].empresa}
+                        </p>
+                      )}
                     </div>
                     <div className="shrink-0 text-right">
                       <p className="font-mono text-sm font-bold text-blue-mid">{formatMinutos(p.totalMinutos)}</p>
@@ -347,16 +355,3 @@ export function PerfilClient({ nombre, fotoUrl: initialFotoUrl, nickname: initia
   );
 }
 
-// ── Utility ───────────────────────────────────────────────────────────────────
-
-function toBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      resolve(result.split(",")[1]);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}

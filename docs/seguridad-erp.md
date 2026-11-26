@@ -305,8 +305,17 @@ Lo que había:
 - La excepción de `upload` en `rutas-protegidas.test.ts` se queda (sigue
   siendo de solo sesión), ya sin «PENDIENTE». Prueba: `api/upload.test.ts`.
 
-Sigue igual: `/api/jornada` guarda el `driveFileId` y el enlace que le manda
-el navegador, pero solo se le enseñan a la misma persona (B4).
+**PR de la app de campo** (después del de endurecimiento):
+- **La foto va siempre a una jornada que ya existe.** La pantalla registra
+  primero el check-in o el check-out, y después sube la foto con el id de esa
+  jornada. `/api/upload` la pone en la jornada una sola vez
+  (`ponerFotoDeJornada`, una sentencia con `… IS NULL`), y la carpeta y la
+  hora salen de la jornada.
+- **`/api/jornada` ya no guarda el `driveFileId`** ni el enlace que mande el
+  navegador: la jornada nace con la foto pendiente, y solo `/api/upload` la
+  llena. Es el B4 en la parte del check-in.
+- **Sin señal, todo espera en el teléfono** y se manda solo al volver
+  (`src/lib/sync-queue.ts`), sin duplicados.
 
 ### 3.5 Un contacto se borra (el M9)
 
@@ -505,7 +514,7 @@ Es la del B11, y llegó con el PR de endurecimiento.
 | B1 | Completar una OT no revisaba la OT ni su estatus | 1 y 6 | ✅ Por diseño | Generar la OT pide `ot.crear` y la cotización ENVIADA (`cotizaciones-flujos.ts:672-674`); una sola OT por cotización (`schema.ts:482`) |
 | B2 | Una revisión de cobros sin chequeo, que cualquiera disparaba | 1 y 10 | ✅ Por diseño | No hay procesos sin ruta; toda ruta, en `rutas-protegidas.test.ts` |
 | B3 | Se tomaba un folio de requisición apartado para otra persona | 4 · los folios los da el contador | ⏳ Migración de OT y compras | `src/lib/folios.ts` |
-| B4 | IDs de archivos de Drive llegaban del navegador | 4 · solo IDs de esa solicitud | ⏳ Migración de OT y compras | En el check-in, el enlace de la foto también llega del navegador, pero solo se le enseña a la misma persona (§3.4) |
+| B4 | IDs de archivos de Drive llegaban del navegador | 4 · solo IDs de esa solicitud | ⏳ Migración de OT y compras | En el check-in ya no: la foto la pone `/api/upload` en su jornada, y `/api/jornada` ignora el id que mande el navegador (§3.4). Falta en OT y compras |
 | B5 | El tipo de archivo se aceptaba por lo que decía el navegador; los gastos sin tope | 4 | ⏳ Migración de OT y compras | Hoy: las fotos (`upload`, `perfil/foto`) se reconocen por sus bytes y tienen tope de tamaño (§3.4) |
 | B6 | Una sola persona firmaba los cuatro pasos de una requisición | 3 | ⏳ Migración de OT y compras | Decidir con la regla de compras: al menos «Aprobó» ≠ quien elaboró |
 | B7 | El alta confiaba en la versión y el año que mandaba el navegador | 4 | ⏳ El folio (§6) | La versión ya no: `createCotizacion` la fuerza a 0 (`lib/cotizaciones.test.ts`, «crea la versión 0 en PROCESO…»). El número y el año sí llegan del navegador. Decidido el 20 nov: el año lo pone el servidor con la fecha de México, sin excepción (§2.3) |

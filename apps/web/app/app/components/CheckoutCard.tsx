@@ -3,19 +3,19 @@
 import { useState } from "react";
 import { getCurrentPosition } from "@/src/lib/geolocation";
 import { getDeviceInfo } from "@/src/lib/device-info";
-import { enqueue } from "@/src/lib/sync-queue";
-import { avisoSinConexion, subirFotoDeJornada, type FotoSubida } from "@/src/lib/foto-jornada";
+import { avisarErrorDeCola, despertarCola, encolarFoto, registrarCheckout } from "@/src/lib/sync-queue";
+import { prepararFoto } from "@/src/lib/foto-jornada";
 import { PhotoCapture } from "./PhotoCapture";
 import { useSinRecargar } from "./ActualizadorPwa";
 
 interface CheckoutCardProps {
   jornadaId: string;
   checkInTimestamp: string;
-  /** `avisoFoto`: si la foto no subió, qué decirle a la persona. El check-out sí quedó. */
-  onCheckoutSuccess: (duracionMinutos: number, avisoFoto?: string) => void;
+  /** Los minutos de la jornada; 0 si el cierre quedó en la cola, sin señal. */
+  onCheckoutSuccess: (duracionMinutos: number) => void;
 }
 
-type Status = "idle" | "locating" | "uploading" | "saving" | "done" | "error";
+type Status = "idle" | "locating" | "saving" | "done" | "error";
 
 export function CheckoutCard({
   jornadaId,
@@ -32,7 +32,7 @@ export function CheckoutCard({
   const [notaText, setNotaText] = useState("");
   const [photoFile, setPhotoFile] = useState<File | null>(null);
 
-  const isLoading = ["locating", "uploading", "saving"].includes(status);
+  const isLoading = ["locating", "saving"].includes(status);
 
   // La tarjeta vive toda la jornada, así que solo frena la recarga cuando hay
   // algo que se perdería: una foto tomada, una nota o un cierre en curso.
@@ -54,54 +54,34 @@ export function CheckoutCard({
       const deviceInfo = getDeviceInfo();
       const timestamp = new Date().toISOString();
 
-      // Como en el check-in: la foto va aparte y nunca tumba el cierre. El
-      // proyecto lo saca el servidor de la jornada, no de la pantalla.
-      let foto: FotoSubida | undefined;
-      let avisoFoto: string | undefined;
-      if (navigator.onLine) {
-        setStatus("uploading");
-        const subida = await subirFotoDeJornada({ tipo: "checkout", jornadaId }, photoFile);
-        if (subida.ok) foto = subida.foto;
-        else avisoFoto = subida.aviso;
-      } else {
-        avisoFoto = avisoSinConexion("checkout");
-      }
+      setStatus("saving");
+      const foto = await prepararFoto(photoFile);
 
-      const payload = {
+      // Como en el check-in: primero el cierre (directo, o a la cola si no hay
+      // señal o si su check-in sigue esperando en ella), y la foto después.
+      const { duracionMinutos } = await registrarCheckout({
+        jornadaId,
         checkOut: {
           timestamp,
           lat: position.lat,
           lng: position.lng,
           precision: position.precision,
-          driveFileId: foto?.driveFileId,
-          driveWebViewLink: foto?.webViewLink,
-          fotoHash: foto?.hash,
           observaciones: observaciones.trim() || undefined,
           deviceInfo,
         },
-      };
+      });
 
-      if (navigator.onLine) {
-        setStatus("saving");
-        const res = await fetch(`/api/jornada/${jornadaId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-
-        if (!res.ok) {
-          const err = await res.json();
-          throw new Error(err.error ?? "Error al registrar el check-out");
-        }
-
-        const { duracionMinutos } = await res.json();
-        setStatus("done");
-        onCheckoutSuccess(duracionMinutos, avisoFoto);
-      } else {
-        await enqueue("checkout", { jornadaId, ...payload });
-        setStatus("done");
-        onCheckoutSuccess(0, avisoFoto);
+      try {
+        await encolarFoto({ momento: "checkout", jornadaId, foto });
+        despertarCola();
+      } catch (err) {
+        avisarErrorDeCola(
+          `La foto del check-out no se pudo guardar en el teléfono: ${err instanceof Error ? err.message : "error desconocido"}. El check-out sí quedó registrado.`,
+        );
       }
+
+      setStatus("done");
+      onCheckoutSuccess(duracionMinutos ?? 0);
     } catch (err) {
       setStatus("error");
       setError(err instanceof Error ? err.message : "Error inesperado");
@@ -369,7 +349,6 @@ export function CheckoutCard({
         {isLoading ? (
           <span className="font-mono text-sm tracking-wide">
             {status === "locating" && "⊙  Obteniendo ubicación…"}
-            {status === "uploading" && "↑  Subiendo foto…"}
             {status === "saving" && "✓  Cerrando jornada…"}
           </span>
         ) : (

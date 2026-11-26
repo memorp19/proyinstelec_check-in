@@ -1,6 +1,7 @@
-import { and, eq, sql, type SQL } from "drizzle-orm";
+import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { getDb } from "../db";
 import { empresas, proyectos, proyectoUsuarios } from "../db/schema";
+import type { NombreDeProyecto } from "./nombre-proyecto";
 
 /**
  * Empresas cliente y proyectos.
@@ -145,6 +146,24 @@ export async function getProyecto(proyecto_id: string): Promise<Proyecto | null>
 
 export async function listProyectosByEmpresa(empresa_id: string): Promise<Proyecto[]> {
   return listProyectos(empresa_id);
+}
+
+/**
+ * El nombre y la empresa de varios proyectos, en una sola consulta, por id.
+ *
+ * La app de campo enseñaba el id del proyecto (un UUID) en vez de su nombre:
+ * la página no se lo pasaba fuera del modo demo. Los que no existen no
+ * aparecen.
+ */
+export async function nombresDeProyectos(ids: string[]): Promise<Record<string, NombreDeProyecto>> {
+  const unicos = [...new Set(ids.filter(Boolean))];
+  if (unicos.length === 0) return {};
+  const filas = await getDb()
+    .select({ id: proyectos.id, nombre: proyectos.nombre, empresa: empresas.nombre })
+    .from(proyectos)
+    .innerJoin(empresas, eq(proyectos.empresaId, empresas.id))
+    .where(inArray(proyectos.id, unicos));
+  return Object.fromEntries(filas.map((f) => [f.id, { nombre: f.nombre, empresa: f.empresa }]));
 }
 
 // ── Asignación de trabajadores ────────────────────────────────────────────────

@@ -341,6 +341,22 @@ export async function uploadFile(params: {
   return { driveFileId, webViewLink, hash };
 }
 
+/**
+ * Manda un archivo a la papelera de Drive. Se recupera desde ahí durante 30
+ * días; no se borra.
+ *
+ * Lo usa la foto de una jornada cuando dos subidas llegaron a la vez: la que
+ * no quedó en la jornada sobra, y dejarla sería una foto repetida.
+ */
+export async function mandarAPapelera(driveFileId: string): Promise<void> {
+  const drive = await getDriveClient();
+  await drive.files.update({
+    fileId: driveFileId,
+    requestBody: { trashed: true },
+    ...ESCRIBIR_TODAS_LAS_UNIDADES,
+  });
+}
+
 // ── Thumbnail URL ─────────────────────────────────────────────────────────────
 
 /**

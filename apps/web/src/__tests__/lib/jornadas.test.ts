@@ -3,12 +3,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("@/src/db", () => ({ getDb: vi.fn() }));
 
 import { getDb } from "@/src/db";
+import { dbFalso } from "../helpers/db-falso";
 import {
   aJornada,
   createJornada,
   closeJornada,
   getJornada,
   getOpenJornada,
+  ponerFotoDeJornada,
 } from "@/src/lib/jornadas";
 
 /** Encadenado falso de Drizzle: el `await` final entrega el siguiente resultado. */
@@ -200,5 +202,100 @@ describe("getOpenJornada", () => {
   it("devuelve null cuando no hay jornada abierta hoy", async () => {
     vi.mocked(getDb).mockReturnValue(fakeDb([[]]));
     expect(await getOpenJornada("user-001")).toBeNull();
+  });
+
+  // Vercel corre en UTC: a las 18:30 de México ya es el día siguiente allá, y
+  // la jornada de la mañana dejaba de encontrarse.
+  // Con el reloj en UTC, como Vercel: en una máquina en México, una
+  // medianoche local daría la respuesta correcta por casualidad.
+  it("«hoy» empieza a las 00:00 de México, no del servidor", async () => {
+    const db = dbFalso([[filaAbierta()]]);
+    vi.mocked(getDb).mockImplementation(db.getDb as never);
+    const zona = process.env.TZ;
+    process.env.TZ = "UTC";
+    try {
+      await getOpenJornada("user-001", new Date("2026-11-26T00:30:00Z"));
+    } finally {
+      if (zona === undefined) delete process.env.TZ;
+      else process.env.TZ = zona;
+    }
+
+    const where = db.llamadas.find((l) => l.metodo === "where")!.args[0];
+    const fechas = parametros(where).filter((p): p is Date => p instanceof Date);
+    expect(fechas.map((f) => f.toISOString())).toEqual(["2026-11-25T06:00:00.000Z"]);
+  });
+});
+
+/** Los valores que viajan como parámetros en un `sql` de Drizzle. */
+function parametros(nodo: unknown): unknown[] {
+  const fuera: unknown[] = [];
+  const vistos = new Set<unknown>();
+  const juntar = (n: unknown) => {
+    if (!n || typeof n !== "object" || vistos.has(n)) return;
+    vistos.add(n);
+    if (n.constructor?.name === "Param") fuera.push((n as { value: unknown }).value);
+    for (const hijo of (n as { queryChunks?: unknown[] }).queryChunks ?? []) juntar(hijo);
+  };
+  juntar(nodo);
+  return fuera;
+}
+
+/** El texto de un `sql` de Drizzle, con los nombres de las columnas. */
+function textoProfundo(nodo: unknown): string {
+  const texto: string[] = [];
+  const vistos = new Set<unknown>();
+  const juntar = (n: unknown) => {
+    if (!n || typeof n !== "object" || vistos.has(n)) return;
+    vistos.add(n);
+    const x = n as { value?: unknown; queryChunks?: unknown[]; name?: unknown };
+    if (Array.isArray(x.value)) texto.push(...x.value.filter((v): v is string => typeof v === "string"));
+    if (typeof x.name === "string") texto.push(x.name);
+    for (const hijo of x.queryChunks ?? []) juntar(hijo);
+  };
+  juntar(nodo);
+  return texto.join(" ");
+}
+
+/**
+ * La foto va a su jornada una sola vez: si dos subidas llegan a la vez, solo
+ * una encuentra el lugar vacío.
+ */
+describe("ponerFotoDeJornada", () => {
+  const FOTO = { driveFileId: "f-1", webViewLink: "https://drive/f-1", hash: "h-1" };
+
+  it("check-in: una sola sentencia, solo si el lugar sigue vacío", async () => {
+    const db = dbFalso([[{ id: "jornada-001" }]]);
+    vi.mocked(getDb).mockImplementation(db.getDb as never);
+
+    expect(await ponerFotoDeJornada({ jornadaId: "jornada-001", momento: "checkin", foto: FOTO })).toBe(true);
+
+    expect(db.metodos().filter((m) => m === "update")).toHaveLength(1);
+    expect(db.llamadas.find((l) => l.metodo === "set")!.args[0]).toEqual({
+      checkinDriveFileId: "f-1",
+      checkinDriveUrl: "https://drive/f-1",
+      checkinFotoHash: "h-1",
+      checkinUploadStatus: "ok",
+    });
+    const where = textoProfundo(db.llamadas.find((l) => l.metodo === "where")!.args[0]);
+    expect(where).toContain("checkin_drive_file_id");
+    expect(where).toContain("is null");
+  });
+
+  it("check-out: además, con la jornada cerrada", async () => {
+    const db = dbFalso([[{ id: "jornada-001" }]]);
+    vi.mocked(getDb).mockImplementation(db.getDb as never);
+
+    await ponerFotoDeJornada({ jornadaId: "jornada-001", momento: "checkout", foto: FOTO });
+
+    const where = db.llamadas.find((l) => l.metodo === "where")!.args[0];
+    expect(textoProfundo(where)).toContain("checkout_drive_file_id");
+    expect(textoProfundo(where)).toContain("is null");
+    expect(parametros(where)).toContain("cerrada");
+  });
+
+  it("si otra subida ganó (sin fila), dice que no la puso", async () => {
+    vi.mocked(getDb).mockImplementation(dbFalso([[]]).getDb as never);
+
+    expect(await ponerFotoDeJornada({ jornadaId: "jornada-001", momento: "checkin", foto: FOTO })).toBe(false);
   });
 });

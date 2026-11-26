@@ -117,8 +117,8 @@ const EXCEPCIONES: Record<string, { exige: "nada" | "sesion"; porque: string }> 
     porque:
       "La foto del check-in y del check-out de quien llama. Pide sesión porque los temporales " +
       "entran con cualquier cuenta de Google, y además perfil completo, activo y rol campo o " +
-      "admin, leídos de la base. La carpeta la decide el servidor: el proyecto (si puede " +
-      "fichar en él, o el de su jornada), la fecha y la hora de México, y su nombre " +
+      "admin, leídos de la base. Va siempre a una jornada suya que ya existe; la carpeta, la " +
+      "fecha y la hora salen de esa jornada, y la foto se pone una sola vez " +
       "(docs/seguridad-erp.md §3.4; prueba en api/upload.test.ts).",
   },
 };

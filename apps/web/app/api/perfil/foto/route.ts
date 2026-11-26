@@ -4,9 +4,15 @@ import { auth } from "@/src/auth";
 import { updatePerfil } from "@/src/lib/users";
 import { uploadPhoto } from "@/src/lib/drive";
 import { DEMO_MODE } from "@/src/demo";
-import { EXTENSION_DE_FOTO, tipoDeFoto } from "@/src/lib/fotos";
+import { EXTENSION_DE_FOTO, TOPE_FOTO_BYTES, tipoDeFoto } from "@/src/lib/fotos";
+import { ahoraEnMexico } from "@/src/lib/hora-mexico";
 
-const MAX_SIZE_BYTES = 4 * 1024 * 1024;
+/**
+ * La foto de perfil. La pantalla la comprime antes (1600 px, JPEG al 85 %),
+ * como la del check-in, y el tope es el mismo: 3 MB, lo que cabe en el cuerpo
+ * que deja pasar Vercel en base64. Con 4 MB, una foto de más de ~3.3 MB ni
+ * llegaba a esta ruta.
+ */
 
 export async function POST(req: NextRequest) {
   const session = await auth();
@@ -27,8 +33,11 @@ export async function POST(req: NextRequest) {
   if (!body.base64) return NextResponse.json({ error: "Falta la imagen" }, { status: 400 });
 
   const buffer = Buffer.from(body.base64, "base64");
-  if (buffer.length > MAX_SIZE_BYTES) {
-    return NextResponse.json({ error: "La imagen supera el tamaño máximo (4 MB)" }, { status: 413 });
+  if (buffer.length > TOPE_FOTO_BYTES) {
+    return NextResponse.json(
+      { error: `La foto pesa más de ${TOPE_FOTO_BYTES / 1024 / 1024} MB.` },
+      { status: 413 },
+    );
   }
 
   // El tipo, por los bytes: el que dice el navegador lo controla quien llama.
@@ -37,7 +46,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "La foto tiene que ser JPEG, PNG o WebP." }, { status: 415 });
   }
 
-  const fecha = new Date().toISOString().slice(0, 10);
+  // La fecha de México: con la del servidor (UTC), después de las 18:00 caía
+  // en la carpeta del día siguiente.
+  const { fecha } = ahoraEnMexico();
   const ext = EXTENSION_DE_FOTO[mimeType];
 
   try {
