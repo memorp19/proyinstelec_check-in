@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, max, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, ilike, isNull, max, ne, or, sql, type SQL } from "drizzle-orm";
 import { getDb } from "../db";
 import { aprobaciones, cotArmado, cotizaciones } from "../db/schema";
 import { folioCotizacion, pad } from "./folios";
@@ -760,6 +760,115 @@ export async function puedeEnviarseAlCliente(
     return { puede: false, motivo: "Esperando aprobación del revisor", cotizacion: c };
   }
   return { puede: true, cotizacion: c };
+}
+
+// ── El envío al cliente, apartado en una sola sentencia ───────────────────────
+
+/**
+ * Lo que la pantalla de envío vio al abrirse. El envío se aparta solo si la
+ * versión sigue exactamente así.
+ */
+export interface EnvioVisto {
+  version: number;
+  estatus: EstatusCotizacion;
+  /** ISO, como la entrega `aCotizacion`; null si nunca se ha enviado. */
+  fechaEnvio: string | null;
+}
+
+/**
+ * La fecha de envío, comparada al milisegundo.
+ *
+ * Es la precisión que sobrevive al viaje a la pantalla y de regreso (un ISO).
+ * Una fecha sellada con `now()` en SQL trae microsegundos que el ISO pierde, y
+ * sin el `date_trunc` nunca volvería a ser igual a sí misma.
+ */
+function mismaFechaEnvio(fecha: string | null): SQL {
+  return fecha === null
+    ? isNull(cotizaciones.fechaEnvio)
+    : sql`date_trunc('milliseconds', ${cotizaciones.fechaEnvio}) = ${new Date(fecha).toISOString()}::timestamptz`;
+}
+
+/**
+ * Aparta el envío al cliente **antes** de mandar el correo, en una sola
+ * sentencia: `UPDATE … WHERE <lo que vio la pantalla> RETURNING`.
+ *
+ * Un doble clic, dos pestañas o dos personas pasaban todas la revisión de
+ * `puedeEnviarseAlCliente` antes de que la primera marcara nada, y cada una
+ * mandaba su correo. Ahora la primera cambia la fila y las demás ya no la
+ * encuentran como la vieron, así que no mandan nada.
+ *
+ * - De REVISION pasa a ENVIADA. Un reenvío (ENVIADA, ASIGNADA) se queda en su
+ *   estatus. En los dos casos se sella `fecha_envio`, y eso es lo que
+ *   distingue un envío del siguiente.
+ * - La condición es lo que vio **la pantalla**, no lo que se leyó en el
+ *   servidor. Un segundo clic que llega cuando el primero ya terminó lee
+ *   ENVIADA, que se puede reenviar; lo que lo detiene es que su pantalla vio
+ *   otra `fecha_envio`.
+ * - No pasa por `cambiarEstatus`, que valida y escribe en dos pasos. La
+ *   transición (y la aprobación de esta versión) ya la revisó
+ *   `puedeEnviarseAlCliente`, y el `WHERE estatus` asegura que no cambió.
+ *
+ * Devuelve false si no apartó nada: alguien más la envió, o cambió.
+ */
+export async function apartarEnvio(params: {
+  numero: number;
+  anio: number;
+  visto: EnvioVisto;
+  ahora: Date;
+}): Promise<boolean> {
+  const { numero, anio, visto, ahora } = params;
+  const filas = await getDb()
+    .update(cotizaciones)
+    .set({
+      estatus: visto.estatus === "REVISION" ? "ENVIADA" : visto.estatus,
+      fechaEnvio: ahora,
+      updatedAt: ahora,
+    })
+    .where(
+      and(
+        esVersion(numero, anio, visto.version),
+        eq(cotizaciones.estatus, visto.estatus),
+        mismaFechaEnvio(visto.fechaEnvio),
+      ),
+    )
+    .returning({ version: cotizaciones.version });
+  return filas.length > 0;
+}
+
+/**
+ * Deshace `apartarEnvio` cuando el correo no salió: ENVIADA afirma que el
+ * cliente recibió la cotización, y no fue así.
+ *
+ * Solo si la fila sigue como la dejó este envío (su estatus y su
+ * `fecha_envio`). Si alguien la movió mientras tanto, no la pisa, y devuelve
+ * false para que se diga.
+ *
+ * Tampoco pasa por `cambiarEstatus`: volver a REVISION por ahí borra la
+ * aprobación, y la aprobación sigue siendo buena. Lo que falló fue el correo.
+ */
+export async function devolverEnvio(params: {
+  numero: number;
+  anio: number;
+  visto: EnvioVisto;
+  ahora: Date;
+}): Promise<boolean> {
+  const { numero, anio, visto, ahora } = params;
+  const filas = await getDb()
+    .update(cotizaciones)
+    .set({
+      estatus: visto.estatus,
+      fechaEnvio: visto.fechaEnvio ? new Date(visto.fechaEnvio) : null,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        esVersion(numero, anio, visto.version),
+        eq(cotizaciones.estatus, visto.estatus === "REVISION" ? "ENVIADA" : visto.estatus),
+        mismaFechaEnvio(ahora.toISOString()),
+      ),
+    )
+    .returning({ version: cotizaciones.version });
+  return filas.length > 0;
 }
 
 // ── Eliminar una versión que nunca salió ──────────────────────────────────────

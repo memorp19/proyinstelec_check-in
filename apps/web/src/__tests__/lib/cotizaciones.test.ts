@@ -25,6 +25,8 @@ import {
   puedeEnviarseAlCliente,
   buscarCotizaciones,
   puedeEliminarse,
+  apartarEnvio,
+  devolverEnvio,
 } from "@/src/lib/cotizaciones";
 
 function usarDb(resultados: unknown[] = []) {
@@ -659,5 +661,142 @@ describe("puedeEliminarse", () => {
   it("con OT o con OC, no, y dice cuál", () => {
     expect(puedeEliminarse({ ...base, folio_ot: "OT260260" } as typeof base).motivo).toContain("OT260260");
     expect(puedeEliminarse({ ...base, orden_compra: "4501122596" } as typeof base).motivo).toContain("4501122596");
+  });
+});
+
+/**
+ * El envío al cliente se aparta en una sola sentencia, antes del correo: es lo
+ * que impide que un segundo clic mande un segundo correo.
+ */
+describe("apartarEnvio", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const AHORA = new Date("2026-11-20T18:03:05.123Z");
+
+  it("de REVISION pasa a ENVIADA y sella la fecha, en un solo UPDATE condicionado", async () => {
+    const db = usarDb([[{ version: 0 }]]);
+
+    const apartado = await apartarEnvio({
+      numero: 1, anio: 2026, ahora: AHORA,
+      visto: { version: 0, estatus: "REVISION", fechaEnvio: null },
+    });
+
+    expect(apartado).toBe(true);
+    // Una sola sentencia: nada de leer y luego escribir
+    expect(db.metodos().filter((m) => ["select", "update", "insert", "delete"].includes(m))).toEqual([
+      "update",
+    ]);
+    const set = db.llamadas.find((l) => l.metodo === "set")!.args[0] as Record<string, unknown>;
+    expect(set.estatus).toBe("ENVIADA");
+    expect(set.fechaEnvio).toBe(AHORA);
+    // El WHERE es lo que vio la pantalla: la versión, su estatus y su fecha de envío
+    const columnas = columnasDelWhere(db.llamadas.find((l) => l.metodo === "where")!.args[0]);
+    expect(columnas).toEqual(expect.arrayContaining(["version", "estatus", "fecha_envio"]));
+  });
+
+  it("si no regresa renglón, no apartó: otro clic llegó antes", async () => {
+    usarDb([[]]);
+
+    expect(
+      await apartarEnvio({
+        numero: 1, anio: 2026, ahora: AHORA,
+        visto: { version: 0, estatus: "REVISION", fechaEnvio: null },
+      }),
+    ).toBe(false);
+  });
+
+  it("un reenvío se queda en su estatus, y compara la fecha al milisegundo", async () => {
+    const db = usarDb([[{ version: 0 }]]);
+
+    await apartarEnvio({
+      numero: 1, anio: 2026, ahora: AHORA,
+      visto: { version: 0, estatus: "ENVIADA", fechaEnvio: "2026-11-19T10:00:00.000Z" },
+    });
+
+    const set = db.llamadas.find((l) => l.metodo === "set")!.args[0] as Record<string, unknown>;
+    expect(set.estatus).toBe("ENVIADA");
+    // El `and(...)` anida cada condición: el texto se junta a todo lo hondo
+    const texto: string[] = [];
+    const vistos = new Set<unknown>();
+    const juntar = (nodo: unknown) => {
+      if (!nodo || typeof nodo !== "object" || vistos.has(nodo)) return;
+      vistos.add(nodo);
+      const n = nodo as { value?: unknown; queryChunks?: unknown[] };
+      if (Array.isArray(n.value)) texto.push(...n.value.filter((v): v is string => typeof v === "string"));
+      for (const hijo of n.queryChunks ?? []) juntar(hijo);
+    };
+    juntar(db.llamadas.find((l) => l.metodo === "where")!.args[0]);
+    expect(texto.join(" ")).toContain("date_trunc('milliseconds'");
+  });
+
+  it("una ASIGNADA reenviada sigue ASIGNADA", async () => {
+    const db = usarDb([[{ version: 0 }]]);
+
+    await apartarEnvio({
+      numero: 1, anio: 2026, ahora: AHORA,
+      visto: { version: 0, estatus: "ASIGNADA", fechaEnvio: "2026-11-19T10:00:00.000Z" },
+    });
+
+    const set = db.llamadas.find((l) => l.metodo === "set")!.args[0] as Record<string, unknown>;
+    expect(set.estatus).toBe("ASIGNADA");
+  });
+});
+
+describe("devolverEnvio", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const AHORA = new Date("2026-11-20T18:03:05.123Z");
+
+  it("regresa la fila a como estaba, solo si sigue como la dejó este envío", async () => {
+    const db = usarDb([[{ version: 0 }]]);
+
+    const devuelto = await devolverEnvio({
+      numero: 1, anio: 2026, ahora: AHORA,
+      visto: { version: 0, estatus: "REVISION", fechaEnvio: null },
+    });
+
+    expect(devuelto).toBe(true);
+    const set = db.llamadas.find((l) => l.metodo === "set")!.args[0] as Record<string, unknown>;
+    expect(set.estatus).toBe("REVISION");
+    expect(set.fechaEnvio).toBeNull();
+    const columnas = columnasDelWhere(db.llamadas.find((l) => l.metodo === "where")!.args[0]);
+    expect(columnas).toEqual(expect.arrayContaining(["version", "estatus", "fecha_envio"]));
+  });
+
+  // Volver a REVISION por `cambiarEstatus` borra la aprobación. Aquí lo que
+  // falló fue el correo; la aprobación sigue siendo buena.
+  it("no toca la aprobación", async () => {
+    const db = usarDb([[{ version: 0 }]]);
+
+    await devolverEnvio({
+      numero: 1, anio: 2026, ahora: AHORA,
+      visto: { version: 0, estatus: "REVISION", fechaEnvio: null },
+    });
+
+    expect(db.metodos()).not.toContain("delete");
+  });
+
+  it("un reenvío regresa su fecha anterior", async () => {
+    const db = usarDb([[{ version: 0 }]]);
+
+    await devolverEnvio({
+      numero: 1, anio: 2026, ahora: AHORA,
+      visto: { version: 0, estatus: "ENVIADA", fechaEnvio: "2026-11-19T10:00:00.000Z" },
+    });
+
+    const set = db.llamadas.find((l) => l.metodo === "set")!.args[0] as Record<string, unknown>;
+    expect(set.estatus).toBe("ENVIADA");
+    expect(set.fechaEnvio).toEqual(new Date("2026-11-19T10:00:00.000Z"));
+  });
+
+  it("si alguien la movió mientras tanto, no la pisa", async () => {
+    usarDb([[]]);
+
+    expect(
+      await devolverEnvio({
+        numero: 1, anio: 2026, ahora: AHORA,
+        visto: { version: 0, estatus: "REVISION", fechaEnvio: null },
+      }),
+    ).toBe(false);
   });
 });

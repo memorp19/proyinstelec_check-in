@@ -181,6 +181,35 @@ describe("contactosParaEnvio — sugerencia de contacto", () => {
     expect(r.sugeridoId).toBe("c2");
   });
 
+  // La lista es también a quién se le puede mandar: tiene que ser la del
+  // cliente de la cotización, no la de la razón social que más se le parece.
+  it("con cliente_id, la empresa es esa, sin buscar por parecido", async () => {
+    const otra = { ...empresa, id: "e2", razonSocial: "Aceros del Norte Sur", razonNormalizada: "aceros del norte sur" };
+    const db = usarDb([
+      [otra], // getClienteEmpresa("e2")
+      [{ ...contacto("c9", "Compras", "compras@cliente.test"), clienteId: "e2" }],
+    ]);
+
+    const r = await contactosParaEnvio({ razonSocial: "Aceros del Norte", clienteId: "e2" });
+
+    expect(r.empresa?.cliente_id).toBe("e2");
+    expect(r.contactos.map((c) => c.correo)).toEqual(["compras@cliente.test"]);
+    // Dos consultas: la empresa por id y sus contactos. Ninguna por parecido.
+    expect(db.metodos().filter((m) => m === "select")).toHaveLength(2);
+  });
+
+  it("si el cliente_id ya no existe, cae al parecido por razón social", async () => {
+    usarDb([
+      [], // getClienteEmpresa: no está
+      [empresa], // candidatas por ILIKE
+      [contacto("c1", "ING. Juan Pérez", "juan@aceros.mx")],
+    ]);
+
+    const r = await contactosParaEnvio({ razonSocial: "Aceros del Norte", clienteId: "borrado" });
+
+    expect(r.empresa?.cliente_id).toBe("e1");
+  });
+
   it("sin empresa localizada devuelve vacío y no consulta contactos", async () => {
     const db = usarDb([[]]);
     const r = await contactosParaEnvio({ razonSocial: "Desconocida SA" });

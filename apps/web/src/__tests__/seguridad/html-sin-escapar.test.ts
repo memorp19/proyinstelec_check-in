@@ -46,6 +46,9 @@ const FUNCIONES_QUE_DEVUELVEN_HTML: Record<string, string> = {
   filaTabla: "Un renglón de tabla de correo; escapa la etiqueta y el valor.",
   montoParaCorreo: "Renglones de importe, hechos con filaTabla.",
   recuadroDeNota: "El recuadro de la nota al revisor; escapa la nota y el nombre.",
+  textoAHtml:
+    "Texto tecleado con sus saltos de línea (el «Mensaje» al cliente): lo pasa por escaparHtml " +
+    "y solo después agrega los <br/>.",
 };
 
 /**
@@ -89,13 +92,6 @@ const PERMITIDAS: Array<{ archivo: string; expresion: string; porque: string }> 
     archivo: "src/lib/correo.ts",
     expresion: "url",
     porque: "La dirección del sistema: la pasa el código o sale de NEXTAUTH_URL.",
-  },
-  {
-    archivo: "app/erp/cotizaciones/CotizacionesClient.tsx",
-    expresion: "mensaje",
-    porque:
-      "PENDIENTE (M7, docs/seguridad-erp.md): el «Mensaje» de Enviar al cliente viaja como HTML " +
-      "tal como se tecleó. Se quita cuando el servidor lo reciba como texto y lo escape.",
   },
 ];
 

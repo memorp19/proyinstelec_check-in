@@ -301,6 +301,15 @@ export function escaparHtml(texto: string): string {
     .replace(/'/g, "&#39;");
 }
 
+/**
+ * Lo que alguien escribió en un `textarea`, listo para ir dentro de un
+ * párrafo del correo: escapado como cualquier texto tecleado, y con sus saltos
+ * de línea como `<br/>`, para que el cliente lo lea como se escribió.
+ */
+export function textoAHtml(texto: string): string {
+  return escaparHtml(String(texto ?? "").trim()).replace(/\r\n|\r|\n/g, "<br/>");
+}
+
 export function plantillaCorreo(params: { titulo: string; cuerpoHtml: string; urlSistema?: string }): string {
   const url = params.urlSistema ?? process.env.NEXTAUTH_URL ?? "";
   return `<!DOCTYPE html>

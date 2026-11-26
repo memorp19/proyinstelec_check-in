@@ -27,6 +27,7 @@ import {
   construirMime,
   escaparHtml,
   plantillaCorreo,
+  textoAHtml,
   _resetCorreoConfigCache,
 } from "@/src/lib/correo";
 
@@ -148,6 +149,31 @@ describe("plantillaCorreo", () => {
 
 
 // ── El escape del texto de una persona ────────────────────────────────────────
+
+/** El «Mensaje» al cliente: se escribe en un textarea y llega como se escribió. */
+describe("textoAHtml", () => {
+  it("escapa como escaparHtml", () => {
+    expect(textoAHtml('<b>urge</b> & "ya"')).toBe("&lt;b&gt;urge&lt;/b&gt; &amp; &quot;ya&quot;");
+  });
+
+  it("los saltos de línea, de cualquier sistema, son <br/>", () => {
+    expect(textoAHtml("uno\ndos\r\ntres\rcuatro")).toBe("uno<br/>dos<br/>tres<br/>cuatro");
+  });
+
+  it("una línea en blanco queda como línea en blanco", () => {
+    expect(textoAHtml("Estimado:\n\nSaludos")).toBe("Estimado:<br/><br/>Saludos");
+  });
+
+  it("sin espacios ni saltos sobrantes al principio y al final", () => {
+    expect(textoAHtml("\n  hola  \n")).toBe("hola");
+  });
+
+  // El único marcado que agrega es el `<br/>`: no hay manera de que lo tecleado
+  // lo produzca, porque su `<` ya salió escapado.
+  it("un <br/> tecleado no es un salto de línea", () => {
+    expect(textoAHtml("a<br/>b")).toBe("a&lt;br/&gt;b");
+  });
+});
 
 describe("escaparHtml", () => {
   /** Un `<b>` tecleado por alguien tiene que verse, no aplicarse. */

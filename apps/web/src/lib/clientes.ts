@@ -260,19 +260,32 @@ export async function deleteContacto(clienteId: string, contactoId: string): Pro
 // ── Match para el envío de cotizaciones ───────────────────────────────────────
 
 /**
- * Localiza la empresa de una cotización por razón social (match del legacy)
- * y sugiere el contacto que corresponde a "Dirigida a".
+ * La empresa de una cotización, sus contactos con correo, y el que corresponde
+ * a "Dirigida a".
+ *
+ * Es también **la lista de a quién se le puede mandar** la cotización
+ * (`validarDestinatarios`): la pantalla ofrece estos y el servidor rechaza los
+ * que no estén aquí. Por eso las dos llaman a esta misma función.
+ *
+ * La empresa es la de `cliente_id` cuando la cotización la tiene (las que se
+ * dan de alta en el ERP); si no —las importadas del legacy—, la que más se
+ * parece por razón social, como en el legacy.
+ *
+ * Hoy todo contacto que está en la tabla está activo: quitar uno lo borra
+ * (`deleteContacto`). Cuando entre la eliminación auditada y un contacto se
+ * pueda inactivar, el filtro de activos va aquí, y así cubre las dos.
  */
 export async function contactosParaEnvio(params: {
   razonSocial: string;
   dirigidaA?: string;
+  clienteId?: string;
 }): Promise<{
   empresa: ClienteEmpresa | null;
   contactos: Contacto[];
   sugeridoId: string | null;
 }> {
-  const parecidas = await buscarEmpresasParecidas(params.razonSocial);
-  const empresa = parecidas[0]?.empresa ?? null;
+  const porId = params.clienteId ? await getClienteEmpresa(params.clienteId) : null;
+  const empresa = porId ?? (await buscarEmpresasParecidas(params.razonSocial))[0]?.empresa ?? null;
   if (!empresa) return { empresa: null, contactos: [], sugeridoId: null };
 
   const lista = (await listContactos(empresa.cliente_id)).filter((c) => c.correo);
